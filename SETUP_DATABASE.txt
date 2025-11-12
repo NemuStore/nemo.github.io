@@ -1,0 +1,32 @@
+═══════════════════════════════════════════════════════
+  إعداد قاعدة البيانات - خطوات بسيطة
+═══════════════════════════════════════════════════════
+
+1. افتح Supabase Dashboard:
+   https://supabase.com/dashboard/project/fdxxynnsxgiozaiiexlm
+
+2. اضغط على "SQL Editor" من القائمة الجانبية
+
+3. اضغط على "New query"
+
+4. افتح ملف: supabase/schema.sql
+   انسخ كل المحتوى والصقه في SQL Editor
+
+5. اضغط "Run" أو Ctrl+Enter
+
+6. تأكد من ظهور: "Success. No rows returned"
+
+═══════════════════════════════════════════════════════
+  بعد الإعداد:
+═══════════════════════════════════════════════════════
+
+- نفذ: npm install --legacy-peer-deps
+- نفذ: npm start
+- سجل حساب جديد من التطبيق
+- حول نفسك لأدمن من SQL Editor:
+  
+  UPDATE public.users 
+  SET role = 'admin' 
+  WHERE email = 'your-email@example.com';
+
+═══════════════════════════════════════════════════════
