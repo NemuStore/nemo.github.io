@@ -1116,34 +1116,67 @@ export default function AdminScreen() {
   };
 
   const updateUserRole = async (userId: string, newRole: UserRole) => {
-    Alert.alert(
-      'تغيير الدور',
-      `هل أنت متأكد من تغيير دور هذا المستخدم إلى "${getRoleText(newRole)}"؟`,
-      [
-        { text: 'إلغاء', style: 'cancel' },
-        {
-          text: 'تأكيد',
-          onPress: async () => {
-            setLoading(true);
-            try {
-              const { error } = await supabase
-                .from('users')
-                .update({ role: newRole })
-                .eq('id', userId);
+    if (typeof window !== 'undefined' && Platform.OS === 'web') {
+      if (!window.confirm(`هل أنت متأكد من تغيير دور هذا المستخدم إلى "${getRoleText(newRole)}"؟`)) {
+        return;
+      }
+    } else {
+      Alert.alert(
+        'تغيير الدور',
+        `هل أنت متأكد من تغيير دور هذا المستخدم إلى "${getRoleText(newRole)}"؟`,
+        [
+          { text: 'إلغاء', style: 'cancel' },
+          { text: 'تأكيد', onPress: () => performUpdateUserRole(userId, newRole) },
+        ]
+      );
+      return;
+    }
+    
+    performUpdateUserRole(userId, newRole);
+  };
 
-              if (error) throw error;
+  const performUpdateUserRole = async (userId: string, newRole: UserRole) => {
+    setLoading(true);
+    try {
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+      const accessToken = await getAccessToken();
 
-              Alert.alert('نجح', 'تم تغيير الدور بنجاح');
-              await loadUsers();
-            } catch (error: any) {
-              Alert.alert('خطأ', error.message || 'فشل تغيير الدور');
-            } finally {
-              setLoading(false);
-            }
-          },
+      const response = await fetch(`${supabaseUrl}/rest/v1/users?id=eq.${userId}`, {
+        method: 'PATCH',
+        headers: {
+          'apikey': supabaseKey || '',
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=representation'
         },
-      ]
-    );
+        body: JSON.stringify({
+          role: newRole,
+        })
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(errorText);
+      }
+
+      if (typeof window !== 'undefined' && Platform.OS === 'web') {
+        window.alert('تم تغيير الدور بنجاح');
+      } else {
+        Alert.alert('نجح', 'تم تغيير الدور بنجاح');
+      }
+      
+      await loadUsers();
+    } catch (error: any) {
+      console.error('❌ Error updating user role:', error);
+      if (typeof window !== 'undefined' && Platform.OS === 'web') {
+        window.alert(error.message || 'فشل تغيير الدور');
+      } else {
+        Alert.alert('خطأ', error.message || 'فشل تغيير الدور');
+      }
+    } finally {
+      setLoading(false);
+    }
   };
 
   if (!user) {
