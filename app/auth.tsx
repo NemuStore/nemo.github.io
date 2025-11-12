@@ -115,8 +115,17 @@ export default function AuthScreen() {
     try {
       setLoading(true);
       
-      // Get the redirect URL
-      const redirectUrl = Linking.createURL('/auth/callback');
+      // Get the redirect URL - use current origin on web, Linking.createURL on mobile
+      let redirectUrl: string;
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        // On web, use the current origin (works for both localhost and Vercel)
+        redirectUrl = `${window.location.origin}/auth/callback`;
+      } else {
+        // On mobile, use Linking.createURL
+        redirectUrl = Linking.createURL('/auth/callback');
+      }
+      
+      console.log('🔗 Redirect URL:', redirectUrl);
       
       // Sign in with Google using Supabase OAuth
       const { data, error } = await supabase.auth.signInWithOAuth({
