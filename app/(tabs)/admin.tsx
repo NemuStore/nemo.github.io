@@ -1142,6 +1142,9 @@ export default function AdminScreen() {
       const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
       const accessToken = await getAccessToken();
 
+      console.log('🔄 Updating user role:', { userId, newRole });
+      console.log('🔑 Using access token:', accessToken ? 'Yes' : 'No');
+
       const response = await fetch(`${supabaseUrl}/rest/v1/users?id=eq.${userId}`, {
         method: 'PATCH',
         headers: {
@@ -1155,22 +1158,42 @@ export default function AdminScreen() {
         })
       });
 
+      console.log('📡 Response status:', response.status);
+      console.log('📡 Response ok:', response.ok);
+
       if (!response.ok) {
         const errorText = await response.text();
+        console.error('❌ Error response:', errorText);
         throw new Error(errorText);
       }
 
-      if (typeof window !== 'undefined' && Platform.OS === 'web') {
-        window.alert('تم تغيير الدور بنجاح');
+      const updatedData = await response.json();
+      console.log('✅ Updated user data:', updatedData);
+
+      // Verify the update
+      if (updatedData && updatedData.length > 0 && updatedData[0].role === newRole) {
+        console.log('✅ Role update verified successfully');
+        if (typeof window !== 'undefined' && Platform.OS === 'web') {
+          window.alert('تم تغيير الدور بنجاح');
+        } else {
+          Alert.alert('نجح', 'تم تغيير الدور بنجاح');
+        }
       } else {
-        Alert.alert('نجح', 'تم تغيير الدور بنجاح');
+        console.warn('⚠️ Role update may have failed - data mismatch');
+        if (typeof window !== 'undefined' && Platform.OS === 'web') {
+          window.alert('تم إرسال الطلب ولكن قد يكون هناك مشكلة. يرجى التحقق من الدور.');
+        } else {
+          Alert.alert('تحذير', 'تم إرسال الطلب ولكن قد يكون هناك مشكلة. يرجى التحقق من الدور.');
+        }
       }
       
+      // Reload users to see the updated data
       await loadUsers();
     } catch (error: any) {
       console.error('❌ Error updating user role:', error);
+      console.error('❌ Error details:', JSON.stringify(error, null, 2));
       if (typeof window !== 'undefined' && Platform.OS === 'web') {
-        window.alert(error.message || 'فشل تغيير الدور');
+        window.alert(`فشل تغيير الدور: ${error.message || 'خطأ غير معروف'}`);
       } else {
         Alert.alert('خطأ', error.message || 'فشل تغيير الدور');
       }
