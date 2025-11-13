@@ -86,6 +86,7 @@ export default function AdminScreen() {
   const [quickEditProduct, setQuickEditProduct] = useState<{ [key: string]: Partial<Product> }>({});
   const [quickEditOrder, setQuickEditOrder] = useState<{ [key: string]: Partial<Order> }>({});
   const [quickEditInventory, setQuickEditInventory] = useState<{ [key: string]: Partial<Inventory> }>({});
+  const [showSectionDropdown, setShowSectionDropdown] = useState(false);
   const [newCategoryForSection, setNewCategoryForSection] = useState({
     name: '',
     description: '',
@@ -184,8 +185,18 @@ export default function AdminScreen() {
       
       if (response.ok) {
         const data = await response.json();
-        setCategories(data || []);
-        console.log('✅ Admin: Categories loaded:', data?.length || 0);
+        console.log('🔍 Admin: Raw categories data:', JSON.stringify(data, null, 2));
+        // تحويل sections array إلى section_data object
+        const categoriesWithSectionData = (data || []).map((category: any) => {
+          console.log('🔍 Admin: Category:', category.name, 'sections:', category.sections);
+          return {
+            ...category,
+            section_data: category.sections?.[0] || category.sections || null,
+          };
+        });
+        console.log('🔍 Admin: Processed categories:', JSON.stringify(categoriesWithSectionData, null, 2));
+        setCategories(categoriesWithSectionData);
+        console.log('✅ Admin: Categories loaded:', categoriesWithSectionData?.length || 0);
       } else {
         console.error('❌ Admin: Error loading categories:', await response.text());
       }
@@ -239,6 +250,7 @@ export default function AdminScreen() {
           section_id: '',
         });
         setEditingCategory(null);
+        setShowSectionDropdown(false);
         loadCategories();
       });
     } catch (error: any) {
@@ -294,6 +306,7 @@ export default function AdminScreen() {
           section_id: '',
         });
         setEditingCategory(null);
+        setShowSectionDropdown(false);
         loadCategories();
       });
     } catch (error: any) {
@@ -423,6 +436,7 @@ export default function AdminScreen() {
       is_active: true,
       section_id: '',
     });
+    setShowSectionDropdown(false);
   };
 
   // Sections management functions
@@ -2556,42 +2570,62 @@ export default function AdminScreen() {
                 <View style={styles.picker}>
                   <TouchableOpacity
                     style={styles.pickerButton}
-                    onPress={() => {
-                      // Simple dropdown using Alert
-                      const options = ['بدون قسم', ...sections.map(s => s.name)];
-                      if (Platform.OS === 'web') {
-                        const selected = window.prompt('اختر القسم:\n' + options.map((o, i) => `${i}. ${o}`).join('\n'), '0');
-                        if (selected !== null) {
-                          const index = parseInt(selected);
-                          if (index === 0) {
-                            setNewCategory({ ...newCategory, section_id: '' });
-                          } else if (index > 0 && index <= sections.length) {
-                            setNewCategory({ ...newCategory, section_id: sections[index - 1].id });
-                          }
-                        }
-                      } else {
-                        Alert.alert(
-                          'اختر القسم',
-                          '',
-                          [
-                            { text: 'بدون قسم', onPress: () => setNewCategory({ ...newCategory, section_id: '' }) },
-                            ...sections.map(section => ({
-                              text: section.name,
-                              onPress: () => setNewCategory({ ...newCategory, section_id: section.id })
-                            })),
-                            { text: 'إلغاء', style: 'cancel' }
-                          ]
-                        );
-                      }
-                    }}
+                    onPress={() => setShowSectionDropdown(!showSectionDropdown)}
                   >
                     <Text style={styles.pickerButtonText}>
                       {newCategory.section_id 
                         ? sections.find(s => s.id === newCategory.section_id)?.name || 'اختر القسم'
                         : 'بدون قسم'}
                     </Text>
-                    <Ionicons name="chevron-down" size={20} color="#666" />
+                    <Ionicons 
+                      name={showSectionDropdown ? "chevron-up" : "chevron-down"} 
+                      size={20} 
+                      color="#666" 
+                    />
                   </TouchableOpacity>
+                  {showSectionDropdown && (
+                    <ScrollView style={styles.dropdownList} nestedScrollEnabled>
+                      <TouchableOpacity
+                        style={[styles.dropdownItem, !newCategory.section_id && styles.dropdownItemActive]}
+                        onPress={() => {
+                          setNewCategory({ ...newCategory, section_id: '' });
+                          setShowSectionDropdown(false);
+                        }}
+                      >
+                        <Text style={[styles.dropdownItemText, !newCategory.section_id && styles.dropdownItemTextActive]}>
+                          بدون قسم
+                        </Text>
+                        {!newCategory.section_id && (
+                          <Ionicons name="checkmark" size={18} color="#6366F1" />
+                        )}
+                      </TouchableOpacity>
+                      {sections.filter(s => s.is_active).map((section) => (
+                        <TouchableOpacity
+                          key={section.id}
+                          style={[styles.dropdownItem, newCategory.section_id === section.id && styles.dropdownItemActive]}
+                          onPress={() => {
+                            setNewCategory({ ...newCategory, section_id: section.id });
+                            setShowSectionDropdown(false);
+                          }}
+                        >
+                          {section.icon && (
+                            <Ionicons 
+                              name={section.icon as any} 
+                              size={18} 
+                              color={newCategory.section_id === section.id ? '#6366F1' : '#666'} 
+                              style={{ marginRight: 8 }} 
+                            />
+                          )}
+                          <Text style={[styles.dropdownItemText, newCategory.section_id === section.id && styles.dropdownItemTextActive]}>
+                            {section.name}
+                          </Text>
+                          {newCategory.section_id === section.id && (
+                            <Ionicons name="checkmark" size={18} color="#6366F1" />
+                          )}
+                        </TouchableOpacity>
+                      ))}
+                    </ScrollView>
+                  )}
                 </View>
               </View>
               <TextInput
@@ -2678,7 +2712,9 @@ export default function AdminScreen() {
                     )}
 
                     {category.section_id && !isEditing && (
-                      <Text style={styles.gridCardSection}>القسم: {category.section_data?.name || 'غير معروف'}</Text>
+                      <Text style={styles.gridCardSection}>
+                        القسم: {category.section_data?.name || sections.find(s => s.id === category.section_id)?.name || 'غير معروف'}
+                      </Text>
                     )}
 
                     <View style={styles.gridCardMeta}>
@@ -3499,6 +3535,34 @@ const styles = StyleSheet.create({
   pickerButtonText: {
     fontSize: 16,
     color: '#333',
+  },
+  dropdownList: {
+    backgroundColor: '#fff',
+    borderTopWidth: 1,
+    borderTopColor: '#E5E7EB',
+    maxHeight: 200,
+    zIndex: 1000,
+    elevation: 5,
+  },
+  dropdownItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
+  },
+  dropdownItemActive: {
+    backgroundColor: '#F0F4FF',
+  },
+  dropdownItemText: {
+    fontSize: 16,
+    color: '#333',
+    flex: 1,
+  },
+  dropdownItemTextActive: {
+    color: '#6366F1',
+    fontWeight: '600',
   },
   secondaryButton: {
     backgroundColor: '#6366F1',
