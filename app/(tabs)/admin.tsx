@@ -54,6 +54,8 @@ export default function AdminScreen() {
     category: '',
     category_id: '', // Category ID from categories table
     stock_quantity: '',
+    source_type: 'warehouse' as 'warehouse' | 'external', // مصدر المنتج
+    sku: '', // كود المنتج الفريد
     image_url: '', // Keep for backward compatibility
   });
   const [newCategory, setNewCategory] = useState({
@@ -977,13 +979,49 @@ export default function AdminScreen() {
     }
   };
 
-  const addProduct = async () => {
-    if (!newProduct.name || !newProduct.price) {
-      if (typeof window !== 'undefined' && Platform.OS === 'web') {
-        window.alert('يرجى ملء جميع الحقول المطلوبة');
-      } else {
-        Alert.alert('خطأ', 'يرجى ملء جميع الحقول المطلوبة');
+  const checkSKUUnique = async (sku: string, excludeProductId?: string): Promise<boolean> => {
+    if (!sku) return true; // SKU فارغ = لا حاجة للتحقق
+    
+    try {
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+      const accessToken = await getAccessToken();
+
+      let query = `${supabaseUrl}/rest/v1/products?sku=eq.${encodeURIComponent(sku)}&select=id`;
+      
+      if (excludeProductId) {
+        query += `&id=neq.${excludeProductId}`;
       }
+
+      const response = await fetch(query, {
+        headers: {
+          'apikey': supabaseKey || '',
+          'Authorization': `Bearer ${accessToken}`,
+        }
+      });
+
+      if (!response.ok) {
+        return true; // في حالة الخطأ، نسمح بالاستمرار
+      }
+
+      const data = await response.json();
+      return data.length === 0; // true إذا كان فريداً
+    } catch (error) {
+      console.error('Error checking SKU:', error);
+      return true; // في حالة الخطأ، نسمح بالاستمرار
+    }
+  };
+
+  const addProduct = async () => {
+    if (!newProduct.name || !newProduct.price || !newProduct.sku) {
+      sweetAlert.showError('خطأ', 'يرجى ملء جميع الحقول المطلوبة (الاسم، السعر، كود المنتج)');
+      return;
+    }
+
+    // التحقق من SKU
+    const isSKUUnique = await checkSKUUnique(newProduct.sku);
+    if (!isSKUUnique) {
+      sweetAlert.showError('خطأ', 'كود المنتج مستخدم بالفعل. يرجى استخدام كود آخر.');
       return;
     }
 
@@ -1021,7 +1059,9 @@ export default function AdminScreen() {
           discount_percentage: newProduct.discount_percentage ? parseInt(newProduct.discount_percentage) : null,
           category: newProduct.category || null, // Keep for backward compatibility
           category_id: newProduct.category_id || null,
-          stock_quantity: parseInt(newProduct.stock_quantity) || 0,
+          stock_quantity: newProduct.source_type === 'warehouse' ? (parseInt(newProduct.stock_quantity) || 0) : 0,
+          source_type: newProduct.source_type,
+          sku: newProduct.sku,
           image_url: newProduct.image_url || productImages[0]?.url || '', // Fallback
         })
       });
@@ -1083,6 +1123,8 @@ export default function AdminScreen() {
         category: '',
         category_id: '',
         stock_quantity: '',
+        source_type: 'warehouse',
+        sku: '',
         image_url: '',
       });
       setProductImages([]);
@@ -1112,6 +1154,8 @@ export default function AdminScreen() {
       category: product.category || '',
       category_id: product.category_id || '',
       stock_quantity: product.stock_quantity.toString(),
+      source_type: product.source_type || 'warehouse',
+      sku: product.sku || '',
       image_url: product.image_url || '',
     });
     setProductImages([]);
@@ -1127,7 +1171,10 @@ export default function AdminScreen() {
       original_price: '',
       discount_percentage: '',
       category: '',
+      category_id: '',
       stock_quantity: '',
+      source_type: 'warehouse',
+      sku: '',
       image_url: '',
     });
     setProductImages([]);
@@ -1135,12 +1182,15 @@ export default function AdminScreen() {
   };
 
   const updateProduct = async () => {
-    if (!editingProduct || !newProduct.name || !newProduct.price) {
-      if (typeof window !== 'undefined' && Platform.OS === 'web') {
-        window.alert('يرجى ملء جميع الحقول المطلوبة');
-      } else {
-        Alert.alert('خطأ', 'يرجى ملء جميع الحقول المطلوبة');
-      }
+    if (!editingProduct || !newProduct.name || !newProduct.price || !newProduct.sku) {
+      sweetAlert.showError('خطأ', 'يرجى ملء جميع الحقول المطلوبة (الاسم، السعر، كود المنتج)');
+      return;
+    }
+
+    // التحقق من SKU (استثناء المنتج الحالي)
+    const isSKUUnique = await checkSKUUnique(newProduct.sku, editingProduct.id);
+    if (!isSKUUnique) {
+      sweetAlert.showError('خطأ', 'كود المنتج مستخدم بالفعل. يرجى استخدام كود آخر.');
       return;
     }
 
@@ -1169,7 +1219,9 @@ export default function AdminScreen() {
           discount_percentage: newProduct.discount_percentage ? parseInt(newProduct.discount_percentage) : null,
           category: newProduct.category || null, // Keep for backward compatibility
           category_id: newProduct.category_id || null,
-          stock_quantity: parseInt(newProduct.stock_quantity) || 0,
+          stock_quantity: newProduct.source_type === 'warehouse' ? (parseInt(newProduct.stock_quantity) || 0) : 0,
+          source_type: newProduct.source_type,
+          sku: newProduct.sku,
           image_url: newProduct.image_url || productImages[0]?.url || editingProduct.image_url,
         })
       });
@@ -2045,6 +2097,52 @@ export default function AdminScreen() {
               <Text style={styles.helpText}>
                 💡 ملاحظة: يمكنك إدخال إما السعر الأصلي أو نسبة الخصم، وسيتم حساب الآخر تلقائياً
               </Text>
+              
+              {/* Source Type Selection */}
+              <View style={styles.selectContainer}>
+                <Text style={styles.selectLabel}>مصدر المنتج: *</Text>
+                <View style={styles.radioGroup}>
+                  <TouchableOpacity
+                    style={[styles.radioOption, newProduct.source_type === 'warehouse' && styles.radioOptionActive]}
+                    onPress={() => setNewProduct({ ...newProduct, source_type: 'warehouse' })}
+                  >
+                    <Ionicons 
+                      name={newProduct.source_type === 'warehouse' ? 'radio-button-on' : 'radio-button-off'} 
+                      size={20} 
+                      color={newProduct.source_type === 'warehouse' ? '#EE1C47' : '#666'} 
+                    />
+                    <Text style={[styles.radioOptionText, newProduct.source_type === 'warehouse' && styles.radioOptionTextActive]}>
+                      من المخزن الداخلي
+                    </Text>
+                  </TouchableOpacity>
+                  
+                  <TouchableOpacity
+                    style={[styles.radioOption, newProduct.source_type === 'external' && styles.radioOptionActive]}
+                    onPress={() => setNewProduct({ ...newProduct, source_type: 'external' })}
+                  >
+                    <Ionicons 
+                      name={newProduct.source_type === 'external' ? 'radio-button-on' : 'radio-button-off'} 
+                      size={20} 
+                      color={newProduct.source_type === 'external' ? '#EE1C47' : '#666'} 
+                    />
+                    <Text style={[styles.radioOptionText, newProduct.source_type === 'external' && styles.radioOptionTextActive]}>
+                      طلب من الخارج
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              {/* SKU */}
+              <TextInput
+                style={styles.input}
+                placeholder="كود المنتج (SKU) *"
+                value={newProduct.sku}
+                onChangeText={(text) => setNewProduct({ ...newProduct, sku: text })}
+              />
+              <Text style={styles.helpText}>
+                ⚠️ الكود يجب أن يكون فريداً ولا يتكرر
+              </Text>
+
               {/* Category Selection */}
               <View style={styles.selectContainer}>
                 <Text style={styles.selectLabel}>الفئة:</Text>
@@ -2073,13 +2171,17 @@ export default function AdminScreen() {
                   ))}
                 </ScrollView>
               </View>
-              <TextInput
-                style={styles.input}
-                placeholder="الكمية في المخزن"
-                value={newProduct.stock_quantity}
-                onChangeText={(text) => setNewProduct({ ...newProduct, stock_quantity: text })}
-                keyboardType="numeric"
-              />
+              
+              {/* Stock Quantity - يظهر فقط للمنتجات الداخلية */}
+              {newProduct.source_type === 'warehouse' && (
+                <TextInput
+                  style={styles.input}
+                  placeholder="الكمية في المخزن"
+                  value={newProduct.stock_quantity}
+                  onChangeText={(text) => setNewProduct({ ...newProduct, stock_quantity: text })}
+                  keyboardType="numeric"
+                />
+              )}
               <TouchableOpacity style={styles.imageButton} onPress={pickImage}>
                 <Text style={styles.imageButtonText}>
                   {productImages.length > 0 ? `تم رفع ${productImages.length} صورة` : 'اختر صور (متعددة)'}
@@ -3633,8 +3735,36 @@ const styles = StyleSheet.create({
   selectLabel: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#333',
     marginBottom: 8,
+    color: '#333',
+  },
+  radioGroup: {
+    flexDirection: 'row',
+    gap: 15,
+    marginTop: 8,
+  },
+  radioOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 15,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    backgroundColor: '#F9FAFB',
+    gap: 8,
+  },
+  radioOptionActive: {
+    backgroundColor: '#FEE2E2',
+    borderColor: '#EE1C47',
+  },
+  radioOptionText: {
+    fontSize: 14,
+    color: '#666',
+  },
+  radioOptionTextActive: {
+    color: '#EE1C47',
+    fontWeight: '600',
   },
   categorySelect: {
     flexDirection: 'row',

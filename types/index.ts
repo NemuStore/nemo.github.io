@@ -21,6 +21,10 @@ export interface Category {
   display_order: number;
   is_active: boolean;
   section_id: string | null; // Reference to parent section
+  // Optional enhancements
+  banner_image: string | null; // Category banner image
+  color_hex: string | null; // Category color
+  default_filters: Record<string, any> | null; // Default filter settings
   created_at: string;
   updated_at: string;
   section_data?: Section; // Joined section data
@@ -39,6 +43,8 @@ export interface User {
   updated_at: string;
 }
 
+export type ProductSource = 'warehouse' | 'external'; // مخزن داخلي أو طلب من الخارج
+
 export interface Product {
   id: string;
   name: string;
@@ -50,10 +56,57 @@ export interface Product {
   category: string | null; // Keep for backward compatibility
   category_id: string | null; // Reference to categories table
   stock_quantity: number;
+  source_type: ProductSource; // 'warehouse' = من المخزن الداخلي، 'external' = طلب من الخارج
+  // New fields for enhanced product page
+  shipping_cost: number | null; // Shipping cost (null = free shipping)
+  estimated_delivery_days: number | null; // Estimated delivery days
+  free_shipping_threshold: number | null; // Minimum order for free shipping
+  return_policy_days: number | null; // Days allowed for returns
+  warranty_period: string | null; // Warranty period description
+  weight_kg: number | null; // Product weight in kg
+  dimensions: string | null; // Product dimensions (e.g., "30x20x10 سم")
+  brand: string | null; // Brand name
+  sku: string | null; // Product SKU code (unique, not shown to customers)
+  is_featured: boolean; // Featured product flag
+  is_new: boolean; // New product flag
+  tags: string[]; // Product tags array
   created_at: string;
   updated_at: string;
   category_data?: Category; // Joined category data
   section_data?: Section; // Joined section data (via category)
+  // Joined data
+  specifications?: ProductSpecification[]; // Product specifications
+  reviews?: ProductReview[]; // Product reviews
+  average_rating?: number; // Calculated average rating
+  reviews_count?: number; // Total reviews count
+}
+
+// Product Specification
+export interface ProductSpecification {
+  id: string;
+  product_id: string;
+  spec_type: 'color' | 'size' | 'material' | 'dimensions' | 'weight' | 'brand' | 'other';
+  spec_key: string; // Display name (e.g., 'اللون', 'المقاس')
+  spec_value: string; // Actual value (e.g., 'أحمر', 'L')
+  display_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+// Product Review
+export interface ProductReview {
+  id: string;
+  product_id: string;
+  user_id: string;
+  rating: number; // 1-5
+  title: string | null;
+  comment: string | null;
+  images: string[]; // Review images
+  is_verified_purchase: boolean;
+  helpful_count: number;
+  created_at: string;
+  updated_at: string;
+  user_data?: User; // Joined user data
 }
 
 export type OrderStatus = 'pending' | 'confirmed' | 'shipped_from_china' | 'received_in_uae' | 'shipped_from_uae' | 'received_in_egypt' | 'in_warehouse' | 'out_for_delivery' | 'delivered' | 'cancelled';
@@ -68,6 +121,8 @@ export interface Order {
   latitude: number | null;
   longitude: number | null;
   estimated_delivery_days: number | null;
+  source_type: ProductSource | null; // 'warehouse' أو 'external' - null للطلبات القديمة
+  parent_order_id: string | null; // إذا كان هذا الطلب جزء من طلب أكبر (للفصل بين الداخلي والخارجي)
   created_at: string;
   updated_at: string;
 }

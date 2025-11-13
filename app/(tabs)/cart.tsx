@@ -207,16 +207,16 @@ export default function CartScreen() {
       // Get address from user
       let address = user.address || 'عنوان غير محدد';
       
-      // Calculate total amount
-      const total_amount = cartItems.reduce((sum, item) => {
-        return sum + (item.product.price * item.quantity);
-      }, 0);
+      // فصل المنتجات حسب source_type
+      const warehouseItems = cartItems.filter(item => 
+        item.product.source_type === 'warehouse' || !item.product.source_type
+      );
+      const externalItems = cartItems.filter(item => 
+        item.product.source_type === 'external'
+      );
       
-      console.log('💰 Cart: Total amount:', total_amount);
-      
-      // Generate order number
-      const order_number = `ORD-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-      console.log('📝 Cart: Order number:', order_number);
+      console.log('📦 Cart: Warehouse items:', warehouseItems.length);
+      console.log('📦 Cart: External items:', externalItems.length);
       
       // Get access_token from localStorage
       let accessToken = '';
@@ -239,87 +239,160 @@ export default function CartScreen() {
       const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
       const authToken = accessToken || supabaseKey || '';
       
-      // Create order directly using fetch
-      console.log('📡 Cart: Creating order...');
-      const orderResponse = await fetch(`${supabaseUrl}/rest/v1/orders`, {
-        method: 'POST',
-        headers: {
-          'apikey': supabaseKey || '',
-          'Authorization': `Bearer ${authToken}`,
-          'Content-Type': 'application/json',
-          'Prefer': 'return=representation'
-        },
-        body: JSON.stringify({
-          user_id: user.id,
-          order_number,
-          status: 'pending',
-          total_amount,
-          shipping_address: address,
-          latitude: location?.latitude || null,
-          longitude: location?.longitude || null,
-        })
-      });
+      const createdOrders = [];
       
-      console.log('📡 Cart: Order response status:', orderResponse.status);
-      
-      if (!orderResponse.ok) {
-        const errorText = await orderResponse.text();
-        console.error('❌ Cart: Order creation error:', errorText);
-        throw new Error(errorText || 'فشل إنشاء الطلب');
-      }
-      
-      const orderData = await orderResponse.json();
-      const order = Array.isArray(orderData) ? orderData[0] : orderData;
-      console.log('✅ Cart: Order created:', order.id);
-      
-      // Create order items
-      const orderItems = cartItems.map((item) => ({
-        order_id: order.id,
-        product_id: item.product.id,
-        quantity: item.quantity,
-        price: item.product.price,
-      }));
-      
-      console.log('📦 Cart: Creating order items...');
-      const itemsResponse = await fetch(`${supabaseUrl}/rest/v1/order_items`, {
-        method: 'POST',
-        headers: {
-          'apikey': supabaseKey || '',
-          'Authorization': `Bearer ${authToken}`,
-          'Content-Type': 'application/json',
-          'Prefer': 'return=representation'
-        },
-        body: JSON.stringify(orderItems)
-      });
-      
-      console.log('📡 Cart: Order items response status:', itemsResponse.status);
-      
-      if (!itemsResponse.ok) {
-        const errorText = await itemsResponse.text();
-        console.error('❌ Cart: Order items creation error:', errorText);
-        throw new Error('فشل إضافة عناصر الطلب');
-      }
-      
-      console.log('✅ Cart: Order created successfully!');
-      
-      if (typeof window !== 'undefined' && Platform.OS === 'web') {
-        if (window.confirm('تم إنشاء الطلب بنجاح! هل تريد الذهاب إلى صفحة الملف الشخصي؟')) {
-          clearCart();
-          router.push('/(tabs)/profile');
-        } else {
-          clearCart();
-        }
-      } else {
-        Alert.alert('نجح', 'تم إنشاء الطلب بنجاح', [
-          {
-            text: 'موافق',
-            onPress: () => {
-              clearCart();
-              router.push('/(tabs)/profile');
-            },
+      // إنشاء طلب للمنتجات الداخلية (إن وجدت)
+      if (warehouseItems.length > 0) {
+        const warehouseTotal = warehouseItems.reduce((sum, item) => 
+          sum + (item.product.price * item.quantity), 0
+        );
+        const warehouseOrderNumber = `ORD-W-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        
+        console.log('📡 Cart: Creating warehouse order...');
+        const warehouseOrderResponse = await fetch(`${supabaseUrl}/rest/v1/orders`, {
+          method: 'POST',
+          headers: {
+            'apikey': supabaseKey || '',
+            'Authorization': `Bearer ${authToken}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=representation'
           },
-        ]);
+          body: JSON.stringify({
+            user_id: user.id,
+            order_number: warehouseOrderNumber,
+            status: 'pending',
+            total_amount: warehouseTotal,
+            shipping_address: address,
+            latitude: location?.latitude || null,
+            longitude: location?.longitude || null,
+            source_type: 'warehouse',
+          })
+        });
+        
+        if (!warehouseOrderResponse.ok) {
+          const errorText = await warehouseOrderResponse.text();
+          throw new Error(errorText || 'فشل إنشاء طلب المخزن');
+        }
+        
+        const warehouseOrderData = await warehouseOrderResponse.json();
+        const warehouseOrder = Array.isArray(warehouseOrderData) ? warehouseOrderData[0] : warehouseOrderData;
+        console.log('✅ Cart: Warehouse order created:', warehouseOrder.id);
+        
+        // Create order items
+        const warehouseOrderItems = warehouseItems.map((item) => ({
+          order_id: warehouseOrder.id,
+          product_id: item.product.id,
+          quantity: item.quantity,
+          price: item.product.price,
+        }));
+        
+        await fetch(`${supabaseUrl}/rest/v1/order_items`, {
+          method: 'POST',
+          headers: {
+            'apikey': supabaseKey || '',
+            'Authorization': `Bearer ${authToken}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=representation'
+          },
+          body: JSON.stringify(warehouseOrderItems)
+        });
+        
+        createdOrders.push(warehouseOrder);
       }
+      
+      // إنشاء طلب للمنتجات الخارجية (إن وجدت)
+      if (externalItems.length > 0) {
+        const externalTotal = externalItems.reduce((sum, item) => 
+          sum + (item.product.price * item.quantity), 0
+        );
+        const externalOrderNumber = `ORD-E-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        
+        console.log('📡 Cart: Creating external order...');
+        const externalOrderResponse = await fetch(`${supabaseUrl}/rest/v1/orders`, {
+          method: 'POST',
+          headers: {
+            'apikey': supabaseKey || '',
+            'Authorization': `Bearer ${authToken}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=representation'
+          },
+          body: JSON.stringify({
+            user_id: user.id,
+            order_number: externalOrderNumber,
+            status: 'pending',
+            total_amount: externalTotal,
+            shipping_address: address,
+            latitude: location?.latitude || null,
+            longitude: location?.longitude || null,
+            source_type: 'external',
+            parent_order_id: createdOrders.length > 0 ? createdOrders[0].id : null, // ربط الطلب الثاني بالأول
+          })
+        });
+        
+        if (!externalOrderResponse.ok) {
+          const errorText = await externalOrderResponse.text();
+          throw new Error(errorText || 'فشل إنشاء طلب الخارج');
+        }
+        
+        const externalOrderData = await externalOrderResponse.json();
+        const externalOrder = Array.isArray(externalOrderData) ? externalOrderData[0] : externalOrderData;
+        console.log('✅ Cart: External order created:', externalOrder.id);
+        
+        // Create order items
+        const externalOrderItems = externalItems.map((item) => ({
+          order_id: externalOrder.id,
+          product_id: item.product.id,
+          quantity: item.quantity,
+          price: item.product.price,
+        }));
+        
+        await fetch(`${supabaseUrl}/rest/v1/order_items`, {
+          method: 'POST',
+          headers: {
+            'apikey': supabaseKey || '',
+            'Authorization': `Bearer ${authToken}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=representation'
+          },
+          body: JSON.stringify(externalOrderItems)
+        });
+        
+        createdOrders.push(externalOrder);
+      }
+      
+      // عرض رسالة للعميل
+      if (createdOrders.length === 2) {
+        if (typeof window !== 'undefined' && Platform.OS === 'web') {
+          window.alert(`تم إنشاء طلبين منفصلين:\n- طلب من المخزن: ${createdOrders[0].order_number}\n- طلب من الخارج: ${createdOrders[1].order_number}`);
+        } else {
+          Alert.alert(
+            'تم إنشاء الطلبين',
+            `تم إنشاء طلبين منفصلين:\n- طلب من المخزن: ${createdOrders[0].order_number}\n- طلب من الخارج: ${createdOrders[1].order_number}`,
+            [{ text: 'موافق', onPress: () => router.push('/(tabs)/orders') }]
+          );
+        }
+      } else if (createdOrders.length === 1) {
+        const order = createdOrders[0];
+        const orderType = order.source_type === 'warehouse' ? 'من المخزن' : 'من الخارج';
+        if (typeof window !== 'undefined' && Platform.OS === 'web') {
+          if (window.confirm(`تم إنشاء الطلب بنجاح (${orderType})\nرقم الطلب: ${order.order_number}\nهل تريد الذهاب لصفحة الطلبات؟`)) {
+            router.push('/(tabs)/orders');
+          }
+        } else {
+          Alert.alert(
+            'نجح',
+            `تم إنشاء الطلب بنجاح (${orderType})\nرقم الطلب: ${order.order_number}`,
+            [
+              { text: 'متابعة التسوق', style: 'cancel' },
+              { text: 'الذهاب للطلبات', onPress: () => router.push('/(tabs)/orders') },
+            ]
+          );
+        }
+      }
+      
+      // Clear cart بعد نجاح إنشاء الطلبات
+      clearCart();
+      
     } catch (error: any) {
       console.error('❌ Cart: Error creating order:', error);
       if (typeof window !== 'undefined' && Platform.OS === 'web') {
