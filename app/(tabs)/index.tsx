@@ -11,7 +11,7 @@ import {
   Dimensions,
 } from 'react-native';
 import { supabase } from '@/lib/supabase';
-import { Product, Category } from '@/types';
+import { Product, Category, Section } from '@/types';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useCart } from '@/contexts/CartContext';
@@ -27,16 +27,24 @@ const maxContainerWidth = isWeb ? 1400 : width; // Max width for web container
 export default function HomeScreen() {
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [sections, setSections] = useState<Section[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [selectedSection, setSelectedSection] = useState<string | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const router = useRouter();
 
   useEffect(() => {
     loadProducts();
     loadCategories();
+    loadSections();
   }, []);
+
+  useEffect(() => {
+    // Reset category selection when section changes
+    setSelectedCategory(null);
+  }, [selectedSection]);
 
   const loadProducts = async () => {
     let timeoutId: NodeJS.Timeout | null = null;
@@ -117,12 +125,35 @@ export default function HomeScreen() {
     }
   };
 
+  const loadSections = async () => {
+    try {
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+      
+      const response = await fetch(`${supabaseUrl}/rest/v1/sections?select=*&is_active=eq.true&order=display_order.asc,name.asc`, {
+        headers: {
+          'apikey': supabaseKey || '',
+          'Authorization': `Bearer ${supabaseKey || ''}`,
+          'Content-Type': 'application/json',
+        }
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        setSections(data || []);
+      }
+    } catch (error) {
+      console.error('Error loading sections:', error);
+    }
+  };
+
   const loadCategories = async () => {
     try {
       const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
       const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
       
-      const response = await fetch(`${supabaseUrl}/rest/v1/categories?select=*&is_active=eq.true&order=display_order.asc,name.asc`, {
+      // Load categories with their sections
+      const response = await fetch(`${supabaseUrl}/rest/v1/categories?select=*,sections(*)&is_active=eq.true&order=display_order.asc,name.asc`, {
         headers: {
           'apikey': supabaseKey || '',
           'Authorization': `Bearer ${supabaseKey || ''}`,
@@ -139,12 +170,19 @@ export default function HomeScreen() {
     }
   };
 
+  // Filter categories by selected section
+  const filteredCategories = selectedSection
+    ? categories.filter(cat => cat.section_id === selectedSection)
+    : categories;
+
   const filteredProducts = products.filter((product) => {
     const matchesSearch = product.name.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesCategory = !selectedCategory || 
       (product.category_id === selectedCategory) || 
       (product.category === selectedCategory); // Backward compatibility
-    return matchesSearch && matchesCategory;
+    const matchesSection = !selectedSection || 
+      (product.category_data?.section_id === selectedSection);
+    return matchesSearch && matchesCategory && matchesSection;
   });
 
   const handleProductPress = (productId: string) => {
@@ -191,9 +229,51 @@ export default function HomeScreen() {
         </View>
       )}
 
-      {/* Categories Section (inspired by Temu) */}
-      {categories.length > 0 && !loading && (
+      {/* Sections Section */}
+      {sections.length > 0 && !loading && (
         <View style={styles.categoriesContainer}>
+          <Text style={styles.sectionTitle}>الأقسام</Text>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.categoriesScroll}
+          >
+            <TouchableOpacity
+              style={[styles.categoryChip, !selectedSection && styles.categoryChipActive]}
+              onPress={() => {
+                setSelectedSection(null);
+                setSelectedCategory(null);
+              }}
+            >
+              <Text style={[styles.categoryChipText, !selectedSection && styles.categoryChipTextActive]}>
+                الكل
+              </Text>
+            </TouchableOpacity>
+            {sections.map((section) => (
+              <TouchableOpacity
+                key={section.id}
+                style={[styles.categoryChip, selectedSection === section.id && styles.categoryChipActive]}
+                onPress={() => {
+                  setSelectedSection(section.id);
+                  setSelectedCategory(null);
+                }}
+              >
+                {section.icon && (
+                  <Ionicons name={section.icon as any} size={16} color={selectedSection === section.id ? '#fff' : '#666'} style={{ marginRight: 5 }} />
+                )}
+                <Text style={[styles.categoryChipText, selectedSection === section.id && styles.categoryChipTextActive]}>
+                  {section.name}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
+      )}
+
+      {/* Categories Section (inspired by Temu) */}
+      {filteredCategories.length > 0 && !loading && (
+        <View style={styles.categoriesContainer}>
+          <Text style={styles.sectionTitle}>الفئات</Text>
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
@@ -207,7 +287,7 @@ export default function HomeScreen() {
                 الكل
               </Text>
             </TouchableOpacity>
-            {categories.map((category) => (
+            {filteredCategories.map((category) => (
               <TouchableOpacity
                 key={category.id}
                 style={[styles.categoryChip, selectedCategory === category.id && styles.categoryChipActive]}
@@ -442,6 +522,13 @@ const styles = StyleSheet.create({
     marginVertical: 10,
     marginHorizontal: isWeb ? 'auto' : 10,
     maxWidth: isWeb ? 1400 : undefined,
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#333',
+    marginBottom: 8,
+    paddingHorizontal: isWeb ? 20 : 10,
   },
   categoriesScroll: {
     paddingHorizontal: isWeb ? 20 : 10,

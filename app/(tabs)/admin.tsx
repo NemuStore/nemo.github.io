@@ -12,23 +12,37 @@ import {
   Dimensions,
 } from 'react-native';
 import { supabase } from '@/lib/supabase';
-import { Order, Shipment, Inventory, Product, User, UserRole, Category } from '@/types';
+import { Order, Shipment, Inventory, Product, User, UserRole, Category, Section } from '@/types';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import { uploadImageToImgBB } from '@/lib/imgbb';
+import SweetAlert from '@/components/SweetAlert';
+import { useSweetAlert } from '@/hooks/useSweetAlert';
 
 export default function AdminScreen() {
   const [user, setUser] = useState<any>(null);
-  const [activeTab, setActiveTab] = useState<'orders' | 'shipments' | 'inventory' | 'products' | 'users' | 'categories'>('orders');
+  const [activeTab, setActiveTab] = useState<'orders' | 'shipments' | 'inventory' | 'products' | 'users' | 'categories' | 'sections'>('orders');
   const [orders, setOrders] = useState<Order[]>([]);
   const [shipments, setShipments] = useState<Shipment[]>([]);
   const [inventory, setInventory] = useState<Inventory[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [sections, setSections] = useState<Section[]>([]);
   const [loading, setLoading] = useState(false);
   const router = useRouter();
+  const sweetAlert = useSweetAlert();
+  
+  // State for adding categories when creating section
+  const [showAddCategoryToSection, setShowAddCategoryToSection] = useState(false);
+  const [sectionCategories, setSectionCategories] = useState<Array<{
+    name: string;
+    description: string;
+    icon: string;
+    display_order: string;
+    is_active: boolean;
+  }>>([]);
 
   // Form states
   const [newProduct, setNewProduct] = useState({
@@ -48,8 +62,34 @@ export default function AdminScreen() {
     icon: '',
     display_order: '0',
     is_active: true,
+    section_id: '', // Section ID
   });
   const [editingCategory, setEditingCategory] = useState<Category | null>(null);
+  const [newSection, setNewSection] = useState({
+    name: '',
+    description: '',
+    icon: '',
+    display_order: '0',
+    is_active: true,
+  });
+  const [editingSection, setEditingSection] = useState<Section | null>(null);
+  const [editingSectionId, setEditingSectionId] = useState<string | null>(null);
+  const [editingCategoryId, setEditingCategoryId] = useState<string | null>(null);
+  const [editingProductId, setEditingProductId] = useState<string | null>(null);
+  const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
+  const [editingInventoryId, setEditingInventoryId] = useState<string | null>(null);
+  const [quickEditSection, setQuickEditSection] = useState<{ [key: string]: Partial<Section> }>({});
+  const [quickEditCategory, setQuickEditCategory] = useState<{ [key: string]: Partial<Category> }>({});
+  const [quickEditProduct, setQuickEditProduct] = useState<{ [key: string]: Partial<Product> }>({});
+  const [quickEditOrder, setQuickEditOrder] = useState<{ [key: string]: Partial<Order> }>({});
+  const [quickEditInventory, setQuickEditInventory] = useState<{ [key: string]: Partial<Inventory> }>({});
+  const [newCategoryForSection, setNewCategoryForSection] = useState({
+    name: '',
+    description: '',
+    icon: '',
+    display_order: '0',
+    is_active: true,
+  });
   const [productImages, setProductImages] = useState<Array<{ uri: string; url?: string }>>([]);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [editProductImages, setEditProductImages] = useState<Array<{ uri: string; url?: string }>>([]);
@@ -95,6 +135,34 @@ export default function AdminScreen() {
     }
   };
 
+  const loadSections = async () => {
+    try {
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+      
+      // Get access_token (with auto-refresh if expired)
+      const accessToken = await getAccessToken();
+      
+      const response = await fetch(`${supabaseUrl}/rest/v1/sections?select=*&order=display_order.asc,name.asc`, {
+        headers: {
+          'apikey': supabaseKey || '',
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        }
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        setSections(data || []);
+        console.log('✅ Admin: Sections loaded:', data?.length || 0);
+      } else {
+        console.error('❌ Admin: Error loading sections:', await response.text());
+      }
+    } catch (error) {
+      console.error('❌ Admin: Error loading sections:', error);
+    }
+  };
+
   const loadCategories = async () => {
     try {
       const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
@@ -103,7 +171,7 @@ export default function AdminScreen() {
       // Get access_token (with auto-refresh if expired)
       const accessToken = await getAccessToken();
       
-      const response = await fetch(`${supabaseUrl}/rest/v1/categories?select=*&order=display_order.asc,name.asc`, {
+      const response = await fetch(`${supabaseUrl}/rest/v1/categories?select=*,sections(*)&order=display_order.asc,name.asc`, {
         headers: {
           'apikey': supabaseKey || '',
           'Authorization': `Bearer ${accessToken}`,
@@ -125,11 +193,7 @@ export default function AdminScreen() {
 
   const addCategory = async () => {
     if (!newCategory.name) {
-      if (typeof window !== 'undefined' && Platform.OS === 'web') {
-        window.alert('يرجى إدخال اسم الفئة');
-      } else {
-        Alert.alert('خطأ', 'يرجى إدخال اسم الفئة');
-      }
+      sweetAlert.showError('خطأ', 'يرجى إدخال اسم الفئة');
       return;
     }
 
@@ -153,6 +217,7 @@ export default function AdminScreen() {
           icon: newCategory.icon || null,
           display_order: parseInt(newCategory.display_order) || 0,
           is_active: newCategory.is_active,
+          section_id: newCategory.section_id || null,
         })
       });
 
@@ -161,28 +226,21 @@ export default function AdminScreen() {
         throw new Error(errorText);
       }
 
-      if (typeof window !== 'undefined' && Platform.OS === 'web') {
-        window.alert('تم إضافة الفئة بنجاح');
-      } else {
-        Alert.alert('نجح', 'تم إضافة الفئة بنجاح');
-      }
-      
-      setNewCategory({
-        name: '',
-        description: '',
-        icon: '',
-        display_order: '0',
-        is_active: true,
+      sweetAlert.showSuccess('نجح', 'تم إضافة الفئة بنجاح', () => {
+        setNewCategory({
+          name: '',
+          description: '',
+          icon: '',
+          display_order: '0',
+          is_active: true,
+          section_id: '',
+        });
+        setEditingCategory(null);
+        loadCategories();
       });
-      setEditingCategory(null);
-      await loadCategories();
     } catch (error: any) {
       console.error('❌ Error adding category:', error);
-      if (typeof window !== 'undefined' && Platform.OS === 'web') {
-        window.alert(error.message || 'فشل إضافة الفئة');
-      } else {
-        Alert.alert('خطأ', error.message || 'فشل إضافة الفئة');
-      }
+      sweetAlert.showError('خطأ', error.message || 'فشل إضافة الفئة');
     } finally {
       setLoading(false);
     }
@@ -190,11 +248,7 @@ export default function AdminScreen() {
 
   const updateCategory = async () => {
     if (!editingCategory || !newCategory.name) {
-      if (typeof window !== 'undefined' && Platform.OS === 'web') {
-        window.alert('يرجى إدخال اسم الفئة');
-      } else {
-        Alert.alert('خطأ', 'يرجى إدخال اسم الفئة');
-      }
+      sweetAlert.showError('خطأ', 'يرجى إدخال اسم الفئة');
       return;
     }
 
@@ -218,6 +272,7 @@ export default function AdminScreen() {
           icon: newCategory.icon || null,
           display_order: parseInt(newCategory.display_order) || 0,
           is_active: newCategory.is_active,
+          section_id: newCategory.section_id || null,
         })
       });
 
@@ -226,35 +281,69 @@ export default function AdminScreen() {
         throw new Error(errorText);
       }
 
-      if (typeof window !== 'undefined' && Platform.OS === 'web') {
-        window.alert('تم تحديث الفئة بنجاح');
-      } else {
-        Alert.alert('نجح', 'تم تحديث الفئة بنجاح');
-      }
-      
-      setNewCategory({
-        name: '',
-        description: '',
-        icon: '',
-        display_order: '0',
-        is_active: true,
+      sweetAlert.showSuccess('نجح', 'تم تحديث الفئة بنجاح', () => {
+        setNewCategory({
+          name: '',
+          description: '',
+          icon: '',
+          display_order: '0',
+          is_active: true,
+          section_id: '',
+        });
+        setEditingCategory(null);
+        loadCategories();
       });
-      setEditingCategory(null);
-      await loadCategories();
     } catch (error: any) {
       console.error('❌ Error updating category:', error);
-      if (typeof window !== 'undefined' && Platform.OS === 'web') {
-        window.alert(error.message || 'فشل تحديث الفئة');
-      } else {
-        Alert.alert('خطأ', error.message || 'فشل تحديث الفئة');
-      }
+      sweetAlert.showError('خطأ', error.message || 'فشل تحديث الفئة');
     } finally {
       setLoading(false);
     }
   };
 
   const deleteCategory = async (categoryId: string) => {
-    if (typeof window !== 'undefined' && Platform.OS === 'web') {
+    sweetAlert.showConfirm(
+      'تأكيد الحذف',
+      'هل أنت متأكد من حذف هذه الفئة؟ سيتم إزالة الفئة من جميع المنتجات المرتبطة بها.',
+      async () => {
+        setLoading(true);
+        try {
+          const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+          const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+          const accessToken = await getAccessToken();
+
+          const response = await fetch(`${supabaseUrl}/rest/v1/categories?id=eq.${categoryId}`, {
+            method: 'DELETE',
+            headers: {
+              'apikey': supabaseKey || '',
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json',
+            }
+          });
+
+          if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(errorText);
+          }
+
+          sweetAlert.showSuccess('نجح', 'تم حذف الفئة بنجاح', () => {
+            loadCategories();
+          });
+        } catch (error: any) {
+          console.error('❌ Error deleting category:', error);
+          sweetAlert.showError('خطأ', error.message || 'فشل حذف الفئة');
+        } finally {
+          setLoading(false);
+        }
+      },
+      undefined,
+      'حذف',
+      'إلغاء'
+    );
+    return;
+    
+    // Old code (kept for reference, will be removed)
+    if (false && typeof window !== 'undefined' && Platform.OS === 'web') {
       if (!window.confirm('هل أنت متأكد من حذف هذه الفئة؟ سيتم إزالة الفئة من جميع المنتجات المرتبطة بها.')) {
         return;
       }
@@ -317,12 +406,217 @@ export default function AdminScreen() {
       icon: category.icon || '',
       display_order: category.display_order.toString(),
       is_active: category.is_active,
+      section_id: category.section_id || '',
     });
   };
 
   const cancelEditCategory = () => {
     setEditingCategory(null);
     setNewCategory({
+      name: '',
+      description: '',
+      icon: '',
+      display_order: '0',
+      is_active: true,
+      section_id: '',
+    });
+  };
+
+  // Sections management functions
+  const addSection = async () => {
+    if (!newSection.name) {
+      sweetAlert.showError('خطأ', 'يرجى إدخال اسم القسم');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+      const accessToken = await getAccessToken();
+
+      const response = await fetch(`${supabaseUrl}/rest/v1/sections`, {
+        method: 'POST',
+        headers: {
+          'apikey': supabaseKey || '',
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=representation'
+        },
+        body: JSON.stringify({
+          name: newSection.name,
+          description: newSection.description || null,
+          icon: newSection.icon || null,
+          display_order: parseInt(newSection.display_order) || 0,
+          is_active: newSection.is_active,
+        })
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(errorText);
+      }
+
+      const sectionData = await response.json();
+      const createdSection = Array.isArray(sectionData) ? sectionData[0] : sectionData;
+      const sectionId = createdSection.id;
+
+      // Add categories if any were added
+      if (sectionCategories.length > 0) {
+        for (const cat of sectionCategories) {
+          try {
+            await fetch(`${supabaseUrl}/rest/v1/categories`, {
+              method: 'POST',
+              headers: {
+                'apikey': supabaseKey || '',
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                name: cat.name,
+                description: cat.description || null,
+                icon: cat.icon || null,
+                display_order: parseInt(cat.display_order) || 0,
+                is_active: cat.is_active,
+                section_id: sectionId,
+              })
+            });
+          } catch (catError) {
+            console.error('Error adding category:', catError);
+          }
+        }
+      }
+
+      sweetAlert.showSuccess('نجح', 'تم إضافة القسم بنجاح', () => {
+        setNewSection({
+          name: '',
+          description: '',
+          icon: '',
+          display_order: '0',
+          is_active: true,
+        });
+        setSectionCategories([]);
+        setShowAddCategoryToSection(false);
+        setEditingSection(null);
+        loadSections();
+        loadCategories();
+      });
+    } catch (error: any) {
+      console.error('❌ Error adding section:', error);
+      sweetAlert.showError('خطأ', error.message || 'فشل إضافة القسم');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const updateSection = async () => {
+    if (!editingSection || !newSection.name) {
+      sweetAlert.showError('خطأ', 'يرجى إدخال اسم القسم');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+      const accessToken = await getAccessToken();
+
+      const response = await fetch(`${supabaseUrl}/rest/v1/sections?id=eq.${editingSection.id}`, {
+        method: 'PATCH',
+        headers: {
+          'apikey': supabaseKey || '',
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=representation'
+        },
+        body: JSON.stringify({
+          name: newSection.name,
+          description: newSection.description || null,
+          icon: newSection.icon || null,
+          display_order: parseInt(newSection.display_order) || 0,
+          is_active: newSection.is_active,
+        })
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(errorText);
+      }
+
+      sweetAlert.showSuccess('نجح', 'تم تحديث القسم بنجاح', () => {
+        setNewSection({
+          name: '',
+          description: '',
+          icon: '',
+          display_order: '0',
+          is_active: true,
+        });
+        setEditingSection(null);
+        loadSections();
+      });
+    } catch (error: any) {
+      console.error('❌ Error updating section:', error);
+      sweetAlert.showError('خطأ', error.message || 'فشل تحديث القسم');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const deleteSection = async (sectionId: string) => {
+    sweetAlert.showConfirm(
+      'تأكيد الحذف',
+      'هل أنت متأكد من حذف هذا القسم؟ سيتم إزالة القسم من جميع الفئات المرتبطة به.',
+      async () => {
+        setLoading(true);
+        try {
+          const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+          const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+          const accessToken = await getAccessToken();
+
+          const response = await fetch(`${supabaseUrl}/rest/v1/sections?id=eq.${sectionId}`, {
+            method: 'DELETE',
+            headers: {
+              'apikey': supabaseKey || '',
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json',
+            }
+          });
+
+          if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(errorText);
+          }
+
+          sweetAlert.showSuccess('نجح', 'تم حذف القسم بنجاح', () => {
+            loadSections();
+          });
+        } catch (error: any) {
+          console.error('❌ Error deleting section:', error);
+          sweetAlert.showError('خطأ', error.message || 'فشل حذف القسم');
+        } finally {
+          setLoading(false);
+        }
+      },
+      undefined,
+      'حذف',
+      'إلغاء'
+    );
+  };
+
+  const startEditSection = (section: Section) => {
+    setEditingSection(section);
+    setNewSection({
+      name: section.name,
+      description: section.description || '',
+      icon: section.icon || '',
+      display_order: section.display_order.toString(),
+      is_active: section.is_active,
+    });
+  };
+
+  const cancelEditSection = () => {
+    setEditingSection(null);
+    setNewSection({
       name: '',
       description: '',
       icon: '',
@@ -600,6 +894,9 @@ export default function AdminScreen() {
         await loadUsers();
       } else if (activeTab === 'categories') {
         await loadCategories();
+        await loadSections(); // Load sections for category dropdown
+      } else if (activeTab === 'sections') {
+        await loadSections();
       }
     } catch (error) {
       console.error('❌ Admin: Error loading data:', error);
@@ -1090,9 +1387,29 @@ export default function AdminScreen() {
       shipped_from_uae: 'شُحنت من الإمارات',
       received_in_egypt: 'وصلت مصر',
       in_warehouse: 'في المخزن',
+      out_for_delivery: 'قيد التوصيل',
+      delivered: 'تم التسليم',
+      cancelled: 'ملغاة',
       completed: 'مكتملة',
     };
     return statusMap[status] || status;
+  };
+
+  const getStatusBadgeColor = (status: string) => {
+    const colorMap: Record<string, { backgroundColor: string }> = {
+      pending: { backgroundColor: '#F59E0B' },
+      confirmed: { backgroundColor: '#3B82F6' },
+      shipped_from_china: { backgroundColor: '#8B5CF6' },
+      received_in_uae: { backgroundColor: '#6366F1' },
+      shipped_from_uae: { backgroundColor: '#EC4899' },
+      received_in_egypt: { backgroundColor: '#F43F5E' },
+      in_warehouse: { backgroundColor: '#10B981' },
+      out_for_delivery: { backgroundColor: '#06B6D4' },
+      delivered: { backgroundColor: '#10B981' },
+      cancelled: { backgroundColor: '#EF4444' },
+      completed: { backgroundColor: '#10B981' },
+    };
+    return colorMap[status] || { backgroundColor: '#6B7280' };
   };
 
   const getRoleText = (role: UserRole) => {
@@ -1116,23 +1433,14 @@ export default function AdminScreen() {
   };
 
   const updateUserRole = async (userId: string, newRole: UserRole) => {
-    if (typeof window !== 'undefined' && Platform.OS === 'web') {
-      if (!window.confirm(`هل أنت متأكد من تغيير دور هذا المستخدم إلى "${getRoleText(newRole)}"؟`)) {
-        return;
-      }
-    } else {
-      Alert.alert(
-        'تغيير الدور',
-        `هل أنت متأكد من تغيير دور هذا المستخدم إلى "${getRoleText(newRole)}"؟`,
-        [
-          { text: 'إلغاء', style: 'cancel' },
-          { text: 'تأكيد', onPress: () => performUpdateUserRole(userId, newRole) },
-        ]
-      );
-      return;
-    }
-    
-    performUpdateUserRole(userId, newRole);
+    sweetAlert.showConfirm(
+      'تغيير الدور',
+      `هل أنت متأكد من تغيير دور هذا المستخدم إلى "${getRoleText(newRole)}"؟`,
+      () => performUpdateUserRole(userId, newRole),
+      undefined,
+      'موافق',
+      'إلغاء'
+    );
   };
 
   const performUpdateUserRole = async (userId: string, newRole: UserRole) => {
@@ -1173,18 +1481,14 @@ export default function AdminScreen() {
       // Verify the update
       if (updatedData && updatedData.length > 0 && updatedData[0].role === newRole) {
         console.log('✅ Role update verified successfully');
-        if (typeof window !== 'undefined' && Platform.OS === 'web') {
-          window.alert('تم تغيير الدور بنجاح');
-        } else {
-          Alert.alert('نجح', 'تم تغيير الدور بنجاح');
-        }
+        sweetAlert.showSuccess('نجح', 'تم تغيير الدور بنجاح', () => {
+          loadUsers();
+        });
       } else {
         console.warn('⚠️ Role update may have failed - data mismatch');
-        if (typeof window !== 'undefined' && Platform.OS === 'web') {
-          window.alert('تم إرسال الطلب ولكن قد يكون هناك مشكلة. يرجى التحقق من الدور.');
-        } else {
-          Alert.alert('تحذير', 'تم إرسال الطلب ولكن قد يكون هناك مشكلة. يرجى التحقق من الدور.');
-        }
+        sweetAlert.showWarning('تحذير', 'تم إرسال الطلب ولكن قد يكون هناك مشكلة. يرجى التحقق من الدور.', () => {
+          loadUsers();
+        });
       }
       
       // Reload users to see the updated data
@@ -1192,11 +1496,7 @@ export default function AdminScreen() {
     } catch (error: any) {
       console.error('❌ Error updating user role:', error);
       console.error('❌ Error details:', JSON.stringify(error, null, 2));
-      if (typeof window !== 'undefined' && Platform.OS === 'web') {
-        window.alert(`فشل تغيير الدور: ${error.message || 'خطأ غير معروف'}`);
-      } else {
-        Alert.alert('خطأ', error.message || 'فشل تغيير الدور');
-      }
+      sweetAlert.showError('خطأ', error.message || 'فشل تغيير الدور');
     } finally {
       setLoading(false);
     }
@@ -1266,125 +1566,431 @@ export default function AdminScreen() {
             الفئات
           </Text>
         </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.tab, activeTab === 'sections' && styles.activeTab]}
+          onPress={() => setActiveTab('sections')}
+        >
+          <Text style={[styles.tabText, activeTab === 'sections' && styles.activeTabText]}>
+            الأقسام
+          </Text>
+        </TouchableOpacity>
       </View>
 
       <ScrollView style={styles.content} contentContainerStyle={styles.scrollContent}>
         <View style={[styles.contentWrapper, { maxWidth: maxContentWidth, alignSelf: 'center', width: '100%' }]}>
         {activeTab === 'orders' && (
           <View>
-            {orders.map((order) => (
-              <View key={order.id} style={styles.card}>
-                <Text style={styles.cardTitle}>#{order.order_number}</Text>
-                <Text>المبلغ: {order.total_amount.toFixed(2)} ج.م</Text>
-                <Text>الحالة: {getStatusText(order.status)}</Text>
-              </View>
-            ))}
+            <View style={styles.gridContainer}>
+              {orders.map((order) => {
+                const isEditing = editingOrderId === order.id;
+                const quickEdit = quickEditOrder[order.id] || {};
+                const displayStatus = isEditing ? (quickEdit.status || order.status) : order.status;
+
+                return (
+                  <View key={order.id} style={styles.gridCard}>
+                    <View style={styles.cardHeader}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.gridCardTitle}>#{order.order_number}</Text>
+                        <Text style={styles.gridCardMetaText}>
+                          {new Date(order.created_at).toLocaleDateString('ar-EG')}
+                        </Text>
+                      </View>
+                      <TouchableOpacity
+                        style={styles.cardMenuButton}
+                        onPress={() => {
+                          if (isEditing) {
+                            setEditingOrderId(null);
+                            setQuickEditOrder({});
+                          } else {
+                            setEditingOrderId(order.id);
+                            setQuickEditOrder({ [order.id]: {} });
+                          }
+                        }}
+                      >
+                        <Ionicons name={isEditing ? "checkmark" : "create-outline"} size={18} color={isEditing ? "#10B981" : "#666"} />
+                      </TouchableOpacity>
+                    </View>
+
+                    <View style={styles.gridProductPrice}>
+                      <Text style={styles.gridPrice}>{order.total_amount.toFixed(2)} ج.م</Text>
+                    </View>
+
+                    <View style={styles.gridCardMeta}>
+                      {isEditing ? (
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.gridCardMetaText}>الحالة:</Text>
+                          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ maxHeight: 120 }}>
+                            <View style={styles.statusPicker}>
+                              {['pending', 'confirmed', 'shipped_from_china', 'received_in_uae', 'shipped_from_uae', 'received_in_egypt', 'in_warehouse', 'out_for_delivery', 'delivered', 'cancelled'].map((status) => (
+                                <TouchableOpacity
+                                  key={status}
+                                  style={[
+                                    styles.statusOption,
+                                    displayStatus === status && styles.statusOptionActive
+                                  ]}
+                                  onPress={() => setQuickEditOrder({ ...quickEditOrder, [order.id]: { ...quickEdit, status } })}
+                                >
+                                  <Text style={[styles.statusOptionText, displayStatus === status && styles.statusOptionTextActive]}>
+                                    {getStatusText(status)}
+                                  </Text>
+                                </TouchableOpacity>
+                              ))}
+                            </View>
+                          </ScrollView>
+                        </View>
+                      ) : (
+                        <View style={[styles.statusBadgeSmall, getStatusBadgeColor(order.status)]}>
+                          <Text style={styles.statusBadgeTextSmall}>{getStatusText(order.status)}</Text>
+                        </View>
+                      )}
+                    </View>
+
+                    {isEditing && (
+                      <View style={styles.quickEditActions}>
+                        <TouchableOpacity
+                          style={[styles.quickEditButton, styles.saveButton]}
+                          onPress={async () => {
+                            const updates = quickEditOrder[order.id];
+                            if (updates && Object.keys(updates).length > 0) {
+                              setLoading(true);
+                              try {
+                                const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+                                const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+                                const accessToken = await getAccessToken();
+
+                                await fetch(`${supabaseUrl}/rest/v1/orders?id=eq.${order.id}`, {
+                                  method: 'PATCH',
+                                  headers: {
+                                    'apikey': supabaseKey || '',
+                                    'Authorization': `Bearer ${accessToken}`,
+                                    'Content-Type': 'application/json',
+                                  },
+                                  body: JSON.stringify(updates)
+                                });
+
+                                sweetAlert.showSuccess('نجح', 'تم التحديث بنجاح', () => {
+                                  setEditingOrderId(null);
+                                  setQuickEditOrder({});
+                                  loadData();
+                                });
+                              } catch (error: any) {
+                                sweetAlert.showError('خطأ', error.message || 'فشل التحديث');
+                              } finally {
+                                setLoading(false);
+                              }
+                            } else {
+                              setEditingOrderId(null);
+                              setQuickEditOrder({});
+                            }
+                          }}
+                        >
+                          <Ionicons name="checkmark" size={14} color="#fff" />
+                          <Text style={styles.quickEditButtonText}>حفظ</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.quickEditButton, styles.cancelQuickEditButton]}
+                          onPress={() => {
+                            setEditingOrderId(null);
+                            setQuickEditOrder({});
+                          }}
+                        >
+                          <Ionicons name="close" size={14} color="#fff" />
+                          <Text style={styles.quickEditButtonText}>إلغاء</Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
+                  </View>
+                );
+              })}
+            </View>
           </View>
         )}
 
         {activeTab === 'shipments' && (
           <View>
-            {shipments.map((shipment) => (
-              <View key={shipment.id} style={styles.card}>
-                <Text style={styles.cardTitle}>#{shipment.shipment_number}</Text>
-                <Text>التكلفة: {shipment.cost.toFixed(2)} ج.م</Text>
-                <Text>الحالة: {getStatusText(shipment.status)}</Text>
-                <View style={styles.actionButtons}>
-                  {shipment.status === 'pending' && (
-                    <TouchableOpacity
-                      style={styles.actionButton}
-                      onPress={() => updateShipmentStatus(shipment.id, 'shipped_from_china')}
-                    >
-                      <Text style={styles.actionButtonText}>شُحنت من الصين</Text>
-                    </TouchableOpacity>
-                  )}
-                  {shipment.status === 'shipped_from_china' && (
-                    <TouchableOpacity
-                      style={styles.actionButton}
-                      onPress={() => updateShipmentStatus(shipment.id, 'received_in_uae')}
-                    >
-                      <Text style={styles.actionButtonText}>وصلت الإمارات</Text>
-                    </TouchableOpacity>
-                  )}
-                  {shipment.status === 'received_in_uae' && (
-                    <TouchableOpacity
-                      style={styles.actionButton}
-                      onPress={() => {
-                        Alert.prompt(
-                          'تكلفة الشحن',
-                          'أدخل تكلفة الشحن من الإمارات لمصر:',
-                          [
-                            { text: 'إلغاء', style: 'cancel' },
-                            {
-                              text: 'موافق',
-                              onPress: (cost) => {
+            <View style={styles.gridContainer}>
+              {shipments.map((shipment) => (
+                <View key={shipment.id} style={styles.gridCard}>
+                  <View style={styles.cardHeader}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.gridCardTitle}>#{shipment.shipment_number}</Text>
+                      <Text style={styles.gridCardMetaText}>
+                        {new Date(shipment.created_at).toLocaleDateString('ar-EG')}
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.gridProductPrice}>
+                    <Text style={styles.gridPrice}>{shipment.cost.toFixed(2)} ج.م</Text>
+                  </View>
+
+                  <View style={styles.gridCardMeta}>
+                    <View style={[styles.statusBadgeSmall, getStatusBadgeColor(shipment.status)]}>
+                      <Text style={styles.statusBadgeTextSmall}>{getStatusText(shipment.status)}</Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.shipmentActions}>
+                    {shipment.status === 'pending' && (
+                      <TouchableOpacity
+                        style={[styles.quickEditButton, styles.saveButton]}
+                        onPress={() => updateShipmentStatus(shipment.id, 'shipped_from_china')}
+                      >
+                        <Ionicons name="send-outline" size={14} color="#fff" />
+                        <Text style={styles.quickEditButtonText}>شُحنت من الصين</Text>
+                      </TouchableOpacity>
+                    )}
+                    {shipment.status === 'shipped_from_china' && (
+                      <TouchableOpacity
+                        style={[styles.quickEditButton, styles.saveButton]}
+                        onPress={() => updateShipmentStatus(shipment.id, 'received_in_uae')}
+                      >
+                        <Ionicons name="checkmark-circle-outline" size={14} color="#fff" />
+                        <Text style={styles.quickEditButtonText}>وصلت الإمارات</Text>
+                      </TouchableOpacity>
+                    )}
+                    {shipment.status === 'received_in_uae' && (
+                      <TouchableOpacity
+                        style={[styles.quickEditButton, styles.saveButton]}
+                        onPress={() => {
+                          sweetAlert.showConfirm(
+                            'تكلفة الشحن',
+                            'أدخل تكلفة الشحن من الإمارات لمصر:',
+                            () => {
+                              // Use a simple prompt for cost
+                              if (Platform.OS === 'web') {
+                                const cost = window.prompt('أدخل تكلفة الشحن:', '0');
                                 if (cost) {
                                   updateShipmentStatus(shipment.id, 'shipped_from_uae', parseFloat(cost));
                                 }
-                              },
+                              } else {
+                                Alert.prompt(
+                                  'تكلفة الشحن',
+                                  'أدخل تكلفة الشحن من الإمارات لمصر:',
+                                  [
+                                    { text: 'إلغاء', style: 'cancel' },
+                                    {
+                                      text: 'موافق',
+                                      onPress: (cost) => {
+                                        if (cost) {
+                                          updateShipmentStatus(shipment.id, 'shipped_from_uae', parseFloat(cost));
+                                        }
+                                      },
+                                    },
+                                  ],
+                                  'plain-text',
+                                  '',
+                                  'numeric'
+                                );
+                              }
                             },
-                          ],
-                          'plain-text',
-                          '',
-                          'numeric'
-                        );
-                      }}
-                    >
-                      <Text style={styles.actionButtonText}>شُحنت من الإمارات</Text>
-                    </TouchableOpacity>
-                  )}
-                  {shipment.status === 'shipped_from_uae' && (
-                    <TouchableOpacity
-                      style={styles.actionButton}
-                      onPress={() => updateShipmentStatus(shipment.id, 'received_in_egypt')}
-                    >
-                      <Text style={styles.actionButtonText}>وصلت مصر</Text>
-                    </TouchableOpacity>
-                  )}
-                  {shipment.status === 'received_in_egypt' && (
-                    <TouchableOpacity
-                      style={styles.actionButton}
-                      onPress={() => {
-                        Alert.prompt(
-                          'أيام التوصيل',
-                          'كم يوم متوقع للوصول؟',
-                          [
-                            { text: 'إلغاء', style: 'cancel' },
-                            {
-                              text: 'موافق',
-                              onPress: (days) => {
-                                if (days) {
-                                  updateShipmentStatus(shipment.id, 'in_warehouse', undefined, parseInt(days));
-                                }
-                              },
-                            },
-                          ],
-                          'plain-text',
-                          '3',
-                          'numeric'
-                        );
-                      }}
-                    >
-                      <Text style={styles.actionButtonText}>دخلت المخزن</Text>
-                    </TouchableOpacity>
-                  )}
+                            undefined,
+                            'موافق',
+                            'إلغاء'
+                          );
+                        }}
+                      >
+                        <Ionicons name="send-outline" size={14} color="#fff" />
+                        <Text style={styles.quickEditButtonText}>شُحنت من الإمارات</Text>
+                      </TouchableOpacity>
+                    )}
+                    {shipment.status === 'shipped_from_uae' && (
+                      <TouchableOpacity
+                        style={[styles.quickEditButton, styles.saveButton]}
+                        onPress={() => updateShipmentStatus(shipment.id, 'received_in_egypt')}
+                      >
+                        <Ionicons name="checkmark-circle-outline" size={14} color="#fff" />
+                        <Text style={styles.quickEditButtonText}>وصلت مصر</Text>
+                      </TouchableOpacity>
+                    )}
+                    {shipment.status === 'received_in_egypt' && (
+                      <TouchableOpacity
+                        style={[styles.quickEditButton, styles.saveButton]}
+                        onPress={() => {
+                          if (Platform.OS === 'web') {
+                            const days = window.prompt('كم يوم متوقع للوصول؟', '3');
+                            if (days) {
+                              updateShipmentStatus(shipment.id, 'in_warehouse', undefined, parseInt(days));
+                            }
+                          } else {
+                            Alert.prompt(
+                              'أيام التوصيل',
+                              'كم يوم متوقع للوصول؟',
+                              [
+                                { text: 'إلغاء', style: 'cancel' },
+                                {
+                                  text: 'موافق',
+                                  onPress: (days) => {
+                                    if (days) {
+                                      updateShipmentStatus(shipment.id, 'in_warehouse', undefined, parseInt(days));
+                                    }
+                                  },
+                                },
+                              ],
+                              'plain-text',
+                              '3',
+                              'numeric'
+                            );
+                          }
+                        }}
+                      >
+                        <Ionicons name="cube-outline" size={14} color="#fff" />
+                        <Text style={styles.quickEditButtonText}>دخلت المخزن</Text>
+                      </TouchableOpacity>
+                    )}
+                    {shipment.status === 'in_warehouse' && (
+                      <TouchableOpacity
+                        style={[styles.quickEditButton, styles.saveButton]}
+                        onPress={() => updateShipmentStatus(shipment.id, 'completed')}
+                      >
+                        <Ionicons name="checkmark-done-outline" size={14} color="#fff" />
+                        <Text style={styles.quickEditButtonText}>مكتملة</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
                 </View>
-              </View>
-            ))}
+              ))}
+            </View>
           </View>
         )}
 
         {activeTab === 'inventory' && (
           <View>
-            {inventory.map((item) => (
-              <View key={item.id} style={styles.card}>
-                <Text style={styles.cardTitle}>
-                  {(item.product as Product)?.name || 'منتج غير معروف'}
-                </Text>
-                <Text>الكمية: {item.quantity}</Text>
-                <Text>التكلفة للقطعة: {item.cost_per_unit.toFixed(2)} ج.م</Text>
-              </View>
-            ))}
+            <View style={styles.gridContainer}>
+              {inventory.map((item) => {
+                const isEditing = editingInventoryId === item.id;
+                const quickEdit = quickEditInventory[item.id] || {};
+                const displayQuantity = isEditing ? (quickEdit.quantity !== undefined ? quickEdit.quantity : item.quantity) : item.quantity;
+                const displayCost = isEditing ? (quickEdit.cost_per_unit !== undefined ? quickEdit.cost_per_unit : item.cost_per_unit) : item.cost_per_unit;
+                const product = item.product as Product;
+
+                return (
+                  <View key={item.id} style={styles.gridCard}>
+                    <View style={styles.cardHeader}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.gridCardTitle} numberOfLines={2}>
+                          {product?.name || 'منتج غير معروف'}
+                        </Text>
+                        {product?.image_url && (
+                          <Image
+                            source={{ uri: product.image_url }}
+                            style={styles.gridProductImageSmall}
+                            resizeMode="cover"
+                          />
+                        )}
+                      </View>
+                      <TouchableOpacity
+                        style={styles.cardMenuButton}
+                        onPress={() => {
+                          if (isEditing) {
+                            setEditingInventoryId(null);
+                            setQuickEditInventory({});
+                          } else {
+                            setEditingInventoryId(item.id);
+                            setQuickEditInventory({ [item.id]: {} });
+                          }
+                        }}
+                      >
+                        <Ionicons name={isEditing ? "checkmark" : "create-outline"} size={18} color={isEditing ? "#10B981" : "#666"} />
+                      </TouchableOpacity>
+                    </View>
+
+                    <View style={styles.gridCardMeta}>
+                      {isEditing ? (
+                        <>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                            <Text style={styles.gridCardMetaText}>الكمية:</Text>
+                            <TextInput
+                              style={styles.inlineInputSmall}
+                              value={displayQuantity.toString()}
+                              onChangeText={(text) => setQuickEditInventory({ ...quickEditInventory, [item.id]: { ...quickEdit, quantity: parseInt(text) || 0 } })}
+                              placeholder="الكمية"
+                              keyboardType="numeric"
+                            />
+                          </View>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                            <Text style={styles.gridCardMetaText}>التكلفة:</Text>
+                            <TextInput
+                              style={styles.inlineInputSmall}
+                              value={displayCost.toString()}
+                              onChangeText={(text) => setQuickEditInventory({ ...quickEditInventory, [item.id]: { ...quickEdit, cost_per_unit: parseFloat(text) || 0 } })}
+                              placeholder="التكلفة"
+                              keyboardType="numeric"
+                            />
+                          </View>
+                        </>
+                      ) : (
+                        <>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                            <Ionicons name="cube-outline" size={14} color="#6B7280" />
+                            <Text style={styles.gridCardMetaText}>{item.quantity} قطعة</Text>
+                          </View>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                            <Ionicons name="cash-outline" size={14} color="#6B7280" />
+                            <Text style={styles.gridCardMetaText}>{item.cost_per_unit.toFixed(2)} ج.م</Text>
+                          </View>
+                        </>
+                      )}
+                    </View>
+
+                    {isEditing && (
+                      <View style={styles.quickEditActions}>
+                        <TouchableOpacity
+                          style={[styles.quickEditButton, styles.saveButton]}
+                          onPress={async () => {
+                            const updates = quickEditInventory[item.id];
+                            if (updates && Object.keys(updates).length > 0) {
+                              setLoading(true);
+                              try {
+                                const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+                                const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+                                const accessToken = await getAccessToken();
+
+                                await fetch(`${supabaseUrl}/rest/v1/inventory?id=eq.${item.id}`, {
+                                  method: 'PATCH',
+                                  headers: {
+                                    'apikey': supabaseKey || '',
+                                    'Authorization': `Bearer ${accessToken}`,
+                                    'Content-Type': 'application/json',
+                                  },
+                                  body: JSON.stringify(updates)
+                                });
+
+                                sweetAlert.showSuccess('نجح', 'تم التحديث بنجاح', () => {
+                                  setEditingInventoryId(null);
+                                  setQuickEditInventory({});
+                                  loadData();
+                                });
+                              } catch (error: any) {
+                                sweetAlert.showError('خطأ', error.message || 'فشل التحديث');
+                              } finally {
+                                setLoading(false);
+                              }
+                            } else {
+                              setEditingInventoryId(null);
+                              setQuickEditInventory({});
+                            }
+                          }}
+                        >
+                          <Ionicons name="checkmark" size={14} color="#fff" />
+                          <Text style={styles.quickEditButtonText}>حفظ</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.quickEditButton, styles.cancelQuickEditButton]}
+                          onPress={() => {
+                            setEditingInventoryId(null);
+                            setQuickEditInventory({});
+                          }}
+                        >
+                          <Ionicons name="close" size={14} color="#fff" />
+                          <Text style={styles.quickEditButtonText}>إلغاء</Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
+                  </View>
+                );
+              })}
+            </View>
           </View>
         )}
 
@@ -1525,102 +2131,247 @@ export default function AdminScreen() {
               </TouchableOpacity>
             </View>
 
-            {products.map((product) => (
-              <View key={product.id} style={styles.card}>
-                <View style={styles.productHeader}>
-                  <View style={styles.productInfo}>
-                    <Text style={styles.cardTitle}>{product.name}</Text>
-                    <View style={styles.priceInfo}>
-                      {product.original_price && product.original_price > product.price ? (
+            <View style={styles.gridContainer}>
+              {products.map((product) => {
+                const isEditing = editingProductId === product.id;
+                const quickEdit = quickEditProduct[product.id] || {};
+                const displayName = isEditing ? (quickEdit.name !== undefined ? quickEdit.name : product.name) : product.name;
+                const displayPrice = isEditing ? (quickEdit.price !== undefined ? quickEdit.price : product.price) : product.price;
+                const displayStock = isEditing ? (quickEdit.stock_quantity !== undefined ? quickEdit.stock_quantity : product.stock_quantity) : product.stock_quantity;
+
+                return (
+                  <View key={product.id} style={styles.gridCard}>
+                    {product.image_url && (
+                      <Image
+                        source={{ uri: product.image_url }}
+                        style={styles.gridProductImage}
+                        resizeMode="cover"
+                      />
+                    )}
+                    
+                    <View style={styles.cardHeader}>
+                      {isEditing ? (
+                        <TextInput
+                          style={styles.inlineInput}
+                          value={displayName}
+                          onChangeText={(text) => setQuickEditProduct({ ...quickEditProduct, [product.id]: { ...quickEdit, name: text } })}
+                          placeholder="اسم المنتج"
+                        />
+                      ) : (
+                        <Text style={styles.gridCardTitle} numberOfLines={2}>{product.name}</Text>
+                      )}
+                      <TouchableOpacity
+                        style={styles.cardMenuButton}
+                        onPress={() => {
+                          if (isEditing) {
+                            setEditingProductId(null);
+                            setQuickEditProduct({});
+                          } else {
+                            setEditingProductId(product.id);
+                            setQuickEditProduct({ [product.id]: {} });
+                          }
+                        }}
+                      >
+                        <Ionicons name={isEditing ? "checkmark" : "create-outline"} size={18} color={isEditing ? "#10B981" : "#666"} />
+                      </TouchableOpacity>
+                    </View>
+
+                    <View style={styles.gridProductPrice}>
+                      {isEditing ? (
+                        <TextInput
+                          style={styles.inlineInputSmall}
+                          value={displayPrice.toString()}
+                          onChangeText={(text) => setQuickEditProduct({ ...quickEditProduct, [product.id]: { ...quickEdit, price: parseFloat(text) || 0 } })}
+                          placeholder="السعر"
+                          keyboardType="numeric"
+                        />
+                      ) : (
                         <>
-                          <Text style={styles.originalPriceText}>
-                            السعر الأصلي: {product.original_price.toFixed(2)} ج.م
-                          </Text>
-                          <Text style={styles.discountPriceText}>
-                            السعر بعد الخصم: {product.price.toFixed(2)} ج.م
-                          </Text>
-                          {product.discount_percentage && (
-                            <Text style={styles.discountPercentageText}>
-                              خصم: -{product.discount_percentage}%
-                            </Text>
+                          {product.original_price && product.original_price > product.price ? (
+                            <View>
+                              <Text style={styles.gridOriginalPrice}>{product.original_price.toFixed(2)} ج.م</Text>
+                              <Text style={styles.gridDiscountPrice}>{product.price.toFixed(2)} ج.م</Text>
+                              {product.discount_percentage && (
+                                <Text style={styles.gridDiscountBadge}>-{product.discount_percentage}%</Text>
+                              )}
+                            </View>
+                          ) : (
+                            <Text style={styles.gridPrice}>{product.price.toFixed(2)} ج.م</Text>
                           )}
                         </>
-                      ) : (
-                        <Text>السعر: {product.price.toFixed(2)} ج.م</Text>
                       )}
                     </View>
-                    <Text>المخزون: {product.stock_quantity}</Text>
-                    {product.category && <Text>الفئة: {product.category}</Text>}
+
+                    <View style={styles.gridCardMeta}>
+                      {isEditing ? (
+                        <TextInput
+                          style={styles.inlineInputSmall}
+                          value={displayStock.toString()}
+                          onChangeText={(text) => setQuickEditProduct({ ...quickEditProduct, [product.id]: { ...quickEdit, stock_quantity: parseInt(text) || 0 } })}
+                          placeholder="المخزون"
+                          keyboardType="numeric"
+                        />
+                      ) : (
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                          <Ionicons name="cube-outline" size={12} color="#6B7280" />
+                          <Text style={styles.gridCardMetaText}>{product.stock_quantity}</Text>
+                        </View>
+                      )}
+                      {product.category && !isEditing && (
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                          <Ionicons name="pricetag-outline" size={12} color="#6B7280" />
+                          <Text style={styles.gridCardMetaText} numberOfLines={1}>{product.category}</Text>
+                        </View>
+                      )}
+                    </View>
+
+                    {isEditing && (
+                      <View style={styles.quickEditActions}>
+                        <TouchableOpacity
+                          style={[styles.quickEditButton, styles.saveButton]}
+                          onPress={async () => {
+                            const updates = quickEditProduct[product.id];
+                            if (updates && Object.keys(updates).length > 0) {
+                              setLoading(true);
+                              try {
+                                const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+                                const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+                                const accessToken = await getAccessToken();
+
+                                await fetch(`${supabaseUrl}/rest/v1/products?id=eq.${product.id}`, {
+                                  method: 'PATCH',
+                                  headers: {
+                                    'apikey': supabaseKey || '',
+                                    'Authorization': `Bearer ${accessToken}`,
+                                    'Content-Type': 'application/json',
+                                  },
+                                  body: JSON.stringify(updates)
+                                });
+
+                                sweetAlert.showSuccess('نجح', 'تم التحديث بنجاح', () => {
+                                  setEditingProductId(null);
+                                  setQuickEditProduct({});
+                                  loadData();
+                                });
+                              } catch (error: any) {
+                                sweetAlert.showError('خطأ', error.message || 'فشل التحديث');
+                              } finally {
+                                setLoading(false);
+                              }
+                            } else {
+                              setEditingProductId(null);
+                              setQuickEditProduct({});
+                            }
+                          }}
+                        >
+                          <Ionicons name="checkmark" size={14} color="#fff" />
+                          <Text style={styles.quickEditButtonText}>حفظ</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.quickEditButton, styles.cancelQuickEditButton]}
+                          onPress={() => {
+                            setEditingProductId(null);
+                            setQuickEditProduct({});
+                          }}
+                        >
+                          <Ionicons name="close" size={14} color="#fff" />
+                          <Text style={styles.quickEditButtonText}>إلغاء</Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
+
+                    {!isEditing && (
+                      <>
+                        <TouchableOpacity
+                          style={styles.fullEditButton}
+                          onPress={() => startEditProduct(product)}
+                        >
+                          <Ionicons name="create-outline" size={14} color="#2196F3" />
+                          <Text style={styles.fullEditButtonText}>تعديل كامل</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={styles.deleteButtonSmall}
+                          onPress={() => deleteProduct(product.id)}
+                        >
+                          <Ionicons name="trash-outline" size={14} color="#fff" />
+                        </TouchableOpacity>
+                      </>
+                    )}
                   </View>
-                  {product.image_url && (
-                    <Image
-                      source={{ uri: product.image_url }}
-                      style={styles.productThumbnail}
-                    />
-                  )}
-                </View>
-                <View style={styles.actionButtons}>
-                  <TouchableOpacity
-                    style={[styles.actionButton, styles.editButton]}
-                    onPress={() => startEditProduct(product)}
-                  >
-                    <Ionicons name="create-outline" size={16} color="#fff" />
-                    <Text style={styles.actionButtonText}>تعديل</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.actionButton, styles.deleteButton]}
-                    onPress={() => deleteProduct(product.id)}
-                  >
-                    <Ionicons name="trash-outline" size={16} color="#fff" />
-                    <Text style={styles.actionButtonText}>حذف</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            ))}
+                );
+              })}
+            </View>
           </View>
         )}
 
         {activeTab === 'users' && (
           <View>
-            {users.map((userItem) => (
-              <View key={userItem.id} style={styles.card}>
-                <Text style={styles.cardTitle}>{userItem.full_name || userItem.email}</Text>
-                <Text style={styles.userEmail}>{userItem.email}</Text>
-                {userItem.phone && <Text style={styles.userPhone}>📱 {userItem.phone}</Text>}
-                <View style={styles.roleContainer}>
-                  <Text style={styles.roleLabel}>الدور الحالي:</Text>
-                  <View style={[styles.roleBadge, getRoleBadgeStyle(userItem.role)]}>
-                    <Text style={styles.roleText}>{getRoleText(userItem.role)}</Text>
+            <View style={styles.gridContainer}>
+              {users.map((userItem) => (
+                <View key={userItem.id} style={styles.gridCard}>
+                  <View style={styles.cardHeader}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.gridCardTitle} numberOfLines={1}>
+                        {userItem.full_name || userItem.email}
+                      </Text>
+                      <Text style={styles.gridCardDescription} numberOfLines={1}>
+                        {userItem.email}
+                      </Text>
+                    </View>
+                  </View>
+
+                  {userItem.phone && (
+                    <View style={styles.gridCardMeta}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                        <Ionicons name="call-outline" size={12} color="#6B7280" />
+                        <Text style={styles.gridCardMetaText}>{userItem.phone}</Text>
+                      </View>
+                    </View>
+                  )}
+
+                  <View style={styles.gridCardMeta}>
+                    <View style={[styles.statusBadgeSmall, getRoleBadgeStyle(userItem.role)]}>
+                      <Text style={styles.statusBadgeTextSmall}>{getRoleText(userItem.role)}</Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.roleButtonsGrid}>
+                    <TouchableOpacity
+                      style={[styles.roleButtonSmall, userItem.role === 'customer' && styles.roleButtonActive]}
+                      onPress={() => updateUserRole(userItem.id, 'customer')}
+                    >
+                      <Text style={[styles.roleButtonTextSmall, userItem.role === 'customer' && styles.roleButtonTextActive]}>
+                        مستخدم
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.roleButtonSmall, userItem.role === 'employee' && styles.roleButtonActive]}
+                      onPress={() => updateUserRole(userItem.id, 'employee')}
+                    >
+                      <Text style={[styles.roleButtonTextSmall, userItem.role === 'employee' && styles.roleButtonTextActive]}>
+                        موظف
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.roleButtonSmall, userItem.role === 'manager' && styles.roleButtonActive]}
+                      onPress={() => updateUserRole(userItem.id, 'manager')}
+                    >
+                      <Text style={[styles.roleButtonTextSmall, userItem.role === 'manager' && styles.roleButtonTextActive]}>
+                        مدير
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.roleButtonSmall, userItem.role === 'admin' && styles.roleButtonActive]}
+                      onPress={() => updateUserRole(userItem.id, 'admin')}
+                    >
+                      <Text style={[styles.roleButtonTextSmall, userItem.role === 'admin' && styles.roleButtonTextActive]}>
+                        أدمن
+                      </Text>
+                    </TouchableOpacity>
                   </View>
                 </View>
-                <View style={styles.roleButtons}>
-                  <TouchableOpacity
-                    style={[styles.roleButton, userItem.role === 'customer' && styles.roleButtonActive]}
-                    onPress={() => updateUserRole(userItem.id, 'customer')}
-                  >
-                    <Text style={styles.roleButtonText}>مستخدم</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.roleButton, userItem.role === 'employee' && styles.roleButtonActive]}
-                    onPress={() => updateUserRole(userItem.id, 'employee')}
-                  >
-                    <Text style={styles.roleButtonText}>موظف</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.roleButton, userItem.role === 'manager' && styles.roleButtonActive]}
-                    onPress={() => updateUserRole(userItem.id, 'manager')}
-                  >
-                    <Text style={styles.roleButtonText}>مدير</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.roleButton, userItem.role === 'admin' && styles.roleButtonActive]}
-                    onPress={() => updateUserRole(userItem.id, 'admin')}
-                  >
-                    <Text style={styles.roleButtonText}>أدمن</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            ))}
+              ))}
+            </View>
           </View>
         )}
 
@@ -1644,6 +2395,49 @@ export default function AdminScreen() {
                 value={newCategory.name}
                 onChangeText={(text) => setNewCategory({ ...newCategory, name: text })}
               />
+              <View style={styles.pickerContainer}>
+                <Text style={styles.pickerLabel}>القسم (اختياري)</Text>
+                <View style={styles.picker}>
+                  <TouchableOpacity
+                    style={styles.pickerButton}
+                    onPress={() => {
+                      // Simple dropdown using Alert
+                      const options = ['بدون قسم', ...sections.map(s => s.name)];
+                      if (Platform.OS === 'web') {
+                        const selected = window.prompt('اختر القسم:\n' + options.map((o, i) => `${i}. ${o}`).join('\n'), '0');
+                        if (selected !== null) {
+                          const index = parseInt(selected);
+                          if (index === 0) {
+                            setNewCategory({ ...newCategory, section_id: '' });
+                          } else if (index > 0 && index <= sections.length) {
+                            setNewCategory({ ...newCategory, section_id: sections[index - 1].id });
+                          }
+                        }
+                      } else {
+                        Alert.alert(
+                          'اختر القسم',
+                          '',
+                          [
+                            { text: 'بدون قسم', onPress: () => setNewCategory({ ...newCategory, section_id: '' }) },
+                            ...sections.map(section => ({
+                              text: section.name,
+                              onPress: () => setNewCategory({ ...newCategory, section_id: section.id })
+                            })),
+                            { text: 'إلغاء', style: 'cancel' }
+                          ]
+                        );
+                      }
+                    }}
+                  >
+                    <Text style={styles.pickerButtonText}>
+                      {newCategory.section_id 
+                        ? sections.find(s => s.id === newCategory.section_id)?.name || 'اختر القسم'
+                        : 'بدون قسم'}
+                    </Text>
+                    <Ionicons name="chevron-down" size={20} color="#666" />
+                  </TouchableOpacity>
+                </View>
+              </View>
               <TextInput
                 style={styles.input}
                 placeholder="الوصف (اختياري)"
@@ -1683,51 +2477,459 @@ export default function AdminScreen() {
               </TouchableOpacity>
             </View>
 
-            {categories.map((category) => (
-              <View key={category.id} style={styles.card}>
-                <View style={styles.categoryHeader}>
-                  <View style={styles.categoryInfo}>
-                    {category.icon && (
-                      <Ionicons name={category.icon as any} size={24} color="#EE1C47" style={styles.categoryIcon} />
-                    )}
-                    <View style={styles.categoryDetails}>
-                      <Text style={styles.cardTitle}>{category.name}</Text>
-                      {category.description && (
-                        <Text style={styles.categoryDescription}>{category.description}</Text>
+            <View style={styles.gridContainer}>
+              {categories.map((category) => {
+                const isEditing = editingCategoryId === category.id;
+                const quickEdit = quickEditCategory[category.id] || {};
+                const displayName = isEditing ? (quickEdit.name !== undefined ? quickEdit.name : category.name) : category.name;
+                const displayOrder = isEditing ? (quickEdit.display_order !== undefined ? quickEdit.display_order : category.display_order) : category.display_order;
+                const displayActive = isEditing ? (quickEdit.is_active !== undefined ? quickEdit.is_active : category.is_active) : category.is_active;
+
+                return (
+                  <View key={category.id} style={styles.gridCard}>
+                    <View style={styles.cardHeader}>
+                      {category.icon && (
+                        <Ionicons name={category.icon as any} size={20} color="#EE1C47" style={styles.cardIcon} />
                       )}
-                      <View style={styles.categoryMeta}>
-                        <Text style={styles.categoryMetaText}>ترتيب: {category.display_order}</Text>
-                        <View style={[styles.statusBadge, category.is_active ? styles.statusBadgeActive : styles.statusBadgeInactive]}>
-                          <Text style={styles.statusBadgeText}>
-                            {category.is_active ? 'نشطة' : 'غير نشطة'}
-                          </Text>
-                        </View>
-                      </View>
+                      {isEditing ? (
+                        <TextInput
+                          style={styles.inlineInput}
+                          value={displayName}
+                          onChangeText={(text) => setQuickEditCategory({ ...quickEditCategory, [category.id]: { ...quickEdit, name: text } })}
+                          placeholder="اسم الفئة"
+                        />
+                      ) : (
+                        <Text style={styles.gridCardTitle} numberOfLines={1}>{category.name}</Text>
+                      )}
+                      <TouchableOpacity
+                        style={styles.cardMenuButton}
+                        onPress={() => {
+                          if (isEditing) {
+                            setEditingCategoryId(null);
+                            setQuickEditCategory({});
+                          } else {
+                            setEditingCategoryId(category.id);
+                            setQuickEditCategory({ [category.id]: {} });
+                          }
+                        }}
+                      >
+                        <Ionicons name={isEditing ? "checkmark" : "create-outline"} size={18} color={isEditing ? "#10B981" : "#666"} />
+                      </TouchableOpacity>
                     </View>
+                    
+                    {category.description && !isEditing && (
+                      <Text style={styles.gridCardDescription} numberOfLines={2}>{category.description}</Text>
+                    )}
+
+                    {category.section_id && !isEditing && (
+                      <Text style={styles.gridCardSection}>القسم: {category.section_data?.name || 'غير معروف'}</Text>
+                    )}
+
+                    <View style={styles.gridCardMeta}>
+                      {isEditing ? (
+                        <TextInput
+                          style={styles.inlineInputSmall}
+                          value={displayOrder.toString()}
+                          onChangeText={(text) => setQuickEditCategory({ ...quickEditCategory, [category.id]: { ...quickEdit, display_order: parseInt(text) || 0 } })}
+                          placeholder="ترتيب"
+                          keyboardType="numeric"
+                        />
+                      ) : (
+                        <Text style={styles.gridCardMetaText}>ترتيب: {category.display_order}</Text>
+                      )}
+                      <TouchableOpacity
+                        style={[styles.statusBadgeSmall, displayActive ? styles.statusBadgeActive : styles.statusBadgeInactive]}
+                        onPress={() => {
+                          if (isEditing) {
+                            setQuickEditCategory({ ...quickEditCategory, [category.id]: { ...quickEdit, is_active: !displayActive } });
+                          }
+                        }}
+                      >
+                        <Text style={styles.statusBadgeTextSmall}>
+                          {displayActive ? 'نشطة' : 'غير نشطة'}
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+
+                    {isEditing && (
+                      <View style={styles.quickEditActions}>
+                        <TouchableOpacity
+                          style={[styles.quickEditButton, styles.saveButton]}
+                          onPress={async () => {
+                            const updates = quickEditCategory[category.id];
+                            if (updates && Object.keys(updates).length > 0) {
+                              setLoading(true);
+                              try {
+                                const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+                                const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+                                const accessToken = await getAccessToken();
+
+                                await fetch(`${supabaseUrl}/rest/v1/categories?id=eq.${category.id}`, {
+                                  method: 'PATCH',
+                                  headers: {
+                                    'apikey': supabaseKey || '',
+                                    'Authorization': `Bearer ${accessToken}`,
+                                    'Content-Type': 'application/json',
+                                  },
+                                  body: JSON.stringify(updates)
+                                });
+
+                                sweetAlert.showSuccess('نجح', 'تم التحديث بنجاح', () => {
+                                  setEditingCategoryId(null);
+                                  setQuickEditCategory({});
+                                  loadCategories();
+                                });
+                              } catch (error: any) {
+                                sweetAlert.showError('خطأ', error.message || 'فشل التحديث');
+                              } finally {
+                                setLoading(false);
+                              }
+                            } else {
+                              setEditingCategoryId(null);
+                              setQuickEditCategory({});
+                            }
+                          }}
+                        >
+                          <Ionicons name="checkmark" size={14} color="#fff" />
+                          <Text style={styles.quickEditButtonText}>حفظ</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.quickEditButton, styles.cancelQuickEditButton]}
+                          onPress={() => {
+                            setEditingCategoryId(null);
+                            setQuickEditCategory({});
+                          }}
+                        >
+                          <Ionicons name="close" size={14} color="#fff" />
+                          <Text style={styles.quickEditButtonText}>إلغاء</Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
+
+                    {!isEditing && (
+                      <TouchableOpacity
+                        style={styles.deleteButtonSmall}
+                        onPress={() => deleteCategory(category.id)}
+                      >
+                        <Ionicons name="trash-outline" size={14} color="#fff" />
+                      </TouchableOpacity>
+                    )}
                   </View>
-                </View>
-                <View style={styles.actionButtons}>
-                  <TouchableOpacity
-                    style={[styles.actionButton, styles.editButton]}
-                    onPress={() => startEditCategory(category)}
-                  >
-                    <Ionicons name="create-outline" size={16} color="#fff" />
-                    <Text style={styles.actionButtonText}>تعديل</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.actionButton, styles.deleteButton]}
-                    onPress={() => deleteCategory(category.id)}
-                  >
-                    <Ionicons name="trash-outline" size={16} color="#fff" />
-                    <Text style={styles.actionButtonText}>حذف</Text>
-                  </TouchableOpacity>
-                </View>
+                );
+              })}
+            </View>
+          </View>
+        )}
+
+        {activeTab === 'sections' && (
+          <View>
+            <View style={styles.formCard}>
+              <Text style={styles.formTitle}>
+                {editingSection ? 'تعديل قسم' : 'إضافة قسم جديد'}
+              </Text>
+              {editingSection && (
+                <TouchableOpacity
+                  style={styles.cancelButton}
+                  onPress={cancelEditSection}
+                >
+                  <Text style={styles.cancelButtonText}>إلغاء التعديل</Text>
+                </TouchableOpacity>
+              )}
+              <TextInput
+                style={styles.input}
+                placeholder="اسم القسم *"
+                value={newSection.name}
+                onChangeText={(text) => setNewSection({ ...newSection, name: text })}
+              />
+              <TextInput
+                style={styles.input}
+                placeholder="الوصف (اختياري)"
+                value={newSection.description}
+                onChangeText={(text) => setNewSection({ ...newSection, description: text })}
+                multiline
+              />
+              <TextInput
+                style={styles.input}
+                placeholder="أيقونة (اسم أيقونة Ionicons - اختياري)"
+                value={newSection.icon}
+                onChangeText={(text) => setNewSection({ ...newSection, icon: text })}
+              />
+              <TextInput
+                style={styles.input}
+                placeholder="ترتيب العرض (رقم - كلما قل الرقم كلما ظهر أولاً)"
+                value={newSection.display_order}
+                onChangeText={(text) => setNewSection({ ...newSection, display_order: text })}
+                keyboardType="numeric"
+              />
+              <View style={styles.switchContainer}>
+                <Text style={styles.switchLabel}>القسم نشط (ستظهر في الموقع)</Text>
+                <TouchableOpacity
+                  style={[styles.switch, newSection.is_active && styles.switchActive]}
+                  onPress={() => setNewSection({ ...newSection, is_active: !newSection.is_active })}
+                >
+                  <View style={[styles.switchThumb, newSection.is_active && styles.switchThumbActive]} />
+                </TouchableOpacity>
               </View>
-            ))}
+
+              {/* Add Categories to Section */}
+              {!editingSection && (
+                <>
+                  <TouchableOpacity
+                    style={[styles.submitButton, styles.secondaryButton]}
+                    onPress={() => setShowAddCategoryToSection(!showAddCategoryToSection)}
+                  >
+                    <Ionicons name={showAddCategoryToSection ? "chevron-up" : "chevron-down"} size={20} color="#fff" style={{ marginLeft: 8 }} />
+                    <Text style={styles.submitButtonText}>
+                      {showAddCategoryToSection ? 'إخفاء إضافة الفئات' : 'إضافة فئات لهذا القسم (اختياري)'}
+                    </Text>
+                  </TouchableOpacity>
+
+                  {showAddCategoryToSection && (
+                    <View style={styles.categoriesFormContainer}>
+                      <Text style={styles.sectionSubtitle}>إضافة فئات للقسم</Text>
+                      {sectionCategories.map((cat, index) => (
+                        <View key={index} style={styles.categoryFormItem}>
+                          <View style={styles.categoryFormHeader}>
+                            <Text style={styles.categoryFormTitle}>فئة {index + 1}</Text>
+                            <TouchableOpacity
+                              onPress={() => {
+                                const newCats = sectionCategories.filter((_, i) => i !== index);
+                                setSectionCategories(newCats);
+                              }}
+                            >
+                              <Ionicons name="trash-outline" size={20} color="#EF4444" />
+                            </TouchableOpacity>
+                          </View>
+                          <TextInput
+                            style={styles.input}
+                            placeholder="اسم الفئة *"
+                            value={cat.name}
+                            onChangeText={(text) => {
+                              const newCats = [...sectionCategories];
+                              newCats[index].name = text;
+                              setSectionCategories(newCats);
+                            }}
+                          />
+                          <TextInput
+                            style={styles.input}
+                            placeholder="الوصف (اختياري)"
+                            value={cat.description}
+                            onChangeText={(text) => {
+                              const newCats = [...sectionCategories];
+                              newCats[index].description = text;
+                              setSectionCategories(newCats);
+                            }}
+                            multiline
+                          />
+                          <TextInput
+                            style={styles.input}
+                            placeholder="أيقونة (اختياري)"
+                            value={cat.icon}
+                            onChangeText={(text) => {
+                              const newCats = [...sectionCategories];
+                              newCats[index].icon = text;
+                              setSectionCategories(newCats);
+                            }}
+                          />
+                          <TextInput
+                            style={styles.input}
+                            placeholder="ترتيب العرض"
+                            value={cat.display_order}
+                            onChangeText={(text) => {
+                              const newCats = [...sectionCategories];
+                              newCats[index].display_order = text;
+                              setSectionCategories(newCats);
+                            }}
+                            keyboardType="numeric"
+                          />
+                        </View>
+                      ))}
+                      <TouchableOpacity
+                        style={[styles.submitButton, styles.addMoreButton]}
+                        onPress={() => {
+                          setSectionCategories([...sectionCategories, {
+                            name: '',
+                            description: '',
+                            icon: '',
+                            display_order: (sectionCategories.length + 1).toString(),
+                            is_active: true,
+                          }]);
+                        }}
+                      >
+                        <Ionicons name="add-circle-outline" size={20} color="#fff" style={{ marginLeft: 8 }} />
+                        <Text style={styles.submitButtonText}>إضافة فئة أخرى</Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
+                </>
+              )}
+
+              <TouchableOpacity
+                style={styles.submitButton}
+                onPress={editingSection ? updateSection : addSection}
+              >
+                <Text style={styles.submitButtonText}>
+                  {editingSection ? 'تحديث القسم' : 'إضافة قسم'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.gridContainer}>
+              {sections.map((section) => {
+                const isEditing = editingSectionId === section.id;
+                const quickEdit = quickEditSection[section.id] || {};
+                const displayName = isEditing ? (quickEdit.name !== undefined ? quickEdit.name : section.name) : section.name;
+                const displayOrder = isEditing ? (quickEdit.display_order !== undefined ? quickEdit.display_order : section.display_order) : section.display_order;
+                const displayActive = isEditing ? (quickEdit.is_active !== undefined ? quickEdit.is_active : section.is_active) : section.is_active;
+
+                return (
+                  <View key={section.id} style={styles.gridCard}>
+                    <View style={styles.cardHeader}>
+                      {section.icon && (
+                        <Ionicons name={section.icon as any} size={20} color="#EE1C47" style={styles.cardIcon} />
+                      )}
+                      {isEditing ? (
+                        <TextInput
+                          style={styles.inlineInput}
+                          value={displayName}
+                          onChangeText={(text) => setQuickEditSection({ ...quickEditSection, [section.id]: { ...quickEdit, name: text } })}
+                          placeholder="اسم القسم"
+                        />
+                      ) : (
+                        <Text style={styles.gridCardTitle} numberOfLines={1}>{section.name}</Text>
+                      )}
+                      <TouchableOpacity
+                        style={styles.cardMenuButton}
+                        onPress={() => {
+                          if (isEditing) {
+                            setEditingSectionId(null);
+                            setQuickEditSection({});
+                          } else {
+                            setEditingSectionId(section.id);
+                            setQuickEditSection({ [section.id]: {} });
+                          }
+                        }}
+                      >
+                        <Ionicons name={isEditing ? "checkmark" : "create-outline"} size={18} color={isEditing ? "#10B981" : "#666"} />
+                      </TouchableOpacity>
+                    </View>
+                    
+                    {section.description && !isEditing && (
+                      <Text style={styles.gridCardDescription} numberOfLines={2}>{section.description}</Text>
+                    )}
+
+                    <View style={styles.gridCardMeta}>
+                      {isEditing ? (
+                        <TextInput
+                          style={styles.inlineInputSmall}
+                          value={displayOrder.toString()}
+                          onChangeText={(text) => setQuickEditSection({ ...quickEditSection, [section.id]: { ...quickEdit, display_order: parseInt(text) || 0 } })}
+                          placeholder="ترتيب"
+                          keyboardType="numeric"
+                        />
+                      ) : (
+                        <Text style={styles.gridCardMetaText}>ترتيب: {section.display_order}</Text>
+                      )}
+                      <TouchableOpacity
+                        style={[styles.statusBadgeSmall, displayActive ? styles.statusBadgeActive : styles.statusBadgeInactive]}
+                        onPress={() => {
+                          if (isEditing) {
+                            setQuickEditSection({ ...quickEditSection, [section.id]: { ...quickEdit, is_active: !displayActive } });
+                          }
+                        }}
+                      >
+                        <Text style={styles.statusBadgeTextSmall}>
+                          {displayActive ? 'نشط' : 'غير نشط'}
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+
+                    {isEditing && (
+                      <View style={styles.quickEditActions}>
+                        <TouchableOpacity
+                          style={[styles.quickEditButton, styles.saveButton]}
+                          onPress={async () => {
+                            const updates = quickEditSection[section.id];
+                            if (updates && Object.keys(updates).length > 0) {
+                              setLoading(true);
+                              try {
+                                const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+                                const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+                                const accessToken = await getAccessToken();
+
+                                await fetch(`${supabaseUrl}/rest/v1/sections?id=eq.${section.id}`, {
+                                  method: 'PATCH',
+                                  headers: {
+                                    'apikey': supabaseKey || '',
+                                    'Authorization': `Bearer ${accessToken}`,
+                                    'Content-Type': 'application/json',
+                                  },
+                                  body: JSON.stringify(updates)
+                                });
+
+                                sweetAlert.showSuccess('نجح', 'تم التحديث بنجاح', () => {
+                                  setEditingSectionId(null);
+                                  setQuickEditSection({});
+                                  loadSections();
+                                });
+                              } catch (error: any) {
+                                sweetAlert.showError('خطأ', error.message || 'فشل التحديث');
+                              } finally {
+                                setLoading(false);
+                              }
+                            } else {
+                              setEditingSectionId(null);
+                              setQuickEditSection({});
+                            }
+                          }}
+                        >
+                          <Ionicons name="checkmark" size={14} color="#fff" />
+                          <Text style={styles.quickEditButtonText}>حفظ</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.quickEditButton, styles.cancelQuickEditButton]}
+                          onPress={() => {
+                            setEditingSectionId(null);
+                            setQuickEditSection({});
+                          }}
+                        >
+                          <Ionicons name="close" size={14} color="#fff" />
+                          <Text style={styles.quickEditButtonText}>إلغاء</Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
+
+                    {!isEditing && (
+                      <TouchableOpacity
+                        style={styles.deleteButtonSmall}
+                        onPress={() => deleteSection(section.id)}
+                      >
+                        <Ionicons name="trash-outline" size={14} color="#fff" />
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                );
+              })}
+            </View>
           </View>
         )}
         </View>
       </ScrollView>
+
+      {/* SweetAlert */}
+      {sweetAlert.alert.options && (
+        <SweetAlert
+          visible={sweetAlert.alert.visible}
+          type={sweetAlert.alert.options.type}
+          title={sweetAlert.alert.options.title}
+          message={sweetAlert.alert.options.message}
+          confirmText={sweetAlert.alert.options.confirmText}
+          cancelText={sweetAlert.alert.options.cancelText}
+          onConfirm={sweetAlert.alert.options.onConfirm}
+          onCancel={sweetAlert.alert.options.onCancel}
+          onClose={sweetAlert.hideAlert}
+        />
+      )}
     </View>
   );
 }
@@ -1791,6 +2993,258 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 4,
     elevation: 3,
+  },
+  gridContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    marginTop: 10,
+  },
+  gridCard: {
+    backgroundColor: '#fff',
+    padding: 12,
+    borderRadius: 12,
+    width: Platform.OS === 'web' 
+      ? Math.floor((Math.min(Dimensions.get('window').width, 1400) - 60) / 3) - 8
+      : (Dimensions.get('window').width - 40) / 2 - 6,
+    minWidth: Platform.OS === 'web' ? 280 : 150,
+    maxWidth: Platform.OS === 'web' ? 400 : undefined,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+    position: 'relative',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  cardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+    gap: 8,
+  },
+  cardIcon: {
+    marginRight: 4,
+  },
+  gridCardTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#1F2937',
+    flex: 1,
+  },
+  gridCardDescription: {
+    fontSize: 12,
+    color: '#6B7280',
+    marginBottom: 8,
+    lineHeight: 16,
+  },
+  gridCardSection: {
+    fontSize: 11,
+    color: '#9CA3AF',
+    marginBottom: 6,
+  },
+  gridCardMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 8,
+    gap: 8,
+  },
+  gridCardMetaText: {
+    fontSize: 11,
+    color: '#6B7280',
+  },
+  inlineInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    borderRadius: 6,
+    padding: 6,
+    fontSize: 14,
+    backgroundColor: '#F9FAFB',
+  },
+  inlineInputSmall: {
+    width: 60,
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    borderRadius: 6,
+    padding: 4,
+    fontSize: 12,
+    backgroundColor: '#F9FAFB',
+    textAlign: 'center',
+  },
+  cardMenuButton: {
+    padding: 4,
+    borderRadius: 6,
+    backgroundColor: '#F3F4F6',
+  },
+  statusBadgeSmall: {
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 10,
+    minWidth: 50,
+    alignItems: 'center',
+  },
+  statusBadgeTextSmall: {
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: '600',
+  },
+  quickEditActions: {
+    flexDirection: 'row',
+    gap: 6,
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#E5E7EB',
+  },
+  quickEditButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    borderRadius: 6,
+    gap: 4,
+  },
+  saveButton: {
+    backgroundColor: '#10B981',
+  },
+  cancelQuickEditButton: {
+    backgroundColor: '#6B7280',
+  },
+  quickEditButtonText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  deleteButtonSmall: {
+    position: 'absolute',
+    top: 8,
+    left: 8,
+    backgroundColor: '#EF4444',
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 3,
+    elevation: 4,
+  },
+  gridProductImage: {
+    width: '100%',
+    height: 150,
+    borderRadius: 8,
+    marginBottom: 8,
+    backgroundColor: '#F3F4F6',
+  },
+  gridProductPrice: {
+    marginBottom: 8,
+    minHeight: 40,
+  },
+  gridPrice: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#EE1C47',
+  },
+  gridOriginalPrice: {
+    fontSize: 12,
+    color: '#9CA3AF',
+    textDecorationLine: 'line-through',
+  },
+  gridDiscountPrice: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#EE1C47',
+  },
+  gridDiscountBadge: {
+    fontSize: 11,
+    color: '#10B981',
+    fontWeight: '600',
+    marginTop: 2,
+  },
+  fullEditButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    borderRadius: 6,
+    backgroundColor: '#E3F2FD',
+    marginTop: 8,
+    gap: 4,
+  },
+  fullEditButtonText: {
+    color: '#2196F3',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  gridProductImageSmall: {
+    width: 60,
+    height: 60,
+    borderRadius: 8,
+    marginTop: 8,
+    backgroundColor: '#F3F4F6',
+  },
+  shipmentActions: {
+    marginTop: 8,
+  },
+  statusPicker: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 8,
+    paddingBottom: 4,
+  },
+  statusOption: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    backgroundColor: '#F3F4F6',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  statusOptionActive: {
+    backgroundColor: '#EE1C47',
+    borderColor: '#EE1C47',
+  },
+  statusOptionText: {
+    fontSize: 10,
+    color: '#6B7280',
+  },
+  statusOptionTextActive: {
+    color: '#fff',
+    fontWeight: '600',
+  },
+  roleButtonsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 8,
+  },
+  roleButtonSmall: {
+    flex: 1,
+    minWidth: 60,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderRadius: 6,
+    backgroundColor: '#F3F4F6',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    alignItems: 'center',
+  },
+  roleButtonTextSmall: {
+    fontSize: 10,
+    color: '#6B7280',
+    fontWeight: '600',
+  },
+  roleButtonTextActive: {
+    color: '#fff',
   },
   cardTitle: {
     fontSize: 16,
@@ -1864,6 +3318,72 @@ const styles = StyleSheet.create({
     padding: 12,
     marginBottom: 10,
     fontSize: 16,
+  },
+  pickerContainer: {
+    marginBottom: 10,
+  },
+  pickerLabel: {
+    fontSize: 14,
+    color: '#333',
+    marginBottom: 5,
+  },
+  picker: {
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 8,
+    overflow: 'hidden',
+  },
+  pickerButton: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 12,
+    backgroundColor: '#fff',
+  },
+  pickerButtonText: {
+    fontSize: 16,
+    color: '#333',
+  },
+  secondaryButton: {
+    backgroundColor: '#6366F1',
+    marginBottom: 10,
+  },
+  addMoreButton: {
+    backgroundColor: '#10B981',
+    marginTop: 10,
+  },
+  categoriesFormContainer: {
+    marginTop: 15,
+    padding: 15,
+    backgroundColor: '#F9FAFB',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  sectionSubtitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1F2937',
+    marginBottom: 15,
+  },
+  categoryFormItem: {
+    marginBottom: 20,
+    padding: 15,
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  categoryFormHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  categoryFormTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#374151',
   },
   imageButton: {
     backgroundColor: '#2196F3',

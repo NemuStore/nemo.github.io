@@ -55,9 +55,13 @@ supabase functions deploy update-shipment-status
 أنشئ ملف `.env` في المجلد الرئيسي:
 
 ```env
-EXPO_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
-EXPO_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
-EXPO_PUBLIC_IMGBB_API_KEY=your-imgbb-key
+EXPO_PUBLIC_SUPABASE_URL=https://fdxxynnsxgiozaiiexlm.supabase.co
+EXPO_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZkeHh5bm5zeGdpb3phaWlleGxtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjI4MTUxMDcsImV4cCI6MjA3ODM5MTEwN30.1YW6uu973Zh0P3ElnCTyxdg4cqN7a1KAlyPJkup2fN8
+EXPO_SUPABASE_TOKEN=sbp_2472ff9d3a64cb005f321cba70a788c7a8e30d98
+EXPO_SUPABASE_PASSWORD=NemuExtra@321
+EXPO_PUBLIC_IMGBB_API_KEY=cfbb69eef89f4ad826855a221bcde9ee
+service_role=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZkeHh5bm5zeGdpb3phaWlleGxtIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2MjgxNTEwNywiZXhwIjoyMDc4MzkxMTA3fQ.QmbFb4VESGovYdvrUFnSvbbkzdMwu9yPJDm98eRoqTU
+
 ```
 
 ## 4. تثبيت المتطلبات

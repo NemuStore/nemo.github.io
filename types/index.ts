@@ -1,6 +1,7 @@
 export type UserRole = 'customer' | 'admin' | 'employee' | 'manager';
 
-export interface Category {
+// Section (المستوى الأول: أقسام)
+export interface Section {
   id: string;
   name: string;
   description: string | null;
@@ -9,6 +10,20 @@ export interface Category {
   is_active: boolean;
   created_at: string;
   updated_at: string;
+}
+
+// Category (المستوى الثاني: فئات مرتبطة بقسم)
+export interface Category {
+  id: string;
+  name: string;
+  description: string | null;
+  icon: string | null;
+  display_order: number;
+  is_active: boolean;
+  section_id: string | null; // Reference to parent section
+  created_at: string;
+  updated_at: string;
+  section_data?: Section; // Joined section data
 }
 
 export interface User {
@@ -38,6 +53,7 @@ export interface Product {
   created_at: string;
   updated_at: string;
   category_data?: Category; // Joined category data
+  section_data?: Section; // Joined section data (via category)
 }
 
 export type OrderStatus = 'pending' | 'confirmed' | 'shipped_from_china' | 'received_in_uae' | 'shipped_from_uae' | 'received_in_egypt' | 'in_warehouse' | 'out_for_delivery' | 'delivered' | 'cancelled';
