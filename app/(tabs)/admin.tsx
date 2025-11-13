@@ -51,6 +51,7 @@ export default function AdminScreen() {
     price: '',
     original_price: '', // Original price before discount
     discount_percentage: '', // Discount percentage (0-100)
+    section_id: '', // Section ID - للفلترة
     category: '',
     category_id: '', // Category ID from categories table
     stock_quantity: '',
@@ -1120,6 +1121,7 @@ export default function AdminScreen() {
         price: '',
         original_price: '',
         discount_percentage: '',
+        section_id: '',
         category: '',
         category_id: '',
         stock_quantity: '',
@@ -1145,12 +1147,17 @@ export default function AdminScreen() {
 
   const startEditProduct = (product: Product) => {
     setEditingProduct(product);
+    // الحصول على section_id من الفئة المرتبطة بالمنتج
+    const productCategory = categories.find(c => c.id === product.category_id);
+    const sectionId = productCategory?.section_id || product.section_data?.id || '';
+    
     setNewProduct({
       name: product.name,
       description: product.description || '',
       price: product.price.toString(),
       original_price: product.original_price?.toString() || '',
       discount_percentage: product.discount_percentage?.toString() || '',
+      section_id: sectionId,
       category: product.category || '',
       category_id: product.category_id || '',
       stock_quantity: product.stock_quantity.toString(),
@@ -1170,6 +1177,7 @@ export default function AdminScreen() {
       price: '',
       original_price: '',
       discount_percentage: '',
+      section_id: '',
       category: '',
       category_id: '',
       stock_quantity: '',
@@ -2143,7 +2151,39 @@ export default function AdminScreen() {
                 ⚠️ الكود يجب أن يكون فريداً ولا يتكرر
               </Text>
 
-              {/* Category Selection */}
+              {/* Section Selection - اختيار القسم أولاً */}
+              <View style={styles.selectContainer}>
+                <Text style={styles.selectLabel}>القسم:</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.categorySelect}>
+                  <TouchableOpacity
+                    style={[styles.categorySelectChip, !newProduct.section_id && styles.categorySelectChipActive]}
+                    onPress={() => setNewProduct({ ...newProduct, section_id: '', category_id: '', category: '' })}
+                  >
+                    <Text style={[styles.categorySelectChipText, !newProduct.section_id && styles.categorySelectChipTextActive]}>
+                      جميع الأقسام
+                    </Text>
+                  </TouchableOpacity>
+                  {sections.filter(s => s.is_active).map((section) => (
+                    <TouchableOpacity
+                      key={section.id}
+                      style={[styles.categorySelectChip, newProduct.section_id === section.id && styles.categorySelectChipActive]}
+                      onPress={() => {
+                        // عند تغيير القسم، نمسح اختيار الفئة
+                        setNewProduct({ ...newProduct, section_id: section.id, category_id: '', category: '' });
+                      }}
+                    >
+                      {section.icon && (
+                        <Ionicons name={section.icon as any} size={16} color={newProduct.section_id === section.id ? '#fff' : '#666'} style={{ marginRight: 5 }} />
+                      )}
+                      <Text style={[styles.categorySelectChipText, newProduct.section_id === section.id && styles.categorySelectChipTextActive]}>
+                        {section.name}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              </View>
+
+              {/* Category Selection - عرض الفئات المرتبطة بالقسم المختار فقط */}
               <View style={styles.selectContainer}>
                 <Text style={styles.selectLabel}>الفئة:</Text>
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.categorySelect}>
@@ -2155,21 +2195,35 @@ export default function AdminScreen() {
                       بدون فئة
                     </Text>
                   </TouchableOpacity>
-                  {categories.filter(c => c.is_active).map((category) => (
-                    <TouchableOpacity
-                      key={category.id}
-                      style={[styles.categorySelectChip, newProduct.category_id === category.id && styles.categorySelectChipActive]}
-                      onPress={() => setNewProduct({ ...newProduct, category_id: category.id, category: category.name })}
-                    >
-                      {category.icon && (
-                        <Ionicons name={category.icon as any} size={16} color={newProduct.category_id === category.id ? '#fff' : '#666'} style={{ marginRight: 5 }} />
-                      )}
-                      <Text style={[styles.categorySelectChipText, newProduct.category_id === category.id && styles.categorySelectChipTextActive]}>
-                        {category.name}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
+                  {categories
+                    .filter(c => {
+                      // إذا تم اختيار قسم، نعرض فقط الفئات المرتبطة به
+                      if (newProduct.section_id) {
+                        return c.is_active && c.section_id === newProduct.section_id;
+                      }
+                      // إذا لم يتم اختيار قسم، نعرض جميع الفئات النشطة
+                      return c.is_active;
+                    })
+                    .map((category) => (
+                      <TouchableOpacity
+                        key={category.id}
+                        style={[styles.categorySelectChip, newProduct.category_id === category.id && styles.categorySelectChipActive]}
+                        onPress={() => setNewProduct({ ...newProduct, category_id: category.id, category: category.name })}
+                      >
+                        {category.icon && (
+                          <Ionicons name={category.icon as any} size={16} color={newProduct.category_id === category.id ? '#fff' : '#666'} style={{ marginRight: 5 }} />
+                        )}
+                        <Text style={[styles.categorySelectChipText, newProduct.category_id === category.id && styles.categorySelectChipTextActive]}>
+                          {category.name}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
                 </ScrollView>
+                {newProduct.section_id && categories.filter(c => c.is_active && c.section_id === newProduct.section_id).length === 0 && (
+                  <Text style={styles.helpText}>
+                    ⚠️ لا توجد فئات نشطة في هذا القسم. يمكنك إضافة فئة جديدة من تبويب "الفئات"
+                  </Text>
+                )}
               </View>
               
               {/* Stock Quantity - يظهر فقط للمنتجات الداخلية */}
