@@ -28,6 +28,32 @@ export interface Category {
   created_at: string;
   updated_at: string;
   section_data?: Section; // Joined section data
+  colors?: CategoryColor[]; // Available colors for this category
+  sizes?: CategorySize[]; // Available sizes for this category
+}
+
+// Category Color Option
+export interface CategoryColor {
+  id: string;
+  category_id: string;
+  color_name: string;
+  color_hex: string | null;
+  display_order: number;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+// Category Size Option
+export interface CategorySize {
+  id: string;
+  category_id: string;
+  size_value: string;
+  size_unit: string | null;
+  display_order: number;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface User {
@@ -57,6 +83,12 @@ export interface Product {
   category_id: string | null; // Reference to categories table
   stock_quantity: number;
   source_type: ProductSource; // 'warehouse' = من المخزن الداخلي، 'external' = طلب من الخارج
+  sold_count: number; // عدد القطع المباعة (يتم تحديثه تلقائياً)
+  // Limited time offer fields
+  is_limited_time_offer: boolean; // هل المنتج في عرض محدود الوقت
+  offer_start_date: string | null; // تاريخ بداية العرض
+  offer_duration_days: number | null; // مدة العرض بالأيام
+  offer_end_date: string | null; // تاريخ انتهاء العرض (يتم حسابه تلقائياً)
   // New fields for enhanced product page
   shipping_cost: number | null; // Shipping cost (null = free shipping)
   estimated_delivery_days: number | null; // Estimated delivery days
@@ -79,6 +111,10 @@ export interface Product {
   reviews?: ProductReview[]; // Product reviews
   average_rating?: number; // Calculated average rating
   reviews_count?: number; // Total reviews count
+  variants?: ProductVariant[]; // Product variants (colors, sizes)
+  images?: ProductImage[]; // Product images (multiple images)
+  faqs?: ProductFAQ[]; // Product FAQs
+  related_products?: ProductRelated[]; // Related products
 }
 
 // Product Specification
@@ -178,5 +214,72 @@ export interface Notification {
   type: 'order' | 'shipment' | 'delivery' | 'system';
   read: boolean;
   created_at: string;
+}
+
+// Product Variant (متغيرات المنتج - ألوان، مقاسات)
+export interface ProductVariant {
+  id: string;
+  product_id: string;
+  variant_name: string; // مثل: "أحمر - مقاس L"
+  color: string | null; // اللون
+  size: string | null; // المقاس (S, M, L, 40, 41, 100x200, إلخ)
+  size_unit: string | null; // وحدة القياس (مقاس، رقم، بوصة، سم، إلخ)
+  material: string | null; // الخامة
+  price: number | null; // سعر مختلف للمتغير (NULL = يستخدم سعر المنتج الأساسي)
+  stock_quantity: number; // المخزون الخاص بهذا المتغير
+  sku: string | null; // كود المنتج الفريد لهذا المتغير
+  image_url: string | null; // صورة خاصة بهذا المتغير
+  is_active: boolean; // هل المتغير متاح للبيع؟
+  is_default: boolean; // المتغير الافتراضي (يظهر أولاً)
+  display_order: number; // ترتيب العرض
+  created_at: string;
+  updated_at: string;
+}
+
+// Product FAQ (الأسئلة الشائعة)
+export interface ProductFAQ {
+  id: string;
+  product_id: string;
+  question: string; // السؤال
+  answer: string; // الإجابة
+  display_order: number; // ترتيب العرض
+  is_active: boolean; // هل السؤال نشط؟
+  created_at: string;
+  updated_at: string;
+}
+
+// Product Related (المنتجات المشابهة والمرتبطة)
+export type ProductRelationType = 'similar' | 'complementary' | 'upsell' | 'cross_sell';
+
+export interface ProductRelated {
+  id: string;
+  product_id: string;
+  related_product_id: string;
+  relation_type: ProductRelationType; // نوع العلاقة
+  display_order: number;
+  is_active: boolean;
+  created_at: string;
+  related_product?: Product; // Joined product data
+}
+
+// Product Wishlist (قائمة الأمنيات)
+export interface ProductWishlist {
+  id: string;
+  user_id: string;
+  product_id: string;
+  created_at: string;
+  product?: Product; // Joined product data
+}
+
+// Product Image (صور المنتج - موجود بالفعل لكن نضيفه للتوثيق)
+export interface ProductImage {
+  id: string;
+  product_id: string;
+  image_url: string;
+  display_order: number;
+  is_primary: boolean;
+  variant_id: string | null; // ربط الصورة بمتغير معين (لون) - NULL = صورة عامة للمنتج
+  created_at: string;
+  updated_at: string;
 }
 

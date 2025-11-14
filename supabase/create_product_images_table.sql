@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS public.product_images (
   image_url TEXT NOT NULL,
   display_order INTEGER NOT NULL DEFAULT 0,
   is_primary BOOLEAN DEFAULT false,
+  variant_id UUID NULL REFERENCES public.product_variants(id) ON DELETE CASCADE, -- ربط الصورة بمتغير معين (لون)
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -12,6 +13,8 @@ CREATE TABLE IF NOT EXISTS public.product_images (
 -- Create index for faster queries
 CREATE INDEX IF NOT EXISTS idx_product_images_product_id ON public.product_images(product_id);
 CREATE INDEX IF NOT EXISTS idx_product_images_display_order ON public.product_images(product_id, display_order);
+CREATE INDEX IF NOT EXISTS idx_product_images_variant_id ON public.product_images(variant_id);
+CREATE INDEX IF NOT EXISTS idx_product_images_product_variant ON public.product_images(product_id, variant_id);
 
 -- Enable RLS
 ALTER TABLE public.product_images ENABLE ROW LEVEL SECURITY;
@@ -43,15 +46,18 @@ CREATE POLICY "Only admins can delete product images" ON public.product_images
 CREATE TRIGGER update_product_images_updated_at BEFORE UPDATE ON public.product_images
   FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
--- Function to ensure only one primary image per product
+-- Function to ensure only one primary image per product/variant
 CREATE OR REPLACE FUNCTION ensure_single_primary_image()
 RETURNS TRIGGER AS $$
 BEGIN
   IF NEW.is_primary = true THEN
-    -- Unset other primary images for the same product
+    -- إلغاء الافتراضي من الصور الأخرى لنفس المنتج/المتغير
+    -- إذا كان variant_id = NULL، الصورة عامة للمنتج
+    -- إذا كان variant_id != NULL، الصورة خاصة بهذا المتغير
     UPDATE public.product_images
     SET is_primary = false
     WHERE product_id = NEW.product_id
+      AND (variant_id = NEW.variant_id OR (variant_id IS NULL AND NEW.variant_id IS NULL))
       AND id != NEW.id
       AND is_primary = true;
   END IF;

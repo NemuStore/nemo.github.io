@@ -12,7 +12,7 @@ import {
   Dimensions,
 } from 'react-native';
 import { supabase } from '@/lib/supabase';
-import { Order, Shipment, Inventory, Product, User, UserRole, Category, Section } from '@/types';
+import { Order, Shipment, Inventory, Product, User, UserRole, Category, Section, ProductVariant, CategoryColor, CategorySize } from '@/types';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
@@ -21,6 +21,12 @@ import SweetAlert from '@/components/SweetAlert';
 import { useSweetAlert } from '@/hooks/useSweetAlert';
 
 export default function AdminScreen() {
+  // Helper function to safely format numbers
+  const formatPrice = (value: number | null | undefined): string => {
+    const num = typeof value === 'number' && !isNaN(value) ? value : 0;
+    return num.toFixed(2);
+  };
+
   const [user, setUser] = useState<any>(null);
   const [activeTab, setActiveTab] = useState<'orders' | 'shipments' | 'inventory' | 'products' | 'users' | 'categories' | 'sections'>('orders');
   const [orders, setOrders] = useState<Order[]>([]);
@@ -58,6 +64,9 @@ export default function AdminScreen() {
     source_type: 'warehouse' as 'warehouse' | 'external', // مصدر المنتج
     sku: '', // كود المنتج الفريد
     image_url: '', // Keep for backward compatibility
+    sold_count: '0', // عدد القطع المباعة (يتم تحديثه تلقائياً)
+    is_limited_time_offer: false, // عرض محدود الوقت
+    offer_duration_days: '', // مدة العرض بالأيام
   });
   const [newCategory, setNewCategory] = useState({
     name: '',
@@ -94,9 +103,32 @@ export default function AdminScreen() {
     display_order: '0',
     is_active: true,
   });
-  const [productImages, setProductImages] = useState<Array<{ uri: string; url?: string }>>([]);
+  const [productImages, setProductImages] = useState<Array<{ uri: string; url?: string; variantId?: string }>>([]);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
-  const [editProductImages, setEditProductImages] = useState<Array<{ uri: string; url?: string }>>([]);
+  const [editProductImages, setEditProductImages] = useState<Array<{ uri: string; url?: string; variantId?: string }>>([]);
+  // Product variants management
+  const [productVariants, setProductVariants] = useState<ProductVariant[]>([]);
+  const [editingVariant, setEditingVariant] = useState<ProductVariant | null>(null);
+  const [newVariant, setNewVariant] = useState({
+    color: '',
+    size: '',
+    size_unit: '',
+    price: '',
+    stock_quantity: '',
+    sku: '',
+    image_url: '',
+  });
+  // Category variant options (colors and sizes)
+  const [categoryColors, setCategoryColors] = useState<CategoryColor[]>([]);
+  const [categorySizes, setCategorySizes] = useState<CategorySize[]>([]);
+  const [showColorInput, setShowColorInput] = useState(false);
+  const [showSizeInput, setShowSizeInput] = useState(false);
+  // Category variant management
+  const [selectedCategoryForVariants, setSelectedCategoryForVariants] = useState<string | null>(null);
+  const [categoryColorsList, setCategoryColorsList] = useState<CategoryColor[]>([]);
+  const [categorySizesList, setCategorySizesList] = useState<CategorySize[]>([]);
+  const [newCategoryColor, setNewCategoryColor] = useState({ color_name: '', color_hex: '', display_order: '0' });
+  const [newCategorySize, setNewCategorySize] = useState({ size_value: '', size_unit: '', display_order: '0' });
   const [newShipment, setNewShipment] = useState({
     cost: '',
     order_ids: [] as string[],
@@ -893,19 +925,58 @@ export default function AdminScreen() {
           console.error('❌ Admin: Error loading inventory:', await response.text());
         }
       } else if (activeTab === 'products') {
-        const response = await fetch(`${supabaseUrl}/rest/v1/products?select=*&order=created_at.desc`, {
+        // Load sections and categories first (needed for product form)
+        await loadSections();
+        await loadCategories();
+        
+        // Load products with category data
+        const productsResponse = await fetch(`${supabaseUrl}/rest/v1/products?select=*,category_data:categories(*)&order=created_at.desc`, {
           headers: {
             'apikey': supabaseKey || '',
-            'Authorization': `Bearer ${accessToken}`, // Use access_token for RLS
+            'Authorization': `Bearer ${accessToken}`,
             'Content-Type': 'application/json',
           }
         });
-        if (response.ok) {
-          const data = await response.json();
-          setProducts(data || []);
-          console.log('✅ Admin: Products loaded:', data?.length || 0);
+        
+        if (productsResponse.ok) {
+          const productsData = await productsResponse.json();
+          
+          // Load sections separately and map them to categories
+          const sectionsResponse = await fetch(`${supabaseUrl}/rest/v1/sections?select=*`, {
+            headers: {
+              'apikey': supabaseKey || '',
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json',
+            }
+          });
+          
+          let sectionsMap: { [key: string]: any } = {};
+          if (sectionsResponse.ok) {
+            const sectionsData = await sectionsResponse.json();
+            sectionsData.forEach((section: any) => {
+              sectionsMap[section.id] = section;
+            });
+          }
+          
+          // Process products to add section_data to category_data
+          const processedData = (productsData || []).map((product: any) => {
+            if (product.category_data && product.category_data.section_id) {
+              const section = sectionsMap[product.category_data.section_id];
+              return {
+                ...product,
+                category_data: {
+                  ...product.category_data,
+                  section_data: section || null,
+                }
+              };
+            }
+            return product;
+          });
+          
+          setProducts(processedData);
+          console.log('✅ Admin: Products loaded:', processedData?.length || 0);
         } else {
-          console.error('❌ Admin: Error loading products:', await response.text());
+          console.error('❌ Admin: Error loading products:', await productsResponse.text());
         }
       } else if (activeTab === 'users') {
         await loadUsers();
@@ -994,6 +1065,334 @@ export default function AdminScreen() {
     }
   };
 
+  // Variant management functions
+  const pickVariantImage = async () => {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      quality: 0.8,
+    });
+
+    if (!result.canceled && result.assets.length > 0) {
+      try {
+        setLoading(true);
+        const imageUrl = await uploadImageToImgBB(result.assets[0].uri);
+        setNewVariant({ ...newVariant, image_url: imageUrl });
+        sweetAlert.showSuccess('نجح', 'تم رفع الصورة بنجاح');
+      } catch (error) {
+        console.error('Error uploading variant image:', error);
+        sweetAlert.showError('خطأ', 'فشل رفع الصورة');
+      } finally {
+        setLoading(false);
+      }
+    }
+  };
+
+  const addVariant = () => {
+    if (!newVariant.color && !newVariant.size) {
+      sweetAlert.showError('خطأ', 'يرجى إدخال لون أو مقاس على الأقل');
+      return;
+    }
+
+    const variant: ProductVariant = {
+      id: `temp-${Date.now()}`,
+      product_id: editingProduct?.id || '',
+      variant_name: `${newVariant.color || ''}${newVariant.color && newVariant.size ? ' - ' : ''}${newVariant.size || ''}`.trim(),
+      color: newVariant.color || null,
+      size: newVariant.size || null,
+      size_unit: newVariant.size_unit || null,
+      material: null,
+      price: newVariant.price ? parseFloat(newVariant.price) : null,
+      stock_quantity: newVariant.stock_quantity ? parseInt(newVariant.stock_quantity) : 0,
+      sku: newVariant.sku || null,
+      image_url: newVariant.image_url || null,
+      is_active: true,
+      is_default: productVariants.length === 0,
+      display_order: productVariants.length,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+
+    setProductVariants([...productVariants, variant]);
+    setNewVariant({
+      color: '',
+      size: '',
+      size_unit: '',
+      price: '',
+      stock_quantity: '',
+      sku: '',
+      image_url: '',
+    });
+    sweetAlert.showSuccess('نجح', 'تم إضافة المتغير بنجاح');
+  };
+
+  const deleteVariant = (variantId: string) => {
+    sweetAlert.showConfirm(
+      'حذف المتغير',
+      'هل أنت متأكد من حذف هذا المتغير؟',
+      () => {
+        setProductVariants(productVariants.filter(v => v.id !== variantId));
+        sweetAlert.showSuccess('نجح', 'تم حذف المتغير بنجاح');
+      },
+      undefined,
+      'حذف',
+      'إلغاء'
+    );
+  };
+
+  // Load category colors and sizes when category is selected
+  const loadCategoryVariantOptions = async (categoryId: string) => {
+    if (!categoryId) {
+      setCategoryColors([]);
+      setCategorySizes([]);
+      return;
+    }
+
+    try {
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+      const accessToken = await getAccessToken();
+
+      // Load colors
+      const colorsResponse = await fetch(`${supabaseUrl}/rest/v1/category_colors?category_id=eq.${categoryId}&is_active=eq.true&order=display_order.asc`, {
+        headers: {
+          'apikey': supabaseKey || '',
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        }
+      });
+
+      if (colorsResponse.ok) {
+        const colorsData = await colorsResponse.json();
+        setCategoryColors(colorsData || []);
+      }
+
+      // Load sizes
+      const sizesResponse = await fetch(`${supabaseUrl}/rest/v1/category_sizes?category_id=eq.${categoryId}&is_active=eq.true&order=display_order.asc`, {
+        headers: {
+          'apikey': supabaseKey || '',
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        }
+      });
+
+      if (sizesResponse.ok) {
+        const sizesData = await sizesResponse.json();
+        setCategorySizes(sizesData || []);
+      }
+    } catch (error) {
+      console.error('Error loading category variant options:', error);
+    }
+  };
+
+  // Load category colors and sizes for management
+  const loadCategoryVariantsForManagement = async (categoryId: string) => {
+    if (!categoryId) {
+      setCategoryColorsList([]);
+      setCategorySizesList([]);
+      return;
+    }
+
+    try {
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+      const accessToken = await getAccessToken();
+
+      // Load all colors (including inactive)
+      const colorsResponse = await fetch(`${supabaseUrl}/rest/v1/category_colors?category_id=eq.${categoryId}&order=display_order.asc`, {
+        headers: {
+          'apikey': supabaseKey || '',
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        }
+      });
+
+      if (colorsResponse.ok) {
+        const colorsData = await colorsResponse.json();
+        setCategoryColorsList(colorsData || []);
+      }
+
+      // Load all sizes (including inactive)
+      const sizesResponse = await fetch(`${supabaseUrl}/rest/v1/category_sizes?category_id=eq.${categoryId}&order=display_order.asc`, {
+        headers: {
+          'apikey': supabaseKey || '',
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        }
+      });
+
+      if (sizesResponse.ok) {
+        const sizesData = await sizesResponse.json();
+        setCategorySizesList(sizesData || []);
+      }
+    } catch (error) {
+      console.error('Error loading category variants for management:', error);
+      sweetAlert.showError('خطأ', 'فشل تحميل الألوان والمقاسات');
+    }
+  };
+
+  // Add category color
+  const addCategoryColor = async () => {
+    if (!selectedCategoryForVariants || !newCategoryColor.color_name) {
+      sweetAlert.showError('خطأ', 'يرجى إدخال اسم اللون');
+      return;
+    }
+
+    try {
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+      const accessToken = await getAccessToken();
+
+      const response = await fetch(`${supabaseUrl}/rest/v1/category_colors`, {
+        method: 'POST',
+        headers: {
+          'apikey': supabaseKey || '',
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=representation',
+        },
+        body: JSON.stringify({
+          category_id: selectedCategoryForVariants,
+          color_name: newCategoryColor.color_name,
+          color_hex: newCategoryColor.color_hex || null,
+          display_order: parseInt(newCategoryColor.display_order) || 0,
+          is_active: true,
+        }),
+      });
+
+      if (response.ok) {
+        const newColor = await response.json();
+        setCategoryColorsList([...categoryColorsList, newColor[0] || newColor]);
+        setNewCategoryColor({ color_name: '', color_hex: '', display_order: '0' });
+        sweetAlert.showSuccess('نجح', 'تم إضافة اللون بنجاح');
+      } else {
+        const error = await response.text();
+        console.error('Error adding category color:', error);
+        sweetAlert.showError('خطأ', 'فشل إضافة اللون');
+      }
+    } catch (error) {
+      console.error('Error adding category color:', error);
+      sweetAlert.showError('خطأ', 'فشل إضافة اللون');
+    }
+  };
+
+  // Delete category color
+  const deleteCategoryColor = async (colorId: string) => {
+    sweetAlert.showConfirm(
+      'حذف اللون',
+      'هل أنت متأكد من حذف هذا اللون؟',
+      async () => {
+        try {
+          const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+          const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+          const accessToken = await getAccessToken();
+
+          const response = await fetch(`${supabaseUrl}/rest/v1/category_colors?id=eq.${colorId}`, {
+            method: 'DELETE',
+            headers: {
+              'apikey': supabaseKey || '',
+              'Authorization': `Bearer ${accessToken}`,
+            },
+          });
+
+          if (response.ok) {
+            setCategoryColorsList(categoryColorsList.filter(c => c.id !== colorId));
+            sweetAlert.showSuccess('نجح', 'تم حذف اللون بنجاح');
+          } else {
+            sweetAlert.showError('خطأ', 'فشل حذف اللون');
+          }
+        } catch (error) {
+          console.error('Error deleting category color:', error);
+          sweetAlert.showError('خطأ', 'فشل حذف اللون');
+        }
+      },
+      undefined,
+      'حذف',
+      'إلغاء'
+    );
+  };
+
+  // Add category size
+  const addCategorySize = async () => {
+    if (!selectedCategoryForVariants || !newCategorySize.size_value) {
+      sweetAlert.showError('خطأ', 'يرجى إدخال قيمة المقاس');
+      return;
+    }
+
+    try {
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+      const accessToken = await getAccessToken();
+
+      const response = await fetch(`${supabaseUrl}/rest/v1/category_sizes`, {
+        method: 'POST',
+        headers: {
+          'apikey': supabaseKey || '',
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=representation',
+        },
+        body: JSON.stringify({
+          category_id: selectedCategoryForVariants,
+          size_value: newCategorySize.size_value,
+          size_unit: newCategorySize.size_unit || null,
+          display_order: parseInt(newCategorySize.display_order) || 0,
+          is_active: true,
+        }),
+      });
+
+      if (response.ok) {
+        const newSize = await response.json();
+        setCategorySizesList([...categorySizesList, newSize[0] || newSize]);
+        setNewCategorySize({ size_value: '', size_unit: '', display_order: '0' });
+        sweetAlert.showSuccess('نجح', 'تم إضافة المقاس بنجاح');
+      } else {
+        const error = await response.text();
+        console.error('Error adding category size:', error);
+        sweetAlert.showError('خطأ', 'فشل إضافة المقاس');
+      }
+    } catch (error) {
+      console.error('Error adding category size:', error);
+      sweetAlert.showError('خطأ', 'فشل إضافة المقاس');
+    }
+  };
+
+  // Delete category size
+  const deleteCategorySize = async (sizeId: string) => {
+    sweetAlert.showConfirm(
+      'حذف المقاس',
+      'هل أنت متأكد من حذف هذا المقاس؟',
+      async () => {
+        try {
+          const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+          const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+          const accessToken = await getAccessToken();
+
+          const response = await fetch(`${supabaseUrl}/rest/v1/category_sizes?id=eq.${sizeId}`, {
+            method: 'DELETE',
+            headers: {
+              'apikey': supabaseKey || '',
+              'Authorization': `Bearer ${accessToken}`,
+            },
+          });
+
+          if (response.ok) {
+            setCategorySizesList(categorySizesList.filter(s => s.id !== sizeId));
+            sweetAlert.showSuccess('نجح', 'تم حذف المقاس بنجاح');
+          } else {
+            sweetAlert.showError('خطأ', 'فشل حذف المقاس');
+          }
+        } catch (error) {
+          console.error('Error deleting category size:', error);
+          sweetAlert.showError('خطأ', 'فشل حذف المقاس');
+        }
+      },
+      undefined,
+      'حذف',
+      'إلغاء'
+    );
+  };
+
   const checkSKUUnique = async (sku: string, excludeProductId?: string): Promise<boolean> => {
     if (!sku) return true; // SKU فارغ = لا حاجة للتحقق
     
@@ -1078,6 +1477,10 @@ export default function AdminScreen() {
           source_type: newProduct.source_type,
           sku: newProduct.sku,
           image_url: newProduct.image_url || productImages[0]?.url || '', // Fallback
+          sold_count: parseInt(newProduct.sold_count) || 0,
+          is_limited_time_offer: newProduct.is_limited_time_offer,
+          offer_start_date: newProduct.is_limited_time_offer ? new Date().toISOString() : null,
+          offer_duration_days: newProduct.is_limited_time_offer && newProduct.offer_duration_days ? parseInt(newProduct.offer_duration_days) : null,
         })
       });
 
@@ -1122,31 +1525,98 @@ export default function AdminScreen() {
         }
       }
 
-      if (typeof window !== 'undefined' && Platform.OS === 'web') {
-        window.alert('تم إضافة المنتج بنجاح');
-      } else {
-        Alert.alert('نجح', 'تم إضافة المنتج بنجاح');
+      // Add product variants
+      if (productVariants.length > 0) {
+        const variantsToInsert = productVariants.map((variant, index) => ({
+          product_id: productId,
+          variant_name: variant.variant_name,
+          color: variant.color,
+          size: variant.size,
+          size_unit: variant.size_unit,
+          material: variant.material,
+          price: variant.price,
+          stock_quantity: variant.stock_quantity,
+          sku: variant.sku,
+          image_url: variant.image_url,
+          is_active: variant.is_active,
+          is_default: variant.is_default,
+          display_order: index,
+        }));
+
+        const variantsResponse = await fetch(`${supabaseUrl}/rest/v1/product_variants`, {
+          method: 'POST',
+          headers: {
+            'apikey': supabaseKey || '',
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=representation'
+          },
+          body: JSON.stringify(variantsToInsert)
+        });
+
+        if (variantsResponse.ok) {
+          const variantsData = await variantsResponse.json();
+          
+          // Link variant images to product_images
+          for (const variant of variantsData) {
+            if (variant.image_url) {
+              // Add variant image to product_images with variant_id
+              await fetch(`${supabaseUrl}/rest/v1/product_images`, {
+                method: 'POST',
+                headers: {
+                  'apikey': supabaseKey || '',
+                  'Authorization': `Bearer ${accessToken}`,
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  product_id: productId,
+                  image_url: variant.image_url,
+                  variant_id: variant.id,
+                  display_order: 0,
+                  is_primary: false,
+                })
+              });
+            }
+          }
+        } else {
+          const errorText = await variantsResponse.text();
+          console.warn('⚠️ Failed to add product variants:', errorText);
+        }
       }
-      
-      // Reset form
-      setNewProduct({
-        name: '',
-        description: '',
-        price: '',
-        original_price: '',
-        discount_percentage: '',
-        section_id: '',
-        category: '',
-        category_id: '',
-        stock_quantity: '',
-        source_type: 'warehouse',
-        sku: '',
-        image_url: '',
+
+      sweetAlert.showSuccess('نجح', 'تم إضافة المنتج بنجاح', () => {
+        // Reset form
+        setNewProduct({
+          name: '',
+          description: '',
+          price: '',
+          original_price: '',
+          discount_percentage: '',
+          section_id: '',
+          category: '',
+          category_id: '',
+          stock_quantity: '',
+          source_type: 'warehouse',
+          sku: '',
+          image_url: '',
+          sold_count: '0',
+          is_limited_time_offer: false,
+          offer_duration_days: '',
+        });
+        setProductImages([]);
+        setProductVariants([]);
+        setNewVariant({
+          color: '',
+          size: '',
+          size_unit: '',
+          price: '',
+          stock_quantity: '',
+          sku: '',
+          image_url: '',
+        });
+        setEditingProduct(null);
+        loadData();
       });
-      setProductImages([]);
-      setEditingProduct(null);
-      setEditProductImages([]);
-      loadData();
     } catch (error: any) {
       console.error('❌ Error adding product:', error);
       if (typeof window !== 'undefined' && Platform.OS === 'web') {
@@ -1159,7 +1629,7 @@ export default function AdminScreen() {
     }
   };
 
-  const startEditProduct = (product: Product) => {
+  const startEditProduct = async (product: Product) => {
     setEditingProduct(product);
     // الحصول على section_id من الفئة المرتبطة بالمنتج
     const productCategory = categories.find(c => c.id === product.category_id);
@@ -1178,8 +1648,33 @@ export default function AdminScreen() {
       source_type: product.source_type || 'warehouse',
       sku: product.sku || '',
       image_url: product.image_url || '',
+      sold_count: (product.sold_count || 0).toString(),
+      is_limited_time_offer: product.is_limited_time_offer || false,
+      offer_duration_days: product.offer_duration_days?.toString() || '',
     });
     setProductImages([]);
+    
+    // Load product variants
+    try {
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+      const accessToken = await getAccessToken();
+      
+      const variantsResponse = await fetch(`${supabaseUrl}/rest/v1/product_variants?product_id=eq.${product.id}&order=display_order.asc`, {
+        headers: {
+          'apikey': supabaseKey || '',
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        }
+      });
+      
+      if (variantsResponse.ok) {
+        const variantsData = await variantsResponse.json();
+        setProductVariants(variantsData || []);
+      }
+    } catch (error) {
+      console.error('Error loading product variants:', error);
+    }
     setEditProductImages([]);
   };
 
@@ -1201,6 +1696,16 @@ export default function AdminScreen() {
     });
     setProductImages([]);
     setEditProductImages([]);
+    setProductVariants([]);
+    setNewVariant({
+      color: '',
+      size: '',
+      size_unit: '',
+      price: '',
+      stock_quantity: '',
+      sku: '',
+      image_url: '',
+    });
   };
 
   const updateProduct = async () => {
@@ -1245,6 +1750,10 @@ export default function AdminScreen() {
           source_type: newProduct.source_type,
           sku: newProduct.sku,
           image_url: newProduct.image_url || productImages[0]?.url || editingProduct.image_url,
+          sold_count: parseInt(newProduct.sold_count) || editingProduct.sold_count || 0,
+          is_limited_time_offer: newProduct.is_limited_time_offer,
+          offer_start_date: newProduct.is_limited_time_offer ? (editingProduct?.offer_start_date || new Date().toISOString()) : null,
+          offer_duration_days: newProduct.is_limited_time_offer && newProduct.offer_duration_days ? parseInt(newProduct.offer_duration_days) : null,
         })
       });
 
@@ -1289,14 +1798,87 @@ export default function AdminScreen() {
         }
       }
 
-      if (typeof window !== 'undefined' && Platform.OS === 'web') {
-        window.alert('تم تحديث المنتج بنجاح');
-      } else {
-        Alert.alert('نجح', 'تم تحديث المنتج بنجاح');
+      // Update product variants
+      // Delete old variants
+      await fetch(`${supabaseUrl}/rest/v1/product_variants?product_id=eq.${editingProduct.id}`, {
+        method: 'DELETE',
+        headers: {
+          'apikey': supabaseKey || '',
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        }
+      });
+
+      // Insert new variants
+      if (productVariants.length > 0) {
+        const variantsToInsert = productVariants.map((variant, index) => ({
+          product_id: editingProduct.id,
+          variant_name: variant.variant_name,
+          color: variant.color,
+          size: variant.size,
+          size_unit: variant.size_unit,
+          material: variant.material,
+          price: variant.price,
+          stock_quantity: variant.stock_quantity,
+          sku: variant.sku,
+          image_url: variant.image_url,
+          is_active: variant.is_active,
+          is_default: variant.is_default,
+          display_order: index,
+        }));
+
+        const variantsResponse = await fetch(`${supabaseUrl}/rest/v1/product_variants`, {
+          method: 'POST',
+          headers: {
+            'apikey': supabaseKey || '',
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=representation'
+          },
+          body: JSON.stringify(variantsToInsert)
+        });
+
+        if (variantsResponse.ok) {
+          const variantsData = await variantsResponse.json();
+          
+          // Link variant images to product_images
+          for (const variant of variantsData) {
+            if (variant.image_url) {
+              // Delete old variant images
+              await fetch(`${supabaseUrl}/rest/v1/product_images?product_id=eq.${editingProduct.id}&variant_id=eq.${variant.id}`, {
+                method: 'DELETE',
+                headers: {
+                  'apikey': supabaseKey || '',
+                  'Authorization': `Bearer ${accessToken}`,
+                  'Content-Type': 'application/json',
+                }
+              });
+              
+              // Add variant image to product_images with variant_id
+              await fetch(`${supabaseUrl}/rest/v1/product_images`, {
+                method: 'POST',
+                headers: {
+                  'apikey': supabaseKey || '',
+                  'Authorization': `Bearer ${accessToken}`,
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  product_id: editingProduct.id,
+                  image_url: variant.image_url,
+                  variant_id: variant.id,
+                  display_order: 0,
+                  is_primary: false,
+                })
+              });
+            }
+          }
+        }
       }
-      
-      cancelEdit();
-      loadData();
+
+      sweetAlert.showSuccess('نجح', 'تم تحديث المنتج بنجاح', () => {
+        cancelEdit();
+        loadData();
+      });
     } catch (error: any) {
       console.error('❌ Error updating product:', error);
       if (typeof window !== 'undefined' && Platform.OS === 'web') {
@@ -1655,7 +2237,7 @@ export default function AdminScreen() {
         {activeTab === 'orders' && (
           <View>
             <View style={styles.gridContainer}>
-              {orders.map((order) => {
+              {orders && orders.length > 0 ? orders.map((order) => {
                 const isEditing = editingOrderId === order.id;
                 const quickEdit = quickEditOrder[order.id] || {};
                 const displayStatus = isEditing ? (quickEdit.status || order.status) : order.status;
@@ -1686,7 +2268,7 @@ export default function AdminScreen() {
                     </View>
 
                     <View style={styles.gridProductPrice}>
-                      <Text style={styles.gridPrice}>{order.total_amount.toFixed(2)} ج.م</Text>
+                      <Text style={styles.gridPrice}>{formatPrice(order.total_amount)} ج.م</Text>
                     </View>
 
                     <View style={styles.gridCardMeta}>
@@ -1702,7 +2284,7 @@ export default function AdminScreen() {
                                     styles.statusOption,
                                     displayStatus === status && styles.statusOptionActive
                                   ]}
-                                  onPress={() => setQuickEditOrder({ ...quickEditOrder, [order.id]: { ...quickEdit, status } })}
+                                  onPress={() => setQuickEditOrder({ ...quickEditOrder, [order.id]: { ...quickEdit, status: status as any } })}
                                 >
                                   <Text style={[styles.statusOptionText, displayStatus === status && styles.statusOptionTextActive]}>
                                     {getStatusText(status)}
@@ -1775,7 +2357,11 @@ export default function AdminScreen() {
                     )}
                   </View>
                 );
-              })}
+              }) : (
+                <View style={{ padding: 20, alignItems: 'center', width: '100%' }}>
+                  <Text style={{ color: '#666', fontSize: 16 }}>لا توجد طلبات</Text>
+                </View>
+              )}
             </View>
           </View>
         )}
@@ -1795,7 +2381,7 @@ export default function AdminScreen() {
                   </View>
 
                   <View style={styles.gridProductPrice}>
-                    <Text style={styles.gridPrice}>{shipment.cost.toFixed(2)} ج.م</Text>
+                    <Text style={styles.gridPrice}>{formatPrice(shipment.cost)} ج.م</Text>
                   </View>
 
                   <View style={styles.gridCardMeta}>
@@ -2001,7 +2587,7 @@ export default function AdminScreen() {
                           </View>
                           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
                             <Ionicons name="cash-outline" size={14} color="#6B7280" />
-                            <Text style={styles.gridCardMetaText}>{item.cost_per_unit.toFixed(2)} ج.م</Text>
+                            <Text style={styles.gridCardMetaText}>{formatPrice(item.cost_per_unit)} ج.م</Text>
                           </View>
                         </>
                       )}
@@ -2222,7 +2808,11 @@ export default function AdminScreen() {
                       <TouchableOpacity
                         key={category.id}
                         style={[styles.categorySelectChip, newProduct.category_id === category.id && styles.categorySelectChipActive]}
-                        onPress={() => setNewProduct({ ...newProduct, category_id: category.id, category: category.name })}
+                        onPress={() => {
+                          setNewProduct({ ...newProduct, category_id: category.id, category: category.name });
+                          // Load category colors and sizes
+                          loadCategoryVariantOptions(category.id);
+                        }}
                       >
                         {category.icon && (
                           <Ionicons name={category.icon as any} size={16} color={newProduct.category_id === category.id ? '#fff' : '#666'} style={{ marginRight: 5 }} />
@@ -2250,6 +2840,50 @@ export default function AdminScreen() {
                   keyboardType="numeric"
                 />
               )}
+
+              {/* Sold Count - عدد القطع المباعة */}
+              <TextInput
+                style={styles.input}
+                placeholder="عدد القطع المباعة (يتم تحديثه تلقائياً عند الطلب)"
+                value={newProduct.sold_count}
+                onChangeText={(text) => setNewProduct({ ...newProduct, sold_count: text })}
+                keyboardType="numeric"
+              />
+              <Text style={styles.helpText}>
+                💡 هذا الرقم يتم تحديثه تلقائياً عند إتمام الطلبات، ولكن يمكنك تعديله يدوياً
+              </Text>
+
+              {/* Limited Time Offer - عرض محدود الوقت */}
+              <View style={styles.selectContainer}>
+                <Text style={styles.selectLabel}>عرض محدود الوقت:</Text>
+                <View style={styles.switchContainer}>
+                  <Text style={styles.switchLabel}>تفعيل عرض محدود الوقت</Text>
+                  <TouchableOpacity
+                    style={[styles.switch, newProduct.is_limited_time_offer && styles.switchActive]}
+                    onPress={() => setNewProduct({ ...newProduct, is_limited_time_offer: !newProduct.is_limited_time_offer })}
+                  >
+                    <View style={[styles.switchThumb, newProduct.is_limited_time_offer && styles.switchThumbActive]} />
+                  </TouchableOpacity>
+                </View>
+                {newProduct.is_limited_time_offer && (
+                  <View style={{ marginTop: 10 }}>
+                    <TextInput
+                      style={styles.input}
+                      placeholder="مدة العرض بالأيام (مثل: 7 أيام)"
+                      value={newProduct.offer_duration_days}
+                      onChangeText={(text) => setNewProduct({ ...newProduct, offer_duration_days: text })}
+                      keyboardType="numeric"
+                    />
+                    <Text style={styles.helpText}>
+                      💡 سيتم حساب تاريخ انتهاء العرض تلقائياً من تاريخ بداية العرض (عند الحفظ)
+                    </Text>
+                    <Text style={styles.helpText}>
+                      ⚠️ عند انتهاء العرض، سيتم إزالة الخصم تلقائياً
+                    </Text>
+                  </View>
+                )}
+              </View>
+
               <TouchableOpacity style={styles.imageButton} onPress={pickImage}>
                 <Text style={styles.imageButtonText}>
                   {productImages.length > 0 ? `تم رفع ${productImages.length} صورة` : 'اختر صور (متعددة)'}
@@ -2290,6 +2924,202 @@ export default function AdminScreen() {
                   </ScrollView>
                 </View>
               )}
+
+              {/* Product Variants Management - إدارة الألوان والمقاسات */}
+              <View style={styles.variantsSection}>
+                <Text style={styles.sectionTitle}>الألوان والمقاسات (Variants)</Text>
+                <Text style={styles.helpText}>
+                  💡 يمكنك إضافة ألوان ومقاسات مختلفة للمنتج. كل لون يمكن أن يكون له صور خاصة به.
+                </Text>
+                
+                {/* Variants List */}
+                {productVariants.length > 0 && (
+                  <View style={styles.variantsList}>
+                    {productVariants.map((variant) => (
+                      <View key={variant.id} style={styles.variantCard}>
+                        <View style={styles.variantHeader}>
+                          <View style={styles.variantInfo}>
+                            {variant.color && (
+                              <View style={styles.variantColorBadge}>
+                                <Text style={styles.variantColorText}>{variant.color}</Text>
+                              </View>
+                            )}
+                            {variant.size && (
+                              <Text style={styles.variantSizeText}>
+                                {variant.size} {variant.size_unit ? `(${variant.size_unit})` : ''}
+                              </Text>
+                            )}
+                            {variant.price && (
+                              <Text style={styles.variantPriceText}>{formatPrice(variant.price)} ج.م</Text>
+                            )}
+                            <Text style={styles.variantStockText}>مخزون: {variant.stock_quantity}</Text>
+                          </View>
+                          <TouchableOpacity
+                            style={styles.variantDeleteButton}
+                            onPress={() => deleteVariant(variant.id)}
+                          >
+                            <Ionicons name="trash-outline" size={16} color="#f44336" />
+                          </TouchableOpacity>
+                        </View>
+                        {variant.image_url && (
+                          <Image source={{ uri: variant.image_url }} style={styles.variantImage} />
+                        )}
+                      </View>
+                    ))}
+                  </View>
+                )}
+
+                {/* Add New Variant Form */}
+                <View style={styles.addVariantForm}>
+                  <Text style={styles.formSubTitle}>إضافة متغير جديد</Text>
+                  
+                  {/* Color Selection - اختيار اللون من الاقتراحات */}
+                  <View style={styles.selectContainer}>
+                    <Text style={styles.selectLabel}>اللون:</Text>
+                    {categoryColors.length > 0 ? (
+                      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.variantOptionsList}>
+                        {categoryColors.map((color) => (
+                          <TouchableOpacity
+                            key={color.id}
+                            style={[
+                              styles.variantOptionChip,
+                              newVariant.color === color.color_name && styles.variantOptionChipActive
+                            ]}
+                            onPress={() => setNewVariant({ ...newVariant, color: color.color_name })}
+                          >
+                            {color.color_hex && (
+                              <View style={[styles.colorCircle, { backgroundColor: color.color_hex }]} />
+                            )}
+                            <Text style={[
+                              styles.variantOptionChipText,
+                              newVariant.color === color.color_name && styles.variantOptionChipTextActive
+                            ]}>
+                              {color.color_name}
+                            </Text>
+                          </TouchableOpacity>
+                        ))}
+                      </ScrollView>
+                    ) : (
+                      <Text style={styles.helpText}>
+                        ⚠️ لا توجد ألوان محددة لهذه الفئة. يمكنك إضافة لون جديد أدناه أو إدارتها من تبويب "الفئات"
+                      </Text>
+                    )}
+                    {showColorInput ? (
+                      <TextInput
+                        style={styles.input}
+                        placeholder="أضف لون جديد"
+                        value={newVariant.color}
+                        onChangeText={(text) => setNewVariant({ ...newVariant, color: text })}
+                      />
+                    ) : (
+                      <TouchableOpacity
+                        style={styles.addNewButton}
+                        onPress={() => setShowColorInput(true)}
+                      >
+                        <Ionicons name="add-circle-outline" size={18} color="#10B981" />
+                        <Text style={styles.addNewButtonText}>إضافة لون جديد</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+
+                  {/* Size Selection - اختيار المقاس من الاقتراحات */}
+                  <View style={styles.selectContainer}>
+                    <Text style={styles.selectLabel}>المقاس:</Text>
+                    {categorySizes.length > 0 ? (
+                      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.variantOptionsList}>
+                        {categorySizes.map((size) => (
+                          <TouchableOpacity
+                            key={size.id}
+                            style={[
+                              styles.variantOptionChip,
+                              newVariant.size === size.size_value && newVariant.size_unit === size.size_unit && styles.variantOptionChipActive
+                            ]}
+                            onPress={() => setNewVariant({ 
+                              ...newVariant, 
+                              size: size.size_value,
+                              size_unit: size.size_unit || ''
+                            })}
+                          >
+                            <Text style={[
+                              styles.variantOptionChipText,
+                              newVariant.size === size.size_value && newVariant.size_unit === size.size_unit && styles.variantOptionChipTextActive
+                            ]}>
+                              {size.size_value} {size.size_unit ? `(${size.size_unit})` : ''}
+                            </Text>
+                          </TouchableOpacity>
+                        ))}
+                      </ScrollView>
+                    ) : (
+                      <Text style={styles.helpText}>
+                        ⚠️ لا توجد مقاسات محددة لهذه الفئة. يمكنك إضافة مقاس جديد أدناه أو إدارتها من تبويب "الفئات"
+                      </Text>
+                    )}
+                    {showSizeInput ? (
+                      <View style={styles.sizeInputRow}>
+                        <TextInput
+                          style={[styles.input, { flex: 2, marginRight: 10 }]}
+                          placeholder="المقاس (مثل: L, 42, 100x200)"
+                          value={newVariant.size}
+                          onChangeText={(text) => setNewVariant({ ...newVariant, size: text })}
+                        />
+                        <TextInput
+                          style={[styles.input, { flex: 1 }]}
+                          placeholder="وحدة القياس (مثل: مقاس، رقم، سم)"
+                          value={newVariant.size_unit}
+                          onChangeText={(text) => setNewVariant({ ...newVariant, size_unit: text })}
+                        />
+                      </View>
+                    ) : (
+                      <TouchableOpacity
+                        style={styles.addNewButton}
+                        onPress={() => setShowSizeInput(true)}
+                      >
+                        <Ionicons name="add-circle-outline" size={18} color="#10B981" />
+                        <Text style={styles.addNewButtonText}>إضافة مقاس جديد</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="السعر (اختياري - إذا كان مختلف عن سعر المنتج)"
+                    value={newVariant.price}
+                    onChangeText={(text) => setNewVariant({ ...newVariant, price: text })}
+                    keyboardType="numeric"
+                  />
+                  {newProduct.source_type === 'warehouse' && (
+                    <TextInput
+                      style={styles.input}
+                      placeholder="الكمية في المخزن"
+                      value={newVariant.stock_quantity}
+                      onChangeText={(text) => setNewVariant({ ...newVariant, stock_quantity: text })}
+                      keyboardType="numeric"
+                    />
+                  )}
+                  <TextInput
+                    style={styles.input}
+                    placeholder="SKU (اختياري)"
+                    value={newVariant.sku}
+                    onChangeText={(text) => setNewVariant({ ...newVariant, sku: text })}
+                  />
+                  <TouchableOpacity 
+                    style={styles.imageButton} 
+                    onPress={() => pickVariantImage()}
+                  >
+                    <Text style={styles.imageButtonText}>
+                      {newVariant.image_url ? 'تم رفع صورة' : 'اختر صورة لهذا اللون'}
+                    </Text>
+                  </TouchableOpacity>
+                  {newVariant.image_url && (
+                    <Image source={{ uri: newVariant.image_url }} style={styles.variantImagePreview} />
+                  )}
+                  <TouchableOpacity
+                    style={styles.addVariantButton}
+                    onPress={addVariant}
+                  >
+                    <Text style={styles.addVariantButtonText}>إضافة متغير</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
               
               <TouchableOpacity
                 style={styles.submitButton}
@@ -2302,7 +3132,7 @@ export default function AdminScreen() {
             </View>
 
             <View style={styles.gridContainer}>
-              {products.map((product) => {
+              {products && products.length > 0 ? products.map((product) => {
                 const isEditing = editingProductId === product.id;
                 const quickEdit = quickEditProduct[product.id] || {};
                 const displayName = isEditing ? (quickEdit.name !== undefined ? quickEdit.name : product.name) : product.name;
@@ -2350,7 +3180,7 @@ export default function AdminScreen() {
                       {isEditing ? (
                         <TextInput
                           style={styles.inlineInputSmall}
-                          value={displayPrice.toString()}
+                          value={typeof displayPrice === 'number' && !isNaN(displayPrice) ? displayPrice.toString() : ''}
                           onChangeText={(text) => setQuickEditProduct({ ...quickEditProduct, [product.id]: { ...quickEdit, price: parseFloat(text) || 0 } })}
                           placeholder="السعر"
                           keyboardType="numeric"
@@ -2359,14 +3189,14 @@ export default function AdminScreen() {
                         <>
                           {product.original_price && product.original_price > product.price ? (
                             <View>
-                              <Text style={styles.gridOriginalPrice}>{product.original_price.toFixed(2)} ج.م</Text>
-                              <Text style={styles.gridDiscountPrice}>{product.price.toFixed(2)} ج.م</Text>
+                              <Text style={styles.gridOriginalPrice}>{formatPrice(product.original_price)} ج.م</Text>
+                              <Text style={styles.gridDiscountPrice}>{formatPrice(product.price)} ج.م</Text>
                               {product.discount_percentage && (
                                 <Text style={styles.gridDiscountBadge}>-{product.discount_percentage}%</Text>
                               )}
                             </View>
                           ) : (
-                            <Text style={styles.gridPrice}>{product.price.toFixed(2)} ج.م</Text>
+                            <Text style={styles.gridPrice}>{formatPrice(product.price)} ج.م</Text>
                           )}
                         </>
                       )}
@@ -2376,7 +3206,7 @@ export default function AdminScreen() {
                       {isEditing ? (
                         <TextInput
                           style={styles.inlineInputSmall}
-                          value={displayStock.toString()}
+                          value={typeof displayStock === 'number' && !isNaN(displayStock) ? displayStock.toString() : ''}
                           onChangeText={(text) => setQuickEditProduct({ ...quickEditProduct, [product.id]: { ...quickEdit, stock_quantity: parseInt(text) || 0 } })}
                           placeholder="المخزون"
                           keyboardType="numeric"
@@ -2391,6 +3221,35 @@ export default function AdminScreen() {
                         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
                           <Ionicons name="pricetag-outline" size={12} color="#6B7280" />
                           <Text style={styles.gridCardMetaText} numberOfLines={1}>{product.category}</Text>
+                        </View>
+                      )}
+                      {product.sku && !isEditing && (
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                          <Ionicons name="barcode-outline" size={12} color="#6B7280" />
+                          <Text style={styles.gridCardMetaText} numberOfLines={1}>SKU: {product.sku}</Text>
+                        </View>
+                      )}
+                      {product.source_type && !isEditing && (
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                          <Ionicons 
+                            name={product.source_type === 'warehouse' ? 'cube-outline' : 'globe-outline'} 
+                            size={12} 
+                            color={product.source_type === 'warehouse' ? '#10B981' : '#FF9800'} 
+                          />
+                          <Text style={[
+                            styles.gridCardMetaText,
+                            { color: product.source_type === 'warehouse' ? '#10B981' : '#FF9800' }
+                          ]}>
+                            {product.source_type === 'warehouse' ? 'مخزن' : 'خارجي'}
+                          </Text>
+                        </View>
+                      )}
+                      {product.category_data?.section_data && !isEditing && (
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                          <Ionicons name="folder-outline" size={12} color="#6B7280" />
+                          <Text style={styles.gridCardMetaText} numberOfLines={1}>
+                            القسم: {product.category_data.section_data.name}
+                          </Text>
                         </View>
                       )}
                     </View>
@@ -2469,7 +3328,11 @@ export default function AdminScreen() {
                     )}
                   </View>
                 );
-              })}
+              }) : (
+                <View style={{ padding: 20, alignItems: 'center', width: '100%' }}>
+                  <Text style={{ color: '#666', fontSize: 16 }}>لا توجد منتجات</Text>
+                </View>
+              )}
             </View>
           </View>
         )}
@@ -2713,7 +3576,10 @@ export default function AdminScreen() {
 
                     {category.section_id && !isEditing && (
                       <Text style={styles.gridCardSection}>
-                        القسم: {category.section_data?.name || sections.find(s => s.id === category.section_id)?.name || 'غير معروف'}
+                        القسم: {(() => {
+                          const sectionName = category.section_data?.name || sections.find(s => s.id === category.section_id)?.name;
+                          return sectionName || 'غير معروف';
+                        })()}
                       </Text>
                     )}
 
@@ -2742,6 +3608,20 @@ export default function AdminScreen() {
                         </Text>
                       </TouchableOpacity>
                     </View>
+
+                    {/* Manage Variants Button */}
+                    {!isEditing && (
+                      <TouchableOpacity
+                        style={styles.manageVariantsButton}
+                        onPress={() => {
+                          setSelectedCategoryForVariants(category.id);
+                          loadCategoryVariantsForManagement(category.id);
+                        }}
+                      >
+                        <Ionicons name="color-palette-outline" size={16} color="#6366F1" />
+                        <Text style={styles.manageVariantsButtonText}>إدارة الألوان والمقاسات</Text>
+                      </TouchableOpacity>
+                    )}
 
                     {isEditing && (
                       <View style={styles.quickEditActions}>
@@ -2810,6 +3690,151 @@ export default function AdminScreen() {
                 );
               })}
             </View>
+
+            {/* Category Variants Management Modal */}
+            {selectedCategoryForVariants && (
+              <View style={styles.modalOverlay}>
+                <View style={styles.modalContent}>
+                  <View style={styles.modalHeader}>
+                    <Text style={styles.modalTitle}>
+                      إدارة الألوان والمقاسات - {categories.find(c => c.id === selectedCategoryForVariants)?.name}
+                    </Text>
+                    <TouchableOpacity
+                      style={styles.modalCloseButton}
+                      onPress={() => {
+                        setSelectedCategoryForVariants(null);
+                        setCategoryColorsList([]);
+                        setCategorySizesList([]);
+                      }}
+                    >
+                      <Ionicons name="close" size={24} color="#666" />
+                    </TouchableOpacity>
+                  </View>
+
+                  <ScrollView style={styles.modalBody}>
+                    {/* Colors Management */}
+                    <View style={styles.variantsManagementSection}>
+                      <Text style={styles.sectionTitle}>الألوان</Text>
+                      
+                      {/* Add New Color */}
+                      <View style={styles.addVariantForm}>
+                        <TextInput
+                          style={styles.input}
+                          placeholder="اسم اللون (مثل: أحمر، أسود)"
+                          value={newCategoryColor.color_name}
+                          onChangeText={(text) => setNewCategoryColor({ ...newCategoryColor, color_name: text })}
+                        />
+                        <TextInput
+                          style={styles.input}
+                          placeholder="كود اللون (مثل: #FF0000) - اختياري"
+                          value={newCategoryColor.color_hex}
+                          onChangeText={(text) => setNewCategoryColor({ ...newCategoryColor, color_hex: text })}
+                        />
+                        <TextInput
+                          style={styles.input}
+                          placeholder="ترتيب العرض"
+                          value={newCategoryColor.display_order}
+                          onChangeText={(text) => setNewCategoryColor({ ...newCategoryColor, display_order: text })}
+                          keyboardType="numeric"
+                        />
+                        <TouchableOpacity
+                          style={styles.addVariantButton}
+                          onPress={addCategoryColor}
+                        >
+                          <Text style={styles.addVariantButtonText}>إضافة لون</Text>
+                        </TouchableOpacity>
+                      </View>
+
+                      {/* Colors List */}
+                      {categoryColorsList.length > 0 && (
+                        <View style={styles.variantsList}>
+                          {categoryColorsList.map((color) => (
+                            <View key={color.id} style={styles.variantCard}>
+                              <View style={styles.variantHeader}>
+                                <View style={styles.variantInfo}>
+                                  {color.color_hex && (
+                                    <View style={[styles.colorCircle, { backgroundColor: color.color_hex }]} />
+                                  )}
+                                  <Text style={styles.variantColorText}>{color.color_name}</Text>
+                                  {color.color_hex && (
+                                    <Text style={styles.variantColorText}>({color.color_hex})</Text>
+                                  )}
+                                  <Text style={styles.variantStockText}>ترتيب: {color.display_order}</Text>
+                                </View>
+                                <TouchableOpacity
+                                  style={styles.variantDeleteButton}
+                                  onPress={() => deleteCategoryColor(color.id)}
+                                >
+                                  <Ionicons name="trash-outline" size={16} color="#f44336" />
+                                </TouchableOpacity>
+                              </View>
+                            </View>
+                          ))}
+                        </View>
+                      )}
+                    </View>
+
+                    {/* Sizes Management */}
+                    <View style={styles.variantsManagementSection}>
+                      <Text style={styles.sectionTitle}>المقاسات</Text>
+                      
+                      {/* Add New Size */}
+                      <View style={styles.addVariantForm}>
+                        <TextInput
+                          style={styles.input}
+                          placeholder="قيمة المقاس (مثل: L, 42, 100x200)"
+                          value={newCategorySize.size_value}
+                          onChangeText={(text) => setNewCategorySize({ ...newCategorySize, size_value: text })}
+                        />
+                        <TextInput
+                          style={styles.input}
+                          placeholder="وحدة القياس (مثل: مقاس، رقم، سم) - اختياري"
+                          value={newCategorySize.size_unit}
+                          onChangeText={(text) => setNewCategorySize({ ...newCategorySize, size_unit: text })}
+                        />
+                        <TextInput
+                          style={styles.input}
+                          placeholder="ترتيب العرض"
+                          value={newCategorySize.display_order}
+                          onChangeText={(text) => setNewCategorySize({ ...newCategorySize, display_order: text })}
+                          keyboardType="numeric"
+                        />
+                        <TouchableOpacity
+                          style={styles.addVariantButton}
+                          onPress={addCategorySize}
+                        >
+                          <Text style={styles.addVariantButtonText}>إضافة مقاس</Text>
+                        </TouchableOpacity>
+                      </View>
+
+                      {/* Sizes List */}
+                      {categorySizesList.length > 0 && (
+                        <View style={styles.variantsList}>
+                          {categorySizesList.map((size) => (
+                            <View key={size.id} style={styles.variantCard}>
+                              <View style={styles.variantHeader}>
+                                <View style={styles.variantInfo}>
+                                  <Text style={styles.variantSizeText}>
+                                    {size.size_value} {size.size_unit ? `(${size.size_unit})` : ''}
+                                  </Text>
+                                  <Text style={styles.variantStockText}>ترتيب: {size.display_order}</Text>
+                                </View>
+                                <TouchableOpacity
+                                  style={styles.variantDeleteButton}
+                                  onPress={() => deleteCategorySize(size.id)}
+                                >
+                                  <Ionicons name="trash-outline" size={16} color="#f44336" />
+                                </TouchableOpacity>
+                              </View>
+                            </View>
+                          ))}
+                        </View>
+                      )}
+                    </View>
+                  </ScrollView>
+                </View>
+              </View>
+            )}
           </View>
         )}
 
@@ -3910,6 +4935,227 @@ const styles = StyleSheet.create({
   categorySelectChipTextActive: {
     color: '#fff',
     fontWeight: 'bold',
+  },
+  // Variants styles
+  variantsSection: {
+    marginTop: 20,
+    padding: 15,
+    backgroundColor: '#F9FAFB',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#1F2937',
+    marginBottom: 10,
+  },
+  formSubTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#374151',
+    marginBottom: 15,
+    marginTop: 10,
+  },
+  variantsList: {
+    marginBottom: 20,
+    gap: 10,
+  },
+  variantCard: {
+    backgroundColor: '#fff',
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    marginBottom: 10,
+  },
+  variantHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  variantInfo: {
+    flex: 1,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 8,
+  },
+  variantColorBadge: {
+    backgroundColor: '#EE1C47',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  variantColorText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  variantSizeText: {
+    fontSize: 14,
+    color: '#374151',
+    fontWeight: '500',
+  },
+  variantPriceText: {
+    fontSize: 14,
+    color: '#EE1C47',
+    fontWeight: '600',
+  },
+  variantStockText: {
+    fontSize: 12,
+    color: '#6B7280',
+  },
+  variantDeleteButton: {
+    padding: 8,
+  },
+  variantImage: {
+    width: '100%',
+    height: 150,
+    borderRadius: 8,
+    marginTop: 8,
+  },
+  variantImagePreview: {
+    width: '100%',
+    height: 200,
+    borderRadius: 8,
+    marginTop: 10,
+    marginBottom: 10,
+  },
+  sizeInputRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  addVariantButton: {
+    backgroundColor: '#10B981',
+    padding: 15,
+    borderRadius: 8,
+    alignItems: 'center',
+    marginTop: 10,
+  },
+  addVariantButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  variantOptionsList: {
+    flexDirection: 'row',
+    marginBottom: 10,
+  },
+  variantOptionChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
+    backgroundColor: '#F3F4F6',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    marginRight: 8,
+    marginBottom: 8,
+  },
+  variantOptionChipActive: {
+    backgroundColor: '#EE1C47',
+    borderColor: '#EE1C47',
+  },
+  variantOptionChipText: {
+    fontSize: 14,
+    color: '#374151',
+    fontWeight: '500',
+  },
+  variantOptionChipTextActive: {
+    color: '#fff',
+    fontWeight: '600',
+  },
+  colorCircle: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    marginRight: 6,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  addNewButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 10,
+    borderRadius: 8,
+    backgroundColor: '#F0FDF4',
+    borderWidth: 1,
+    borderColor: '#10B981',
+    marginTop: 8,
+  },
+  addNewButtonText: {
+    fontSize: 14,
+    color: '#10B981',
+    fontWeight: '600',
+    marginLeft: 6,
+  },
+  manageVariantsButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 10,
+    marginTop: 10,
+    borderRadius: 8,
+    backgroundColor: '#EEF2FF',
+    borderWidth: 1,
+    borderColor: '#6366F1',
+  },
+  manageVariantsButtonText: {
+    fontSize: 14,
+    color: '#6366F1',
+    fontWeight: '600',
+    marginLeft: 6,
+  },
+  modalOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1000,
+  },
+  modalContent: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    width: '90%',
+    maxWidth: 600,
+    maxHeight: '80%',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#1F2937',
+    flex: 1,
+  },
+  modalCloseButton: {
+    padding: 5,
+  },
+  modalBody: {
+    padding: 20,
+    maxHeight: '70vh',
+  },
+  variantsManagementSection: {
+    marginBottom: 30,
   },
 });
 
