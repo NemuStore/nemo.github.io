@@ -66,37 +66,83 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- 6. دالة لتحديث عدد القطع المباعة عند الطلب
-CREATE OR REPLACE FUNCTION update_product_sold_count()
+-- 6. دالة لتحديث عدد القطع المباعة عند إضافة عنصر طلب
+CREATE OR REPLACE FUNCTION update_product_sold_count_from_order_item()
 RETURNS TRIGGER AS $$
+DECLARE
+  order_status TEXT;
 BEGIN
-  -- تحديث عدد القطع المباعة لكل منتج في الطلب
-  IF TG_OP = 'INSERT' THEN
-    -- عند إنشاء طلب جديد، نزيد عدد القطع المباعة
+  -- الحصول على حالة الطلب
+  SELECT status INTO order_status
+  FROM public.orders
+  WHERE id = NEW.order_id;
+  
+  -- تحديث عدد القطع المباعة فقط إذا كان الطلب مؤكد أو مكتمل
+  IF order_status = 'completed' OR order_status = 'confirmed' THEN
     UPDATE public.products
-    SET sold_count = sold_count + (
-      SELECT COALESCE(SUM(quantity), 0)
-      FROM jsonb_array_elements(NEW.items::jsonb) AS item
-      WHERE (item->>'product_id')::uuid = products.id
-    )
-    WHERE id IN (
-      SELECT DISTINCT (item->>'product_id')::uuid
-      FROM jsonb_array_elements(NEW.items::jsonb) AS item
-    );
+    SET sold_count = sold_count + NEW.quantity
+    WHERE id = NEW.product_id;
   END IF;
+  
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
--- 7. Trigger لتحديث عدد القطع المباعة
-DROP TRIGGER IF EXISTS trigger_update_product_sold_count ON public.orders;
-CREATE TRIGGER trigger_update_product_sold_count
-  AFTER INSERT ON public.orders
-  FOR EACH ROW
-  WHEN (NEW.status = 'completed' OR NEW.status = 'confirmed')
-  EXECUTE FUNCTION update_product_sold_count();
+-- 7. دالة لتحديث عدد القطع المباعة عند تغيير حالة الطلب
+CREATE OR REPLACE FUNCTION update_product_sold_count_on_order_status_change()
+RETURNS TRIGGER AS $$
+BEGIN
+  -- إذا تم تغيير الحالة إلى 'completed' أو 'confirmed'
+  IF (NEW.status = 'completed' OR NEW.status = 'confirmed') 
+     AND (OLD.status IS NULL OR (OLD.status != 'completed' AND OLD.status != 'confirmed')) THEN
+    -- زيادة عدد القطع المباعة لكل منتج في الطلب
+    UPDATE public.products
+    SET sold_count = sold_count + (
+      SELECT COALESCE(SUM(oi.quantity), 0)
+      FROM public.order_items oi
+      WHERE oi.order_id = NEW.id AND oi.product_id = products.id
+    )
+    WHERE id IN (
+      SELECT DISTINCT product_id
+      FROM public.order_items
+      WHERE order_id = NEW.id
+    );
+  -- إذا تم تغيير الحالة من 'completed' أو 'confirmed' إلى حالة أخرى
+  ELSIF (OLD.status = 'completed' OR OLD.status = 'confirmed')
+        AND (NEW.status != 'completed' AND NEW.status != 'confirmed') THEN
+    -- تقليل عدد القطع المباعة (في حالة الإلغاء)
+    UPDATE public.products
+    SET sold_count = GREATEST(0, sold_count - (
+      SELECT COALESCE(SUM(oi.quantity), 0)
+      FROM public.order_items oi
+      WHERE oi.order_id = NEW.id AND oi.product_id = products.id
+    ))
+    WHERE id IN (
+      SELECT DISTINCT product_id
+      FROM public.order_items
+      WHERE order_id = NEW.id
+    );
+  END IF;
+  
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
 
--- 8. فهرس لتحسين البحث عن العروض النشطة
+-- 8. Trigger لتحديث عدد القطع المباعة عند إضافة عنصر طلب
+DROP TRIGGER IF EXISTS trigger_update_product_sold_count_from_order_item ON public.order_items;
+CREATE TRIGGER trigger_update_product_sold_count_from_order_item
+  AFTER INSERT ON public.order_items
+  FOR EACH ROW
+  EXECUTE FUNCTION update_product_sold_count_from_order_item();
+
+-- 9. Trigger لتحديث عدد القطع المباعة عند تغيير حالة الطلب
+DROP TRIGGER IF EXISTS trigger_update_product_sold_count_on_order_status_change ON public.orders;
+CREATE TRIGGER trigger_update_product_sold_count_on_order_status_change
+  AFTER UPDATE OF status ON public.orders
+  FOR EACH ROW
+  EXECUTE FUNCTION update_product_sold_count_on_order_status_change();
+
+-- 10. فهرس لتحسين البحث عن العروض النشطة
 CREATE INDEX IF NOT EXISTS idx_products_limited_offer ON public.products(is_limited_time_offer, offer_end_date) 
 WHERE is_limited_time_offer = true;
 

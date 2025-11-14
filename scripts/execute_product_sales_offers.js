@@ -2,44 +2,70 @@ require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
 
-const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL;
-const SUPABASE_TOKEN = process.env.EXPO_SUPABASE_TOKEN;
-
-if (!SUPABASE_URL || !SUPABASE_TOKEN) {
-  console.error('❌ Missing environment variables:');
-  console.error(`EXPO_PUBLIC_SUPABASE_URL: ${SUPABASE_URL ? '✓' : '✗'}`);
-  console.error(`EXPO_SUPABASE_TOKEN: ${SUPABASE_TOKEN ? '✓' : '✗'}`);
-  process.exit(1);
-}
-
-async function executeSQL() {
-  const sqlFile = path.join(__dirname, '../supabase/add_product_sales_and_offers.sql');
-  const sql = fs.readFileSync(sqlFile, 'utf8');
-
+async function executeProductSalesOffers() {
   try {
-    console.log('📡 Executing SQL migration: add_product_sales_and_offers.sql');
+    const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+    const supabaseToken = process.env.EXPO_SUPABASE_TOKEN;
+
+    if (!supabaseUrl || !supabaseToken) {
+      console.error('❌ Missing environment variables:');
+      console.error('   EXPO_PUBLIC_SUPABASE_URL:', supabaseUrl ? '✓' : '✗');
+      console.error('   EXPO_SUPABASE_TOKEN:', supabaseToken ? '✓' : '✗');
+      process.exit(1);
+    }
+
+    // Extract project reference from URL
+    const projectRef = supabaseUrl.split('//')[1]?.split('.')[0];
+    if (!projectRef) {
+      console.error('❌ Could not extract project reference from URL');
+      process.exit(1);
+    }
+
+    console.log('📦 Project Reference:', projectRef);
+    console.log('🔗 Supabase URL:', supabaseUrl);
+
+    // Read SQL file
+    const sqlFilePath = path.join(__dirname, '../supabase/add_product_sales_and_offers.sql');
+    const sql = fs.readFileSync(sqlFilePath, 'utf8');
+
+    console.log('📄 SQL file read successfully');
+    console.log('📊 SQL size:', sql.length, 'characters');
+
+    // Execute SQL using Supabase Management API
+    const managementApiUrl = `https://api.supabase.com/v1/projects/${projectRef}/database/query`;
     
-    const response = await fetch(`${SUPABASE_URL}/rest/v1/rpc/exec_sql`, {
+    console.log('🚀 Executing SQL migration for product sales and offers...');
+    
+    const response = await fetch(managementApiUrl, {
       method: 'POST',
       headers: {
+        'Authorization': `Bearer ${supabaseToken}`,
         'Content-Type': 'application/json',
-        'apikey': SUPABASE_TOKEN,
-        'Authorization': `Bearer ${SUPABASE_TOKEN}`,
       },
-      body: JSON.stringify({ sql }),
+      body: JSON.stringify({
+        query: sql,
+      }),
     });
 
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(`Status: ${response.status} Response: ${errorText}`);
+      console.error('❌ Error executing SQL:');
+      console.error('   Status:', response.status);
+      console.error('   Response:', errorText);
+      process.exit(1);
     }
 
-    console.log('✅ SQL migration executed successfully!');
+    const result = await response.json();
+    console.log('✅ SQL executed successfully!');
+    console.log('📊 Result:', JSON.stringify(result, null, 2));
+    console.log('✅ Product sales and offers fields added successfully!');
+
   } catch (error) {
-    console.error('❌ Error executing SQL:', error.message);
+    console.error('❌ Error:', error.message);
+    console.error(error);
     process.exit(1);
   }
 }
 
-executeSQL();
+executeProductSalesOffers();
 
