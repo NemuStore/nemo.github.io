@@ -381,7 +381,7 @@ export default function HomeScreen() {
                         </Text>
                       )}
                     </View>
-                    {product.stock_quantity === 0 && (
+                    {product.source_type !== 'external' && product.source_type && product.stock_quantity === 0 && (
                       <Text style={styles.outOfStock}>غير متوفر</Text>
                     )}
                   </View>

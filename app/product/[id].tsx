@@ -73,18 +73,21 @@ export default function ProductDetailScreen() {
 
   const loadProduct = async () => {
     let timeoutId: NodeJS.Timeout | null = null;
+    let productLoaded = false;
     
     try {
       console.log('📦 Loading product:', id);
       setLoading(true);
       
-      // Add timeout
+      // Add timeout (increased to 30 seconds for slow connections)
       timeoutId = setTimeout(() => {
-        console.warn('⚠️ Product load timeout');
-        setLoading(false);
-        Alert.alert('خطأ', 'استغرق التحميل وقتاً طويلاً');
-        router.back();
-      }, 10000);
+        if (!productLoaded) {
+          console.warn('⚠️ Product load timeout');
+          setLoading(false);
+          Alert.alert('خطأ', 'استغرق التحميل وقتاً طويلاً');
+          router.back();
+        }
+      }, 30000);
       
       // Use fetch for web compatibility
       const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
@@ -112,7 +115,10 @@ export default function ProductDetailScreen() {
       
       if (data && data.length > 0) {
         const productData = data[0];
+        console.log('📦 Product data:', JSON.stringify(productData, null, 2));
+        productLoaded = true; // Mark as loaded BEFORE setting product
         setProduct(productData);
+        setLoading(false); // Stop loading immediately after setting product
         
         // Load product images (if table exists)
         console.log('📸 Fetching product images...');
@@ -178,17 +184,17 @@ export default function ProductDetailScreen() {
           }
         }
         
-        // Load variants
-        await loadVariants(id, supabaseUrl, supabaseKey);
+        // Load variants (non-blocking)
+        loadVariants(id, supabaseUrl, supabaseKey).catch(err => console.warn('Variants load error:', err));
         
-        // Load FAQs
-        await loadFAQs(id, supabaseUrl, supabaseKey);
+        // Load FAQs (non-blocking)
+        loadFAQs(id, supabaseUrl, supabaseKey).catch(err => console.warn('FAQs load error:', err));
         
-        // Load related products
-        await loadRelatedProducts(id, supabaseUrl, supabaseKey);
+        // Load related products (non-blocking)
+        loadRelatedProducts(id, supabaseUrl, supabaseKey).catch(err => console.warn('Related products load error:', err));
         
-        // Check wishlist status
-        await checkWishlistStatus(id, supabaseUrl, supabaseKey);
+        // Check wishlist status (non-blocking)
+        checkWishlistStatus(id, supabaseUrl, supabaseKey).catch(err => console.warn('Wishlist check error:', err));
       } else {
         console.warn('⚠️ Product not found');
         Alert.alert('خطأ', 'المنتج غير موجود');
@@ -204,7 +210,11 @@ export default function ProductDetailScreen() {
       router.back();
     } finally {
       if (timeoutId) clearTimeout(timeoutId);
-      setLoading(false);
+      // setLoading(false) is called after product is loaded, so we don't need it here
+      // Only set loading to false if product wasn't loaded
+      if (!productLoaded) {
+        setLoading(false);
+      }
       console.log('✅ Loading finished');
     }
   };
@@ -391,7 +401,8 @@ export default function ProductDetailScreen() {
       const finalPrice = selectedVariant?.price || product.price;
       const finalStock = selectedVariant?.stock_quantity ?? product.stock_quantity;
       
-      if (finalStock === 0) {
+      // لا نتحقق من المخزون للمنتجات من الخارج
+      if (product.source_type !== 'external' && product.source_type && finalStock === 0) {
         Alert.alert('تنبيه', 'هذا المتغير غير متوفر حالياً');
         return;
       }
@@ -561,7 +572,10 @@ export default function ProductDetailScreen() {
             )}
           </View>
           <View style={styles.stockInfo}>
-            {(selectedVariant?.stock_quantity ?? product.stock_quantity) > 0 ? (
+            {product.source_type === 'external' || !product.source_type ? (
+              // المنتجات من الخارج لا تعرض حالة التوفر
+              null
+            ) : (selectedVariant?.stock_quantity ?? product.stock_quantity) > 0 ? (
               <Text style={styles.stock}>
                 متوفر ({(selectedVariant?.stock_quantity ?? product.stock_quantity)} قطعة)
               </Text>
@@ -680,13 +694,17 @@ export default function ProductDetailScreen() {
         <TouchableOpacity
           style={[
             styles.addToCartButton,
-            (selectedVariant?.stock_quantity ?? product.stock_quantity) === 0 && styles.addToCartButtonDisabled,
+            (product.source_type !== 'external' && product.source_type) && (selectedVariant?.stock_quantity ?? product.stock_quantity) === 0 && styles.addToCartButtonDisabled,
           ]}
           onPress={handleAddToCart}
-          disabled={(selectedVariant?.stock_quantity ?? product.stock_quantity) === 0}
+          disabled={(product.source_type !== 'external' && product.source_type) && (selectedVariant?.stock_quantity ?? product.stock_quantity) === 0}
         >
           <Text style={styles.addToCartButtonText}>
-            {(selectedVariant?.stock_quantity ?? product.stock_quantity) === 0 ? 'غير متوفر' : 'أضف للسلة'}
+            {(product.source_type === 'external' || !product.source_type)
+              ? 'أضف للسلة' 
+              : (selectedVariant?.stock_quantity ?? product.stock_quantity) === 0 
+                ? 'غير متوفر' 
+                : 'أضف للسلة'}
           </Text>
         </TouchableOpacity>
         </View>
