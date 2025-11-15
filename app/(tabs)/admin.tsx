@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -133,6 +133,17 @@ export default function AdminScreen() {
     cost: '',
     order_ids: [] as string[],
   });
+  
+  // Products filtering and sorting
+  const [productSearchQuery, setProductSearchQuery] = useState('');
+  const [productFilterSection, setProductFilterSection] = useState<string | null>(null);
+  const [productFilterCategory, setProductFilterCategory] = useState<string | null>(null);
+  const [productFilterSource, setProductFilterSource] = useState<'all' | 'warehouse' | 'external'>('all');
+  const [productSortBy, setProductSortBy] = useState<'date' | 'name' | 'price' | 'stock'>('date');
+  const [productSortOrder, setProductSortOrder] = useState<'asc' | 'desc'>('desc');
+  const [productCurrentPage, setProductCurrentPage] = useState(1);
+  const [productsPerPage] = useState(12);
+  const [productVariantsCount, setProductVariantsCount] = useState<{ [key: string]: number }>({});
 
   useEffect(() => {
     checkUserRole();
@@ -143,6 +154,90 @@ export default function AdminScreen() {
       loadData();
     }
   }, [user, activeTab]);
+
+  // Reset page when filters change
+  useEffect(() => {
+    setProductCurrentPage(1);
+  }, [productSearchQuery, productFilterSection, productFilterCategory, productFilterSource, productSortBy, productSortOrder]);
+
+  // Load category colors and sizes when category is selected
+  useEffect(() => {
+    if (newProduct.category_id) {
+      loadCategoryVariantOptions(newProduct.category_id);
+    } else {
+      setCategoryColors([]);
+      setCategorySizes([]);
+    }
+  }, [newProduct.category_id]);
+
+  // Memoize filtered and sorted products
+  const filteredAndSortedProducts = useMemo(() => {
+    let filtered = [...products];
+    
+    // Search filter
+    if (productSearchQuery.trim()) {
+      const query = productSearchQuery.toLowerCase();
+      filtered = filtered.filter(p => 
+        p.name.toLowerCase().includes(query) ||
+        p.sku?.toLowerCase().includes(query) ||
+        p.description?.toLowerCase().includes(query)
+      );
+    }
+    
+    // Section filter
+    if (productFilterSection) {
+      filtered = filtered.filter(p => {
+        const sectionId = p.category_data?.section_id || p.category_data?.section_data?.id;
+        return sectionId === productFilterSection;
+      });
+    }
+    
+    // Category filter
+    if (productFilterCategory) {
+      filtered = filtered.filter(p => p.category_id === productFilterCategory);
+    }
+    
+    // Source filter
+    if (productFilterSource !== 'all') {
+      filtered = filtered.filter(p => p.source_type === productFilterSource);
+    }
+    
+    // Sort
+    filtered.sort((a, b) => {
+      let comparison = 0;
+      
+      switch (productSortBy) {
+        case 'name':
+          comparison = (a.name || '').localeCompare(b.name || '', 'ar');
+          break;
+        case 'price':
+          comparison = (a.price || 0) - (b.price || 0);
+          break;
+        case 'stock':
+          comparison = (a.stock_quantity || 0) - (b.stock_quantity || 0);
+          break;
+        case 'date':
+        default:
+          comparison = new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime();
+          break;
+      }
+      
+      return productSortOrder === 'asc' ? comparison : -comparison;
+    });
+    
+    return filtered;
+  }, [products, productSearchQuery, productFilterSection, productFilterCategory, productFilterSource, productSortBy, productSortOrder]);
+
+  // Memoize paginated products
+  const paginatedProductsData = useMemo(() => {
+    const startIndex = (productCurrentPage - 1) * productsPerPage;
+    const endIndex = startIndex + productsPerPage;
+    return {
+      products: filteredAndSortedProducts.slice(startIndex, endIndex),
+      totalPages: Math.ceil(filteredAndSortedProducts.length / productsPerPage),
+      totalProducts: filteredAndSortedProducts.length,
+    };
+  }, [filteredAndSortedProducts, productCurrentPage, productsPerPage]);
 
   const loadUsers = async () => {
     try {
@@ -975,6 +1070,9 @@ export default function AdminScreen() {
           
           setProducts(processedData);
           console.log('✅ Admin: Products loaded:', processedData?.length || 0);
+          
+          // Load variants count for each product
+          await loadProductVariantsCount(processedData.map((p: any) => p.id));
         } else {
           console.error('❌ Admin: Error loading products:', await productsResponse.text());
         }
@@ -1089,31 +1187,46 @@ export default function AdminScreen() {
   };
 
   const addVariant = () => {
+    console.log('🔄 Adding variant:', newVariant);
+    console.log('🖼️ Variant image_url:', newVariant.image_url);
+    
     if (!newVariant.color && !newVariant.size) {
       sweetAlert.showError('خطأ', 'يرجى إدخال لون أو مقاس على الأقل');
       return;
     }
 
-    const variant: ProductVariant = {
-      id: `temp-${Date.now()}`,
-      product_id: editingProduct?.id || '',
-      variant_name: `${newVariant.color || ''}${newVariant.color && newVariant.size ? ' - ' : ''}${newVariant.size || ''}`.trim(),
-      color: newVariant.color || null,
-      size: newVariant.size || null,
-      size_unit: newVariant.size_unit || null,
-      material: null,
-      price: newVariant.price ? parseFloat(newVariant.price) : null,
-      stock_quantity: newVariant.stock_quantity ? parseInt(newVariant.stock_quantity) : 0,
-      sku: newVariant.sku || null,
-      image_url: newVariant.image_url || null,
-      is_active: true,
-      is_default: productVariants.length === 0,
-      display_order: productVariants.length,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    };
+    // Use functional update to ensure we get the latest state
+    setProductVariants((prevVariants) => {
+      const variant: ProductVariant = {
+        id: `temp-${Date.now()}-${Math.random()}`,
+        product_id: editingProduct?.id || '',
+        variant_name: `${newVariant.color || ''}${newVariant.color && newVariant.size ? ' - ' : ''}${newVariant.size || ''}`.trim(),
+        color: newVariant.color || null,
+        size: newVariant.size || null,
+        size_unit: newVariant.size_unit || null,
+        material: null,
+        price: newVariant.price ? parseFloat(newVariant.price) : null,
+        stock_quantity: newVariant.stock_quantity ? parseInt(newVariant.stock_quantity) : 0,
+        sku: newVariant.sku || null,
+        image_url: newVariant.image_url || null,
+        is_active: true,
+        is_default: prevVariants.length === 0,
+        display_order: prevVariants.length,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
 
-    setProductVariants([...productVariants, variant]);
+      console.log('✅ Variant created:', variant);
+      console.log('🖼️ Variant image_url in created variant:', variant.image_url);
+      console.log('📦 Current variants count:', prevVariants.length);
+      
+      const updatedVariants = [...prevVariants, variant];
+      console.log('✅ Variants updated, new count:', updatedVariants.length);
+      console.log('🖼️ All variants images:', updatedVariants.map((v: any) => ({ color: v.color, size: v.size, image_url: v.image_url })));
+      
+      return updatedVariants;
+    });
+    
     setNewVariant({
       color: '',
       size: '',
@@ -1123,7 +1236,68 @@ export default function AdminScreen() {
       sku: '',
       image_url: '',
     });
+    
     sweetAlert.showSuccess('نجح', 'تم إضافة المتغير بنجاح');
+  };
+
+  const startEditVariant = (variant: ProductVariant) => {
+    setEditingVariant(variant);
+    setNewVariant({
+      color: variant.color || '',
+      size: variant.size || '',
+      size_unit: variant.size_unit || '',
+      price: variant.price?.toString() || '',
+      stock_quantity: variant.stock_quantity?.toString() || '',
+      sku: variant.sku || '',
+      image_url: variant.image_url || '',
+    });
+  };
+
+  const cancelEditVariant = () => {
+    setEditingVariant(null);
+    setNewVariant({
+      color: '',
+      size: '',
+      size_unit: '',
+      price: '',
+      stock_quantity: '',
+      sku: '',
+      image_url: '',
+    });
+    setShowColorInput(false);
+    setShowSizeInput(false);
+  };
+
+  const updateVariant = () => {
+    if (!editingVariant) return;
+
+    if (!newVariant.color && !newVariant.size) {
+      sweetAlert.showError('خطأ', 'يرجى إدخال لون أو مقاس على الأقل');
+      return;
+    }
+
+    setProductVariants((prevVariants) => {
+      return prevVariants.map((variant) => {
+        if (variant.id === editingVariant.id) {
+          return {
+            ...variant,
+            variant_name: `${newVariant.color || ''}${newVariant.color && newVariant.size ? ' - ' : ''}${newVariant.size || ''}`.trim(),
+            color: newVariant.color || null,
+            size: newVariant.size || null,
+            size_unit: newVariant.size_unit || null,
+            price: newVariant.price ? parseFloat(newVariant.price) : null,
+            stock_quantity: newVariant.stock_quantity ? parseInt(newVariant.stock_quantity) : 0,
+            sku: newVariant.sku || null,
+            image_url: newVariant.image_url || null,
+            updated_at: new Date().toISOString(),
+          };
+        }
+        return variant;
+      });
+    });
+
+    cancelEditVariant();
+    sweetAlert.showSuccess('نجح', 'تم تحديث المتغير بنجاح');
   };
 
   const deleteVariant = (variantId: string) => {
@@ -1131,7 +1305,11 @@ export default function AdminScreen() {
       'حذف المتغير',
       'هل أنت متأكد من حذف هذا المتغير؟',
       () => {
-        setProductVariants(productVariants.filter(v => v.id !== variantId));
+        setProductVariants((prevVariants) => {
+          const filtered = prevVariants.filter(v => v.id !== variantId);
+          console.log('🗑️ Deleted variant:', variantId, 'Remaining:', filtered.length);
+          return filtered;
+        });
         sweetAlert.showSuccess('نجح', 'تم حذف المتغير بنجاح');
       },
       undefined,
@@ -1556,17 +1734,21 @@ export default function AdminScreen() {
 
         if (variantsResponse.ok) {
           const variantsData = await variantsResponse.json();
+          console.log('✅ Variants inserted successfully:', variantsData.length);
+          console.log('📦 Variants data with images:', variantsData.map((v: any) => ({ id: v.id, color: v.color, size: v.size, image_url: v.image_url })));
           
           // Link variant images to product_images
           for (const variant of variantsData) {
             if (variant.image_url) {
+              console.log('🖼️ Linking variant image:', variant.id, variant.image_url);
               // Add variant image to product_images with variant_id
-              await fetch(`${supabaseUrl}/rest/v1/product_images`, {
+              const variantImageResponse = await fetch(`${supabaseUrl}/rest/v1/product_images`, {
                 method: 'POST',
                 headers: {
                   'apikey': supabaseKey || '',
                   'Authorization': `Bearer ${accessToken}`,
                   'Content-Type': 'application/json',
+                  'Prefer': 'return=representation'
                 },
                 body: JSON.stringify({
                   product_id: productId,
@@ -1576,11 +1758,21 @@ export default function AdminScreen() {
                   is_primary: false,
                 })
               });
+              
+              if (variantImageResponse.ok) {
+                const imageData = await variantImageResponse.json();
+                console.log('✅ Variant image linked successfully:', variant.id, variant.image_url, imageData);
+              } else {
+                const errorText = await variantImageResponse.text();
+                console.error('❌ Failed to link variant image:', variant.id, errorText);
+              }
+            } else {
+              console.warn('⚠️ Variant has no image_url:', variant.id, variant.color, variant.size);
             }
           }
         } else {
           const errorText = await variantsResponse.text();
-          console.warn('⚠️ Failed to add product variants:', errorText);
+          console.error('❌ Failed to add product variants:', errorText);
         }
       }
 
@@ -1653,6 +1845,90 @@ export default function AdminScreen() {
       offer_duration_days: product.offer_duration_days?.toString() || '',
     });
     setProductImages([]);
+    setEditProductImages([]);
+    
+    // Load product images
+    try {
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+      const accessToken = await getAccessToken();
+      
+      // First, try to load images from product_images table (general images only, variant_id is null)
+      let loadedImages: Array<{ uri: string; url: string }> = [];
+      
+      // Try loading from product_images table
+      const imagesResponse = await fetch(`${supabaseUrl}/rest/v1/product_images?product_id=eq.${product.id}&variant_id=is.null&order=display_order.asc`, {
+        headers: {
+          'apikey': supabaseKey || '',
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        }
+      });
+      
+      if (imagesResponse.ok) {
+        const imagesData = await imagesResponse.json();
+        if (imagesData && imagesData.length > 0) {
+          loadedImages = imagesData.map((img: any) => ({
+            uri: img.image_url,
+            url: img.image_url,
+          }));
+          console.log('✅ Loaded product images from product_images:', loadedImages.length);
+        }
+      }
+      
+      // If no images found in product_images, try loading ALL images (including variant images)
+      if (loadedImages.length === 0) {
+        const allImagesResponse = await fetch(`${supabaseUrl}/rest/v1/product_images?product_id=eq.${product.id}&order=display_order.asc`, {
+          headers: {
+            'apikey': supabaseKey || '',
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          }
+        });
+        
+        if (allImagesResponse.ok) {
+          const allImagesData = await allImagesResponse.json();
+          if (allImagesData && allImagesData.length > 0) {
+            // Filter to get only general images (variant_id is null) or use all if none found
+            const generalImages = allImagesData.filter((img: any) => !img.variant_id);
+            if (generalImages.length > 0) {
+              loadedImages = generalImages.map((img: any) => ({
+                uri: img.image_url,
+                url: img.image_url,
+              }));
+            } else {
+              // If no general images, use first image
+              loadedImages = [{
+                uri: allImagesData[0].image_url,
+                url: allImagesData[0].image_url,
+              }];
+            }
+            console.log('✅ Loaded product images from all images:', loadedImages.length);
+          }
+        }
+      }
+      
+      // If still no images found, use product.image_url as fallback
+      if (loadedImages.length === 0 && product.image_url) {
+        loadedImages = [{
+          uri: product.image_url,
+          url: product.image_url,
+        }];
+        console.log('✅ Using product.image_url as fallback:', product.image_url);
+      }
+      
+      setProductImages(loadedImages);
+      console.log('🖼️ Final images data:', loadedImages);
+    } catch (error) {
+      console.error('Error loading product images:', error);
+      // Fallback to product.image_url if error occurs
+      if (product.image_url) {
+        setProductImages([{
+          uri: product.image_url,
+          url: product.image_url,
+        }]);
+      }
+    }
     
     // Load product variants
     try {
@@ -1670,16 +1946,74 @@ export default function AdminScreen() {
       
       if (variantsResponse.ok) {
         const variantsData = await variantsResponse.json();
-        setProductVariants(variantsData || []);
+        
+        // Load variant images for each variant
+        const variantsWithImages = await Promise.all((variantsData || []).map(async (variant: ProductVariant) => {
+          try {
+            let variantImageUrl = variant.image_url || null;
+            
+            // Try to get image from product_images table first
+            try {
+              const variantImagesResponse = await fetch(`${supabaseUrl}/rest/v1/product_images?product_id=eq.${product.id}&variant_id=eq.${variant.id}&order=display_order.asc&limit=1`, {
+                headers: {
+                  'apikey': supabaseKey || '',
+                  'Authorization': `Bearer ${accessToken}`,
+                  'Content-Type': 'application/json',
+                }
+              });
+              
+              if (variantImagesResponse.ok) {
+                const variantImages = await variantImagesResponse.json();
+                if (variantImages && variantImages.length > 0 && variantImages[0].image_url) {
+                  variantImageUrl = variantImages[0].image_url;
+                  console.log(`✅ Loaded variant image from product_images for variant ${variant.id}:`, variantImageUrl);
+                }
+              }
+            } catch (imgError) {
+              console.warn('⚠️ Error loading variant image from product_images:', imgError);
+            }
+            
+            // If no image found in product_images, check if variant has image_url directly
+            if (!variantImageUrl && variant.image_url) {
+              variantImageUrl = variant.image_url;
+              console.log(`✅ Using variant.image_url directly for variant ${variant.id}:`, variantImageUrl);
+            }
+            
+            return {
+              ...variant,
+              image_url: variantImageUrl,
+            };
+          } catch (error) {
+            console.error('Error loading variant image:', error);
+            // Return variant with original image_url if exists
+            return variant;
+          }
+        }));
+        
+        setProductVariants(variantsWithImages);
+        console.log('✅ Loaded product variants:', variantsWithImages.length);
+        console.log('📦 Variants data:', variantsWithImages);
+        console.log('🖼️ Variants with images:', variantsWithImages.map((v: any) => ({ 
+          id: v.id, 
+          color: v.color, 
+          size: v.size, 
+          hasImage: !!v.image_url,
+          image_url: v.image_url 
+        })));
       }
     } catch (error) {
       console.error('Error loading product variants:', error);
     }
-    setEditProductImages([]);
+    
+    // Load category colors and sizes if category is selected
+    if (product.category_id) {
+      await loadCategoryVariantOptions(product.category_id);
+    }
   };
 
   const cancelEdit = () => {
     setEditingProduct(null);
+    setEditingVariant(null);
     setNewProduct({
       name: '',
       description: '',
@@ -1693,10 +2027,15 @@ export default function AdminScreen() {
       source_type: 'warehouse',
       sku: '',
       image_url: '',
+      sold_count: '0',
+      is_limited_time_offer: false,
+      offer_duration_days: '',
     });
     setProductImages([]);
     setEditProductImages([]);
     setProductVariants([]);
+    setCategoryColors([]);
+    setCategorySizes([]);
     setNewVariant({
       color: '',
       size: '',
@@ -1706,6 +2045,8 @@ export default function AdminScreen() {
       sku: '',
       image_url: '',
     });
+    setShowColorInput(false);
+    setShowSizeInput(false);
   };
 
   const updateProduct = async () => {
@@ -1763,9 +2104,10 @@ export default function AdminScreen() {
       }
 
       // Update product images if new images were added
+      // Only update general images (variant_id is null), not variant-specific images
       if (productImages.length > 0) {
-        // Delete old images
-        await fetch(`${supabaseUrl}/rest/v1/product_images?product_id=eq.${editingProduct.id}`, {
+        // Delete old general images only (variant_id is null)
+        await fetch(`${supabaseUrl}/rest/v1/product_images?product_id=eq.${editingProduct.id}&variant_id=is.null`, {
           method: 'DELETE',
           headers: {
             'apikey': supabaseKey || '',
@@ -1774,10 +2116,11 @@ export default function AdminScreen() {
           }
         });
 
-        // Insert new images
+        // Insert new general images (variant_id is null)
         const imagesToInsert = productImages.map((img, index) => ({
           product_id: editingProduct.id,
           image_url: img.url || '',
+          variant_id: null, // General images, not variant-specific
           display_order: index,
           is_primary: index === 0,
         }));
@@ -1840,11 +2183,14 @@ export default function AdminScreen() {
 
         if (variantsResponse.ok) {
           const variantsData = await variantsResponse.json();
+          console.log('✅ Variants updated successfully:', variantsData.length);
+          console.log('📦 Updated variants data with images:', variantsData.map((v: any) => ({ id: v.id, color: v.color, size: v.size, image_url: v.image_url })));
           
           // Link variant images to product_images
           for (const variant of variantsData) {
             if (variant.image_url) {
-              // Delete old variant images
+              console.log('🖼️ Linking variant image for update:', variant.id, variant.image_url);
+              // Delete old variant images for this specific variant
               await fetch(`${supabaseUrl}/rest/v1/product_images?product_id=eq.${editingProduct.id}&variant_id=eq.${variant.id}`, {
                 method: 'DELETE',
                 headers: {
@@ -1855,12 +2201,13 @@ export default function AdminScreen() {
               });
               
               // Add variant image to product_images with variant_id
-              await fetch(`${supabaseUrl}/rest/v1/product_images`, {
+              const variantImageResponse = await fetch(`${supabaseUrl}/rest/v1/product_images`, {
                 method: 'POST',
                 headers: {
                   'apikey': supabaseKey || '',
                   'Authorization': `Bearer ${accessToken}`,
                   'Content-Type': 'application/json',
+                  'Prefer': 'return=representation'
                 },
                 body: JSON.stringify({
                   product_id: editingProduct.id,
@@ -1870,6 +2217,16 @@ export default function AdminScreen() {
                   is_primary: false,
                 })
               });
+              
+              if (variantImageResponse.ok) {
+                const imageData = await variantImageResponse.json();
+                console.log('✅ Variant image linked successfully (update):', variant.id, variant.image_url, imageData);
+              } else {
+                const errorText = await variantImageResponse.text();
+                console.error('❌ Failed to link variant image (update):', variant.id, errorText);
+              }
+            } else {
+              console.warn('⚠️ Variant has no image_url (update):', variant.id, variant.color, variant.size);
             }
           }
         }
@@ -1886,6 +2243,184 @@ export default function AdminScreen() {
       } else {
         Alert.alert('خطأ', error.message || 'فشل تحديث المنتج');
       }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Load variants count for products
+  const loadProductVariantsCount = async (productIds: string[]) => {
+    if (productIds.length === 0) {
+      setProductVariantsCount({});
+      return;
+    }
+    
+    try {
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+      const accessToken = await getAccessToken();
+      
+      // Fetch variants for all products in batches if needed
+      const batchSize = 50;
+      const countMap: { [key: string]: number } = {};
+      
+      for (let i = 0; i < productIds.length; i += batchSize) {
+        const batch = productIds.slice(i, i + batchSize);
+        const idsParam = batch.map(id => `"${id}"`).join(',');
+        
+        const response = await fetch(`${supabaseUrl}/rest/v1/product_variants?product_id=in.(${idsParam})&select=product_id`, {
+          headers: {
+            'apikey': supabaseKey || '',
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          }
+        });
+        
+        if (response.ok) {
+          const variants = await response.json();
+          variants.forEach((variant: any) => {
+            countMap[variant.product_id] = (countMap[variant.product_id] || 0) + 1;
+          });
+        }
+      }
+      
+      // Initialize all products with 0 if they have no variants
+      productIds.forEach(id => {
+        if (!countMap[id]) {
+          countMap[id] = 0;
+        }
+      });
+      
+      setProductVariantsCount(countMap);
+    } catch (error) {
+      console.error('Error loading variants count:', error);
+      // Initialize with zeros on error
+      const countMap: { [key: string]: number } = {};
+      productIds.forEach(id => {
+        countMap[id] = 0;
+      });
+      setProductVariantsCount(countMap);
+    }
+  };
+
+  // Filter and sort products
+  const getFilteredAndSortedProducts = () => {
+    let filtered = [...products];
+    
+    // Search filter
+    if (productSearchQuery.trim()) {
+      const query = productSearchQuery.toLowerCase();
+      filtered = filtered.filter(p => 
+        p.name.toLowerCase().includes(query) ||
+        p.sku?.toLowerCase().includes(query) ||
+        p.description?.toLowerCase().includes(query)
+      );
+    }
+    
+    // Section filter
+    if (productFilterSection) {
+      filtered = filtered.filter(p => {
+        const sectionId = p.category_data?.section_id || p.category_data?.section_data?.id;
+        return sectionId === productFilterSection;
+      });
+    }
+    
+    // Category filter
+    if (productFilterCategory) {
+      filtered = filtered.filter(p => p.category_id === productFilterCategory);
+    }
+    
+    // Source filter
+    if (productFilterSource !== 'all') {
+      filtered = filtered.filter(p => p.source_type === productFilterSource);
+    }
+    
+    // Sort
+    filtered.sort((a, b) => {
+      let comparison = 0;
+      
+      switch (productSortBy) {
+        case 'name':
+          comparison = (a.name || '').localeCompare(b.name || '', 'ar');
+          break;
+        case 'price':
+          comparison = (a.price || 0) - (b.price || 0);
+          break;
+        case 'stock':
+          comparison = (a.stock_quantity || 0) - (b.stock_quantity || 0);
+          break;
+        case 'date':
+        default:
+          comparison = new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime();
+          break;
+      }
+      
+      return productSortOrder === 'asc' ? comparison : -comparison;
+    });
+    
+    return filtered;
+  };
+
+  // Get paginated products
+  const getPaginatedProducts = () => {
+    const filtered = getFilteredAndSortedProducts();
+    const startIndex = (productCurrentPage - 1) * productsPerPage;
+    const endIndex = startIndex + productsPerPage;
+    return {
+      products: filtered.slice(startIndex, endIndex),
+      totalPages: Math.ceil(filtered.length / productsPerPage),
+      totalProducts: filtered.length,
+    };
+  };
+
+  // Duplicate product
+  const duplicateProduct = async (product: Product) => {
+    try {
+      setLoading(true);
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+      const accessToken = await getAccessToken();
+      
+      // Create new product with same data but new SKU
+      const newProductData = {
+        name: `${product.name} (نسخة)`,
+        description: product.description,
+        price: product.price,
+        original_price: product.original_price,
+        discount_percentage: product.discount_percentage,
+        category_id: product.category_id,
+        stock_quantity: product.stock_quantity,
+        source_type: product.source_type,
+        sku: `${product.sku}-COPY-${Date.now()}`,
+        image_url: product.image_url,
+        sold_count: 0,
+        is_limited_time_offer: product.is_limited_time_offer,
+        offer_duration_days: product.offer_duration_days,
+        is_active: product.is_active !== undefined ? product.is_active : true,
+      };
+      
+      const response = await fetch(`${supabaseUrl}/rest/v1/products`, {
+        method: 'POST',
+        headers: {
+          'apikey': supabaseKey || '',
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=representation'
+        },
+        body: JSON.stringify(newProductData)
+      });
+      
+      if (response.ok) {
+        const newProduct = await response.json();
+        sweetAlert.showSuccess('نجح', 'تم نسخ المنتج بنجاح', () => {
+          loadData();
+        });
+      } else {
+        const errorText = await response.text();
+        sweetAlert.showError('خطأ', 'فشل نسخ المنتج: ' + errorText);
+      }
+    } catch (error: any) {
+      sweetAlert.showError('خطأ', error.message || 'فشل نسخ المنتج');
     } finally {
       setLoading(false);
     }
@@ -2933,7 +3468,7 @@ export default function AdminScreen() {
                 </Text>
                 
                 {/* Variants List */}
-                {productVariants.length > 0 && (
+                {productVariants.length > 0 ? (
                   <View style={styles.variantsList}>
                     {productVariants.map((variant) => (
                       <View key={variant.id} style={styles.variantCard}>
@@ -2946,7 +3481,7 @@ export default function AdminScreen() {
                             )}
                             {variant.size && (
                               <Text style={styles.variantSizeText}>
-                                {variant.size} {variant.size_unit ? `(${variant.size_unit})` : ''}
+                                {variant.size}{variant.size_unit ? ` (${variant.size_unit})` : ''}
                               </Text>
                             )}
                             {variant.price && (
@@ -2954,24 +3489,61 @@ export default function AdminScreen() {
                             )}
                             <Text style={styles.variantStockText}>مخزون: {variant.stock_quantity}</Text>
                           </View>
-                          <TouchableOpacity
-                            style={styles.variantDeleteButton}
-                            onPress={() => deleteVariant(variant.id)}
-                          >
-                            <Ionicons name="trash-outline" size={16} color="#f44336" />
-                          </TouchableOpacity>
+                          <View style={{ flexDirection: 'row', gap: 8 }}>
+                            <TouchableOpacity
+                              style={styles.variantEditButton}
+                              onPress={() => startEditVariant(variant)}
+                            >
+                              <Ionicons name="create-outline" size={16} color="#2196F3" />
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                              style={styles.variantDeleteButton}
+                              onPress={() => deleteVariant(variant.id)}
+                            >
+                              <Ionicons name="trash-outline" size={16} color="#f44336" />
+                            </TouchableOpacity>
+                          </View>
                         </View>
-                        {variant.image_url && (
-                          <Image source={{ uri: variant.image_url }} style={styles.variantImage} />
+                        {variant.image_url ? (
+                          <Image 
+                            source={{ uri: variant.image_url }} 
+                            style={styles.variantImage}
+                            onError={(e) => {
+                              console.error('❌ Error loading variant image:', variant.image_url, e.nativeEvent.error);
+                            }}
+                            onLoad={() => {
+                              console.log('✅ Variant image loaded successfully:', variant.image_url);
+                            }}
+                          />
+                        ) : (
+                          <View style={[styles.variantImage, { backgroundColor: '#f0f0f0', justifyContent: 'center', alignItems: 'center' }]}>
+                            <Text style={{ color: '#999', fontSize: 12 }}>لا توجد صورة</Text>
+                          </View>
                         )}
                       </View>
                     ))}
                   </View>
+                ) : (
+                  <View style={{ padding: 15, backgroundColor: '#F9FAFB', borderRadius: 8, marginBottom: 15 }}>
+                    <Text style={styles.helpText}>
+                      لا توجد متغيرات مضافة بعد. أضف متغير جديد أدناه.
+                    </Text>
+                  </View>
                 )}
 
-                {/* Add New Variant Form */}
+                {/* Add/Edit Variant Form */}
                 <View style={styles.addVariantForm}>
-                  <Text style={styles.formSubTitle}>إضافة متغير جديد</Text>
+                  <Text style={styles.formSubTitle}>
+                    {editingVariant ? 'تعديل متغير' : 'إضافة متغير جديد'}
+                  </Text>
+                  {editingVariant && (
+                    <TouchableOpacity
+                      style={styles.cancelButton}
+                      onPress={cancelEditVariant}
+                    >
+                      <Text style={styles.cancelButtonText}>إلغاء التعديل</Text>
+                    </TouchableOpacity>
+                  )}
                   
                   {/* Color Selection - اختيار اللون من الاقتراحات */}
                   <View style={styles.selectContainer}>
@@ -3113,10 +3685,12 @@ export default function AdminScreen() {
                     <Image source={{ uri: newVariant.image_url }} style={styles.variantImagePreview} />
                   )}
                   <TouchableOpacity
-                    style={styles.addVariantButton}
-                    onPress={addVariant}
+                    style={[styles.addVariantButton, editingVariant && styles.updateVariantButton]}
+                    onPress={editingVariant ? updateVariant : addVariant}
                   >
-                    <Text style={styles.addVariantButtonText}>إضافة متغير</Text>
+                    <Text style={styles.addVariantButtonText}>
+                      {editingVariant ? 'تحديث المتغير' : 'إضافة متغير'}
+                    </Text>
                   </TouchableOpacity>
                 </View>
               </View>
@@ -3131,13 +3705,200 @@ export default function AdminScreen() {
               </TouchableOpacity>
             </View>
 
+            {/* Search and Filters */}
+            <View style={styles.filtersContainer}>
+              {/* Search */}
+              <View style={styles.searchContainer}>
+                <Ionicons name="search-outline" size={20} color="#666" style={styles.searchIcon} />
+                <TextInput
+                  style={styles.searchInput}
+                  placeholder="بحث عن منتج (اسم، SKU، وصف)..."
+                  value={productSearchQuery}
+                  onChangeText={setProductSearchQuery}
+                />
+                {productSearchQuery.length > 0 && (
+                  <TouchableOpacity onPress={() => setProductSearchQuery('')}>
+                    <Ionicons name="close-circle" size={20} color="#999" />
+                  </TouchableOpacity>
+                )}
+              </View>
+
+              {/* Filters Row */}
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filtersRow}>
+                {/* Section Filter */}
+                <View style={styles.filterGroup}>
+                  <Text style={styles.filterLabel}>القسم:</Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                    <TouchableOpacity
+                      style={[styles.filterChip, !productFilterSection && styles.filterChipActive]}
+                      onPress={() => setProductFilterSection(null)}
+                    >
+                      <Text style={[styles.filterChipText, !productFilterSection && styles.filterChipTextActive]}>
+                        الكل
+                      </Text>
+                    </TouchableOpacity>
+                    {sections.filter(s => s.is_active).map((section) => (
+                      <TouchableOpacity
+                        key={section.id}
+                        style={[styles.filterChip, productFilterSection === section.id && styles.filterChipActive]}
+                        onPress={() => {
+                          setProductFilterSection(section.id);
+                          setProductFilterCategory(null);
+                        }}
+                      >
+                        <Text style={[styles.filterChipText, productFilterSection === section.id && styles.filterChipTextActive]}>
+                          {section.name}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                </View>
+
+                {/* Category Filter */}
+                {productFilterSection && (
+                  <View style={styles.filterGroup}>
+                    <Text style={styles.filterLabel}>الفئة:</Text>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                      <TouchableOpacity
+                        style={[styles.filterChip, !productFilterCategory && styles.filterChipActive]}
+                        onPress={() => setProductFilterCategory(null)}
+                      >
+                        <Text style={[styles.filterChipText, !productFilterCategory && styles.filterChipTextActive]}>
+                          الكل
+                        </Text>
+                      </TouchableOpacity>
+                      {categories.filter(c => c.section_id === productFilterSection).map((category) => (
+                        <TouchableOpacity
+                          key={category.id}
+                          style={[styles.filterChip, productFilterCategory === category.id && styles.filterChipActive]}
+                          onPress={() => setProductFilterCategory(category.id)}
+                        >
+                          <Text style={[styles.filterChipText, productFilterCategory === category.id && styles.filterChipTextActive]}>
+                            {category.name}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    </ScrollView>
+                  </View>
+                )}
+
+                {/* Source Filter */}
+                <View style={styles.filterGroup}>
+                  <Text style={styles.filterLabel}>المصدر:</Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                    <TouchableOpacity
+                      style={[styles.filterChip, productFilterSource === 'all' && styles.filterChipActive]}
+                      onPress={() => setProductFilterSource('all')}
+                    >
+                      <Text style={[styles.filterChipText, productFilterSource === 'all' && styles.filterChipTextActive]}>
+                        الكل
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.filterChip, productFilterSource === 'warehouse' && styles.filterChipActive]}
+                      onPress={() => setProductFilterSource('warehouse')}
+                    >
+                      <Text style={[styles.filterChipText, productFilterSource === 'warehouse' && styles.filterChipTextActive]}>
+                        مخزن
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.filterChip, productFilterSource === 'external' && styles.filterChipActive]}
+                      onPress={() => setProductFilterSource('external')}
+                    >
+                      <Text style={[styles.filterChipText, productFilterSource === 'external' && styles.filterChipTextActive]}>
+                        خارجي
+                      </Text>
+                    </TouchableOpacity>
+                  </ScrollView>
+                </View>
+              </ScrollView>
+
+              {/* Sort */}
+              <View style={styles.sortContainer}>
+                <Text style={styles.sortLabel}>ترتيب حسب:</Text>
+                <View style={styles.sortRow}>
+                  <TouchableOpacity
+                    style={[styles.sortChip, productSortBy === 'date' && styles.sortChipActive]}
+                    onPress={() => {
+                      if (productSortBy === 'date') {
+                        setProductSortOrder(productSortOrder === 'asc' ? 'desc' : 'asc');
+                      } else {
+                        setProductSortBy('date');
+                        setProductSortOrder('desc');
+                      }
+                    }}
+                  >
+                    <Text style={[styles.sortChipText, productSortBy === 'date' && styles.sortChipTextActive]}>
+                      التاريخ {productSortBy === 'date' && (productSortOrder === 'asc' ? '↑' : '↓')}
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.sortChip, productSortBy === 'name' && styles.sortChipActive]}
+                    onPress={() => {
+                      if (productSortBy === 'name') {
+                        setProductSortOrder(productSortOrder === 'asc' ? 'desc' : 'asc');
+                      } else {
+                        setProductSortBy('name');
+                        setProductSortOrder('asc');
+                      }
+                    }}
+                  >
+                    <Text style={[styles.sortChipText, productSortBy === 'name' && styles.sortChipTextActive]}>
+                      الاسم {productSortBy === 'name' && (productSortOrder === 'asc' ? '↑' : '↓')}
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.sortChip, productSortBy === 'price' && styles.sortChipActive]}
+                    onPress={() => {
+                      if (productSortBy === 'price') {
+                        setProductSortOrder(productSortOrder === 'asc' ? 'desc' : 'asc');
+                      } else {
+                        setProductSortBy('price');
+                        setProductSortOrder('asc');
+                      }
+                    }}
+                  >
+                    <Text style={[styles.sortChipText, productSortBy === 'price' && styles.sortChipTextActive]}>
+                      السعر {productSortBy === 'price' && (productSortOrder === 'asc' ? '↑' : '↓')}
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.sortChip, productSortBy === 'stock' && styles.sortChipActive]}
+                    onPress={() => {
+                      if (productSortBy === 'stock') {
+                        setProductSortOrder(productSortOrder === 'asc' ? 'desc' : 'asc');
+                      } else {
+                        setProductSortBy('stock');
+                        setProductSortOrder('asc');
+                      }
+                    }}
+                  >
+                    <Text style={[styles.sortChipText, productSortBy === 'stock' && styles.sortChipTextActive]}>
+                      المخزون {productSortBy === 'stock' && (productSortOrder === 'asc' ? '↑' : '↓')}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              {/* Results Count */}
+              <Text style={styles.resultsCount}>
+                عرض {paginatedProductsData.totalProducts} منتج
+              </Text>
+            </View>
+
             <View style={styles.gridContainer}>
-              {products && products.length > 0 ? products.map((product) => {
+              {paginatedProductsData.products && paginatedProductsData.products.length > 0 ? paginatedProductsData.products.map((product) => {
                 const isEditing = editingProductId === product.id;
                 const quickEdit = quickEditProduct[product.id] || {};
                 const displayName = isEditing ? (quickEdit.name !== undefined ? quickEdit.name : product.name) : product.name;
                 const displayPrice = isEditing ? (quickEdit.price !== undefined ? quickEdit.price : product.price) : product.price;
                 const displayStock = isEditing ? (quickEdit.stock_quantity !== undefined ? quickEdit.stock_quantity : product.stock_quantity) : product.stock_quantity;
+                
+                // Ensure all values are strings for TextInput
+                const safeDisplayName = displayName || '';
+                const safeDisplayPrice = typeof displayPrice === 'number' && !isNaN(displayPrice) ? displayPrice : (product.price || 0);
+                const safeDisplayStock = typeof displayStock === 'number' && !isNaN(displayStock) ? displayStock : (product.stock_quantity || 0);
 
                 return (
                   <View key={product.id} style={styles.gridCard}>
@@ -3153,7 +3914,7 @@ export default function AdminScreen() {
                       {isEditing ? (
                         <TextInput
                           style={styles.inlineInput}
-                          value={displayName}
+                          value={safeDisplayName}
                           onChangeText={(text) => setQuickEditProduct({ ...quickEditProduct, [product.id]: { ...quickEdit, name: text } })}
                           placeholder="اسم المنتج"
                         />
@@ -3180,7 +3941,7 @@ export default function AdminScreen() {
                       {isEditing ? (
                         <TextInput
                           style={styles.inlineInputSmall}
-                          value={typeof displayPrice === 'number' && !isNaN(displayPrice) ? displayPrice.toString() : ''}
+                          value={typeof safeDisplayPrice === 'number' && !isNaN(safeDisplayPrice) ? safeDisplayPrice.toString() : ''}
                           onChangeText={(text) => setQuickEditProduct({ ...quickEditProduct, [product.id]: { ...quickEdit, price: parseFloat(text) || 0 } })}
                           placeholder="السعر"
                           keyboardType="numeric"
@@ -3206,7 +3967,7 @@ export default function AdminScreen() {
                       {isEditing ? (
                         <TextInput
                           style={styles.inlineInputSmall}
-                          value={typeof displayStock === 'number' && !isNaN(displayStock) ? displayStock.toString() : ''}
+                          value={typeof safeDisplayStock === 'number' && !isNaN(safeDisplayStock) ? safeDisplayStock.toString() : ''}
                           onChangeText={(text) => setQuickEditProduct({ ...quickEditProduct, [product.id]: { ...quickEdit, stock_quantity: parseInt(text) || 0 } })}
                           placeholder="المخزون"
                           keyboardType="numeric"
@@ -3249,6 +4010,29 @@ export default function AdminScreen() {
                           <Ionicons name="folder-outline" size={12} color="#6B7280" />
                           <Text style={styles.gridCardMetaText} numberOfLines={1}>
                             القسم: {product.category_data.section_data.name}
+                          </Text>
+                        </View>
+                      )}
+                      {productVariantsCount[product.id] !== undefined && productVariantsCount[product.id] > 0 && !isEditing && (
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                          <Ionicons name="color-palette-outline" size={12} color="#6366F1" />
+                          <Text style={styles.gridCardMetaText}>
+                            {productVariantsCount[product.id]} متغير
+                          </Text>
+                        </View>
+                      )}
+                      {product.is_active !== undefined && !isEditing && (
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                          <Ionicons 
+                            name={product.is_active ? 'checkmark-circle' : 'close-circle'} 
+                            size={12} 
+                            color={product.is_active ? '#10B981' : '#EF4444'} 
+                          />
+                          <Text style={[
+                            styles.gridCardMetaText,
+                            { color: product.is_active ? '#10B981' : '#EF4444' }
+                          ]}>
+                            {product.is_active ? 'نشط' : 'غير نشط'}
                           </Text>
                         </View>
                       )}
@@ -3312,6 +4096,13 @@ export default function AdminScreen() {
                     {!isEditing && (
                       <>
                         <TouchableOpacity
+                          style={styles.duplicateButton}
+                          onPress={() => duplicateProduct(product)}
+                        >
+                          <Ionicons name="copy-outline" size={14} color="#6366F1" />
+                          <Text style={styles.duplicateButtonText}>نسخ</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
                           style={styles.fullEditButton}
                           onPress={() => startEditProduct(product)}
                         >
@@ -3330,10 +4121,44 @@ export default function AdminScreen() {
                 );
               }) : (
                 <View style={{ padding: 20, alignItems: 'center', width: '100%' }}>
-                  <Text style={{ color: '#666', fontSize: 16 }}>لا توجد منتجات</Text>
+                  <Text style={{ color: '#666', fontSize: 16 }}>
+                    {productSearchQuery || productFilterSection || productFilterCategory || productFilterSource !== 'all' 
+                      ? 'لا توجد منتجات تطابق البحث' 
+                      : 'لا توجد منتجات'}
+                  </Text>
                 </View>
               )}
             </View>
+
+            {/* Pagination */}
+            {paginatedProductsData.totalPages > 1 && (
+              <View style={styles.paginationContainer}>
+                <TouchableOpacity
+                  style={[styles.paginationButton, productCurrentPage === 1 && styles.paginationButtonDisabled]}
+                  onPress={() => setProductCurrentPage(Math.max(1, productCurrentPage - 1))}
+                  disabled={productCurrentPage === 1}
+                >
+                  <Ionicons name="chevron-back" size={20} color={productCurrentPage === 1 ? '#999' : '#EE1C47'} />
+                </TouchableOpacity>
+                
+                <View style={styles.paginationInfo}>
+                  <Text style={styles.paginationText}>
+                    صفحة {productCurrentPage} من {paginatedProductsData.totalPages}
+                  </Text>
+                  <Text style={styles.paginationSubText}>
+                    ({paginatedProductsData.totalProducts} منتج)
+                  </Text>
+                </View>
+                
+                <TouchableOpacity
+                  style={[styles.paginationButton, productCurrentPage === paginatedProductsData.totalPages && styles.paginationButtonDisabled]}
+                  onPress={() => setProductCurrentPage(Math.min(paginatedProductsData.totalPages, productCurrentPage + 1))}
+                  disabled={productCurrentPage === paginatedProductsData.totalPages}
+                >
+                  <Ionicons name="chevron-forward" size={20} color={productCurrentPage === paginatedProductsData.totalPages ? '#999' : '#EE1C47'} />
+                </TouchableOpacity>
+              </View>
+            )}
           </View>
         )}
 
@@ -3537,6 +4362,10 @@ export default function AdminScreen() {
                 const displayName = isEditing ? (quickEdit.name !== undefined ? quickEdit.name : category.name) : category.name;
                 const displayOrder = isEditing ? (quickEdit.display_order !== undefined ? quickEdit.display_order : category.display_order) : category.display_order;
                 const displayActive = isEditing ? (quickEdit.is_active !== undefined ? quickEdit.is_active : category.is_active) : category.is_active;
+                
+                // Ensure all values are safe for TextInput
+                const safeDisplayName = displayName || '';
+                const safeDisplayOrder = displayOrder !== undefined && displayOrder !== null ? displayOrder : (category.display_order || 0);
 
                 return (
                   <View key={category.id} style={styles.gridCard}>
@@ -3547,7 +4376,7 @@ export default function AdminScreen() {
                       {isEditing ? (
                         <TextInput
                           style={styles.inlineInput}
-                          value={displayName}
+                          value={safeDisplayName}
                           onChangeText={(text) => setQuickEditCategory({ ...quickEditCategory, [category.id]: { ...quickEdit, name: text } })}
                           placeholder="اسم الفئة"
                         />
@@ -3587,7 +4416,7 @@ export default function AdminScreen() {
                       {isEditing ? (
                         <TextInput
                           style={styles.inlineInputSmall}
-                          value={displayOrder.toString()}
+                          value={safeDisplayOrder.toString()}
                           onChangeText={(text) => setQuickEditCategory({ ...quickEditCategory, [category.id]: { ...quickEdit, display_order: parseInt(text) || 0 } })}
                           placeholder="ترتيب"
                           keyboardType="numeric"
@@ -3759,7 +4588,7 @@ export default function AdminScreen() {
                                   {color.color_hex && (
                                     <Text style={styles.variantColorText}>({color.color_hex})</Text>
                                   )}
-                                  <Text style={styles.variantStockText}>ترتيب: {color.display_order}</Text>
+                                  <Text style={styles.variantStockText}>ترتيب: {color.display_order || 0}</Text>
                                 </View>
                                 <TouchableOpacity
                                   style={styles.variantDeleteButton}
@@ -3815,9 +4644,9 @@ export default function AdminScreen() {
                               <View style={styles.variantHeader}>
                                 <View style={styles.variantInfo}>
                                   <Text style={styles.variantSizeText}>
-                                    {size.size_value} {size.size_unit ? `(${size.size_unit})` : ''}
+                                    {size.size_value}{size.size_unit ? ` (${size.size_unit})` : ''}
                                   </Text>
-                                  <Text style={styles.variantStockText}>ترتيب: {size.display_order}</Text>
+                                  <Text style={styles.variantStockText}>ترتيب: {size.display_order || 0}</Text>
                                 </View>
                                 <TouchableOpacity
                                   style={styles.variantDeleteButton}
@@ -3998,6 +4827,10 @@ export default function AdminScreen() {
                 const displayName = isEditing ? (quickEdit.name !== undefined ? quickEdit.name : section.name) : section.name;
                 const displayOrder = isEditing ? (quickEdit.display_order !== undefined ? quickEdit.display_order : section.display_order) : section.display_order;
                 const displayActive = isEditing ? (quickEdit.is_active !== undefined ? quickEdit.is_active : section.is_active) : section.is_active;
+                
+                // Ensure all values are safe for TextInput
+                const safeDisplayName = displayName || '';
+                const safeDisplayOrder = displayOrder !== undefined && displayOrder !== null ? displayOrder : (section.display_order || 0);
 
                 return (
                   <View key={section.id} style={styles.gridCard}>
@@ -4008,7 +4841,7 @@ export default function AdminScreen() {
                       {isEditing ? (
                         <TextInput
                           style={styles.inlineInput}
-                          value={displayName}
+                          value={safeDisplayName}
                           onChangeText={(text) => setQuickEditSection({ ...quickEditSection, [section.id]: { ...quickEdit, name: text } })}
                           placeholder="اسم القسم"
                         />
@@ -4039,7 +4872,7 @@ export default function AdminScreen() {
                       {isEditing ? (
                         <TextInput
                           style={styles.inlineInputSmall}
-                          value={displayOrder.toString()}
+                          value={safeDisplayOrder.toString()}
                           onChangeText={(text) => setQuickEditSection({ ...quickEditSection, [section.id]: { ...quickEdit, display_order: parseInt(text) || 0 } })}
                           placeholder="ترتيب"
                           keyboardType="numeric"
@@ -4400,6 +5233,159 @@ const styles = StyleSheet.create({
     color: '#2196F3',
     fontSize: 11,
     fontWeight: '600',
+  },
+  duplicateButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    backgroundColor: '#EEF2FF',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#6366F1',
+    gap: 4,
+  },
+  duplicateButtonText: {
+    color: '#6366F1',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  filtersContainer: {
+    backgroundColor: '#fff',
+    padding: 15,
+    borderRadius: 12,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  searchContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F9FAFB',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 15,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  searchIcon: {
+    marginRight: 8,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 14,
+    color: '#1F2937',
+  },
+  filtersRow: {
+    marginBottom: 15,
+  },
+  filterGroup: {
+    marginRight: 15,
+    marginBottom: 10,
+  },
+  filterLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#6B7280',
+    marginBottom: 6,
+  },
+  filterChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    backgroundColor: '#F9FAFB',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    marginRight: 6,
+  },
+  filterChipActive: {
+    backgroundColor: '#EE1C47',
+    borderColor: '#EE1C47',
+  },
+  filterChipText: {
+    fontSize: 12,
+    color: '#6B7280',
+    fontWeight: '500',
+  },
+  filterChipTextActive: {
+    color: '#fff',
+    fontWeight: '600',
+  },
+  sortContainer: {
+    marginTop: 10,
+    paddingTop: 15,
+    borderTopWidth: 1,
+    borderTopColor: '#E5E7EB',
+  },
+  sortLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#6B7280',
+    marginBottom: 8,
+  },
+  sortRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  sortChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    backgroundColor: '#F9FAFB',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  sortChipActive: {
+    backgroundColor: '#EE1C47',
+    borderColor: '#EE1C47',
+  },
+  sortChipText: {
+    fontSize: 12,
+    color: '#6B7280',
+    fontWeight: '500',
+  },
+  sortChipTextActive: {
+    color: '#fff',
+    fontWeight: '600',
+  },
+  resultsCount: {
+    fontSize: 12,
+    color: '#6B7280',
+    marginTop: 10,
+    textAlign: 'center',
+  },
+  paginationContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 20,
+    gap: 15,
+  },
+  paginationButton: {
+    padding: 10,
+    borderRadius: 8,
+    backgroundColor: '#F9FAFB',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  paginationButtonDisabled: {
+    opacity: 0.5,
+  },
+  paginationInfo: {
+    alignItems: 'center',
+  },
+  paginationText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#1F2937',
+  },
+  paginationSubText: {
+    fontSize: 12,
+    color: '#6B7280',
+    marginTop: 2,
   },
   gridProductImageSmall: {
     width: 60,
@@ -5008,8 +5994,14 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#6B7280',
   },
+  variantEditButton: {
+    padding: 8,
+  },
   variantDeleteButton: {
     padding: 8,
+  },
+  updateVariantButton: {
+    backgroundColor: '#2196F3',
   },
   variantImage: {
     width: '100%',
