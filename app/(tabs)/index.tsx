@@ -105,10 +105,55 @@ export default function HomeScreen() {
 
       console.log(`⏱️ Query took ${endTime - startTime}ms`);
       console.log('✅ Products loaded:', data?.length || 0, 'products');
+      
+      // Load primary images for all products in parallel
+      if (data && data.length > 0) {
+        const productIds = data.map((p: any) => p.id);
+        
+        try {
+          const primaryImagesResponse = await fetch(
+            `${supabaseUrl}/rest/v1/product_images?select=product_id,image_url&is_primary=eq.true&variant_id=is.null&product_id=in.(${productIds.map((id: string) => `"${id}"`).join(',')})`,
+            {
+              headers: {
+                'apikey': supabaseKey || '',
+                'Authorization': `Bearer ${supabaseKey || ''}`,
+                'Content-Type': 'application/json',
+              }
+            }
+          );
+          
+          if (primaryImagesResponse.ok) {
+            const primaryImagesData = await primaryImagesResponse.json();
+            const primaryImagesMap: { [key: string]: string } = {};
+            
+            primaryImagesData.forEach((img: any) => {
+              if (!primaryImagesMap[img.product_id]) {
+                primaryImagesMap[img.product_id] = img.image_url;
+              }
+            });
+            
+            // Add primary_image_url to each product
+            const productsWithImages = data.map((product: any) => ({
+              ...product,
+              primary_image_url: primaryImagesMap[product.id] || null,
+            }));
+            
+            setProducts(productsWithImages || []);
+            console.log('✅ Products with primary images loaded');
+          } else {
+            setProducts(data || []);
+          }
+        } catch (imgError) {
+          console.warn('⚠️ Error loading primary images:', imgError);
+          setProducts(data || []);
+        }
+      } else {
+        setProducts(data || []);
+      }
+      
       if (data && data.length > 0) {
         console.log('📦 First product:', data[0].name);
       }
-      setProducts(data || []);
     } catch (error: any) {
       if (timeoutId) clearTimeout(timeoutId);
       if (timeoutTriggered) return;
@@ -357,9 +402,9 @@ export default function HomeScreen() {
                   )}
                   
                   <Image
-                    source={{ uri: product.image_url }}
+                    source={{ uri: product.primary_image_url || product.image_url }}
                     style={styles.productImage}
-                    resizeMode="cover"
+                    resizeMode="contain"
                   />
                   <View style={styles.productInfo}>
                     <Text style={styles.productName} numberOfLines={2}>
@@ -564,6 +609,7 @@ const styles = StyleSheet.create({
     width: '100%',
     height: itemWidth * 1.2,
     backgroundColor: '#f0f0f0',
+    objectFit: 'contain', // For web compatibility - shows full image
   },
   productInfo: {
     padding: 10,

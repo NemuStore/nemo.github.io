@@ -12,6 +12,7 @@ import {
   Dimensions,
 } from 'react-native';
 import { supabase } from '@/lib/supabase';
+import { createClient } from '@supabase/supabase-js';
 import { Order, Shipment, Inventory, Product, User, UserRole, Category, Section, ProductVariant, CategoryColor, CategorySize } from '@/types';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -63,7 +64,7 @@ export default function AdminScreen() {
     stock_quantity: '',
     source_type: 'warehouse' as 'warehouse' | 'external', // مصدر المنتج
     sku: '', // كود المنتج الفريد
-    image_url: '', // Keep for backward compatibility
+    // image_url removed - all images are stored in product_images table using imgbb links
     sold_count: '0', // عدد القطع المباعة (يتم تحديثه تلقائياً)
     is_limited_time_offer: false, // عرض محدود الوقت
     offer_duration_days: '', // مدة العرض بالأيام
@@ -144,6 +145,10 @@ export default function AdminScreen() {
   const [productCurrentPage, setProductCurrentPage] = useState(1);
   const [productsPerPage] = useState(12);
   const [productVariantsCount, setProductVariantsCount] = useState<{ [key: string]: number }>({});
+  
+  // Cache for access token to avoid repeated calls
+  const [cachedAccessToken, setCachedAccessToken] = useState<string | null>(null);
+  const [tokenExpiresAt, setTokenExpiresAt] = useState<number | null>(null);
 
   useEffect(() => {
     checkUserRole();
@@ -801,9 +806,71 @@ export default function AdminScreen() {
     }
   };
 
+  // Helper function to decode JWT token and extract user info
+  const decodeJWT = (token: string): any => {
+    try {
+      const parts = token.split('.');
+      if (parts.length === 3) {
+        const payload = JSON.parse(atob(parts[1]));
+        return {
+          id: payload.sub,
+          email: payload.email,
+          user_metadata: payload.user_metadata || {},
+          app_metadata: payload.app_metadata || {},
+        };
+      }
+    } catch (e) {
+      console.error('❌ Error decoding JWT:', e);
+    }
+    return null;
+  };
+
+  // Helper function to get full session from localStorage
+  const getSessionFromStorage = async (): Promise<any> => {
+    if (typeof window === 'undefined') return null;
+    
+    try {
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || '';
+      const projectRef = supabaseUrl.split('//')[1]?.split('.')[0] || 'default';
+      const storageKey = `sb-${projectRef}-auth-token`;
+      const tokenData = localStorage.getItem(storageKey);
+      
+      if (tokenData) {
+        const parsed = JSON.parse(tokenData);
+        
+        // If user is missing, try to decode it from access_token
+        if (!parsed.user && parsed.access_token) {
+          console.log('🔑 User missing from session data, decoding from JWT...');
+          const decodedUser = decodeJWT(parsed.access_token);
+          if (decodedUser) {
+            parsed.user = decodedUser;
+            console.log('✅ User decoded from JWT:', decodedUser.id);
+          }
+        }
+        
+        return parsed;
+      }
+    } catch (e) {
+      console.log('⚠️ Admin: Error reading session from localStorage');
+    }
+    
+    return null;
+  };
+
+  // Fast access token getter - uses cache and localStorage directly (no getSession timeout)
   const getAccessToken = async (): Promise<string> => {
     const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || '';
     
+    // Check cache first (fastest)
+    if (cachedAccessToken && tokenExpiresAt) {
+      const now = Date.now() / 1000;
+      // If token expires in more than 5 minutes, use cached token
+      if (tokenExpiresAt - now > 300) {
+        return cachedAccessToken;
+      }
+    }
+    
+    // Get from localStorage directly (fast, no timeout)
     if (typeof window !== 'undefined') {
       try {
         const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || '';
@@ -816,20 +883,50 @@ export default function AdminScreen() {
           const accessToken = parsed?.access_token || '';
           const expiresAt = parsed?.expires_at;
           
-          // Check if token is expired (with 5 minute buffer)
-          if (expiresAt && Date.now() / 1000 >= expiresAt - 300) {
-            console.log('⚠️ Admin: Token expired, refreshing...');
-            const newToken = await refreshTokenIfNeeded();
-            return newToken || accessToken || supabaseKey;
+          if (accessToken) {
+            // Update cache
+            setCachedAccessToken(accessToken);
+            setTokenExpiresAt(expiresAt || null);
+            
+            // Check if token is expired (with 5 minute buffer)
+            if (expiresAt && Date.now() / 1000 >= expiresAt - 300) {
+              console.log('⚠️ Admin: Token expired, refreshing...');
+              const newToken = await refreshTokenIfNeeded();
+              if (newToken) {
+                setCachedAccessToken(newToken);
+                return newToken;
+              }
+            }
+            
+            return accessToken;
           }
-          
-          return accessToken || supabaseKey;
         }
       } catch (e) {
         console.log('⚠️ Admin: Error reading token from localStorage');
       }
     }
     
+    // Last resort: try getSession (with timeout) - only if localStorage failed
+    try {
+      const sessionPromise = supabase.auth.getSession();
+      const sessionTimeout = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Session timeout')), 1000) // Reduced timeout to 1 second
+      );
+      
+      const sessionResult = await Promise.race([sessionPromise, sessionTimeout]) as any;
+      const session = sessionResult?.data?.session;
+      
+      if (session && session.access_token) {
+        setCachedAccessToken(session.access_token);
+        setTokenExpiresAt(session.expires_at || null);
+        return session.access_token;
+      }
+    } catch (sessionError) {
+      // Ignore - will use anon key
+    }
+    
+    // Last resort: return anon key (but this will fail RLS policies)
+    console.warn('⚠️ Admin: No access_token found, using anon key (RLS policies may fail)');
     return supabaseKey;
   };
 
@@ -971,7 +1068,7 @@ export default function AdminScreen() {
       const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
       const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
       
-      // Get access_token (with auto-refresh if expired)
+      // Get access_token once and reuse it for all requests (much faster)
       const accessToken = await getAccessToken();
       
       if (activeTab === 'orders') {
@@ -1020,59 +1117,95 @@ export default function AdminScreen() {
           console.error('❌ Admin: Error loading inventory:', await response.text());
         }
       } else if (activeTab === 'products') {
-        // Load sections and categories first (needed for product form)
-        await loadSections();
-        await loadCategories();
+        // Get access token once for all product-related requests
+        const productsAccessToken = accessToken;
         
-        // Load products with category data
-        const productsResponse = await fetch(`${supabaseUrl}/rest/v1/products?select=*,category_data:categories(*)&order=created_at.desc`, {
-          headers: {
-            'apikey': supabaseKey || '',
-            'Authorization': `Bearer ${accessToken}`,
-            'Content-Type': 'application/json',
+        // Load sections and categories first (needed for product form) - in parallel
+        const [sectionsResult, categoriesResult] = await Promise.all([
+          loadSections(),
+          loadCategories()
+        ]);
+        
+        // Load products with category and section data in one query using nested select
+        // Also load primary image and variants count in parallel
+        const productsResponse = await fetch(
+          `${supabaseUrl}/rest/v1/products?select=*,category_data:categories(*,section_data:sections(*))&order=created_at.desc`,
+          {
+            headers: {
+              'apikey': supabaseKey || '',
+              'Authorization': `Bearer ${productsAccessToken}`,
+              'Content-Type': 'application/json',
+            }
           }
-        });
+        );
         
         if (productsResponse.ok) {
           const productsData = await productsResponse.json();
           
-          // Load sections separately and map them to categories
-          const sectionsResponse = await fetch(`${supabaseUrl}/rest/v1/sections?select=*`, {
-            headers: {
-              'apikey': supabaseKey || '',
-              'Authorization': `Bearer ${accessToken}`,
-              'Content-Type': 'application/json',
-            }
-          });
+          // Get all product IDs for parallel loading
+          const productIds = productsData.map((p: any) => p.id);
           
-          let sectionsMap: { [key: string]: any } = {};
-          if (sectionsResponse.ok) {
-            const sectionsData = await sectionsResponse.json();
-            sectionsData.forEach((section: any) => {
-              sectionsMap[section.id] = section;
+          // Initialize maps
+          const variantsCountMap: { [key: string]: number } = {};
+          const primaryImagesMap: { [key: string]: string } = {};
+          
+          // Only load variants and images if we have products
+          if (productIds.length > 0) {
+            // Load variants count and primary images in parallel
+            const [variantsCountData, primaryImagesData] = await Promise.all([
+              // Load variants count
+              fetch(
+                `${supabaseUrl}/rest/v1/product_variants?select=product_id&product_id=in.(${productIds.map((id: string) => `"${id}"`).join(',')})`,
+                {
+                  headers: {
+                    'apikey': supabaseKey || '',
+                    'Authorization': `Bearer ${productsAccessToken}`,
+                    'Content-Type': 'application/json',
+                  }
+                }
+              ).then(res => res.ok ? res.json() : []).catch(() => []),
+              // Load primary images (one per product)
+              fetch(
+                `${supabaseUrl}/rest/v1/product_images?select=product_id,image_url&is_primary=eq.true&variant_id=is.null&product_id=in.(${productIds.map((id: string) => `"${id}"`).join(',')})`,
+                {
+                  headers: {
+                    'apikey': supabaseKey || '',
+                    'Authorization': `Bearer ${productsAccessToken}`,
+                    'Content-Type': 'application/json',
+                  }
+                }
+              ).then(res => res.ok ? res.json() : []).catch(() => [])
+            ]);
+            
+            // Create maps for fast lookup
+            variantsCountData.forEach((variant: any) => {
+              variantsCountMap[variant.product_id] = (variantsCountMap[variant.product_id] || 0) + 1;
+            });
+            
+            primaryImagesData.forEach((img: any) => {
+              if (!primaryImagesMap[img.product_id]) {
+                primaryImagesMap[img.product_id] = img.image_url;
+              }
             });
           }
           
-          // Process products to add section_data to category_data
-          const processedData = (productsData || []).map((product: any) => {
-            if (product.category_data && product.category_data.section_id) {
-              const section = sectionsMap[product.category_data.section_id];
-              return {
-                ...product,
-                category_data: {
-                  ...product.category_data,
-                  section_data: section || null,
-                }
-              };
+          // Initialize all products with 0 variants if they have no variants
+          productIds.forEach(id => {
+            if (!variantsCountMap[id]) {
+              variantsCountMap[id] = 0;
             }
-            return product;
           });
           
-          setProducts(processedData);
-          console.log('✅ Admin: Products loaded:', processedData?.length || 0);
+          // Process products with variants count and primary image
+          const processedData = productsData.map((product: any) => ({
+            ...product,
+            variants_count: variantsCountMap[product.id] || 0,
+            primary_image_url: primaryImagesMap[product.id] || null,
+          }));
           
-          // Load variants count for each product
-          await loadProductVariantsCount(processedData.map((p: any) => p.id));
+          setProducts(processedData);
+          setProductVariantsCount(variantsCountMap);
+          console.log('✅ Admin: Products loaded:', processedData?.length || 0);
         } else {
           console.error('❌ Admin: Error loading products:', await productsResponse.text());
         }
@@ -1116,10 +1249,7 @@ export default function AdminScreen() {
         
         if (uploadedImages.length > 0) {
           setProductImages([...productImages, ...uploadedImages]);
-          // Set first image as primary for backward compatibility
-          if (productImages.length === 0 && uploadedImages.length > 0) {
-            setNewProduct({ ...newProduct, image_url: uploadedImages[0].url || '' });
-          }
+          // Images are stored in product_images table using imgbb links, no need to set image_url
           
           if (typeof window !== 'undefined' && Platform.OS === 'web') {
             window.alert(`تم رفع ${uploadedImages.length} صورة بنجاح`);
@@ -1143,18 +1273,13 @@ export default function AdminScreen() {
   const removeImage = (index: number) => {
     const newImages = productImages.filter((_, i) => i !== index);
     setProductImages(newImages);
-    // Update primary image if needed
-    if (newImages.length > 0 && index === 0) {
-      setNewProduct({ ...newProduct, image_url: newImages[0].url || '' });
-    } else if (newImages.length === 0) {
-      setNewProduct({ ...newProduct, image_url: '' });
-    }
+    // Images are stored in product_images table, no need to update image_url
   };
 
   const setPrimaryImage = (index: number) => {
     if (productImages[index]?.url) {
-      setNewProduct({ ...newProduct, image_url: productImages[index].url || '' });
       // Reorder images to put primary first
+      // Primary image is determined by is_primary flag in product_images table
       const reordered = [
         productImages[index],
         ...productImages.filter((_, i) => i !== index)
@@ -1605,6 +1730,12 @@ export default function AdminScreen() {
   };
 
   const addProduct = async () => {
+    // Prevent multiple clicks
+    if (loading) {
+      console.warn('⚠️ Add product already in progress, ignoring click');
+      return;
+    }
+
     if (!newProduct.name || !newProduct.price || !newProduct.sku) {
       sweetAlert.showError('خطأ', 'يرجى ملء جميع الحقول المطلوبة (الاسم، السعر، كود المنتج)');
       return;
@@ -1617,7 +1748,7 @@ export default function AdminScreen() {
       return;
     }
 
-    if (productImages.length === 0 && !newProduct.image_url) {
+    if (productImages.length === 0) {
       if (typeof window !== 'undefined' && Platform.OS === 'web') {
         window.alert('يرجى إضافة صورة واحدة على الأقل');
       } else {
@@ -1625,6 +1756,10 @@ export default function AdminScreen() {
       }
       return;
     }
+
+    // Log productVariants before saving
+    console.log('🔍 Before saving - productVariants count:', productVariants.length);
+    console.log('🔍 Before saving - productVariants:', productVariants);
 
     setLoading(true);
     try {
@@ -1654,7 +1789,7 @@ export default function AdminScreen() {
           stock_quantity: newProduct.source_type === 'warehouse' ? (parseInt(newProduct.stock_quantity) || 0) : 0,
           source_type: newProduct.source_type,
           sku: newProduct.sku,
-          image_url: newProduct.image_url || productImages[0]?.url || '', // Fallback
+          // image_url removed - all images are stored in product_images table using imgbb links
           sold_count: parseInt(newProduct.sold_count) || 0,
           is_limited_time_offer: newProduct.is_limited_time_offer,
           offer_start_date: newProduct.is_limited_time_offer ? new Date().toISOString() : null,
@@ -1675,52 +1810,337 @@ export default function AdminScreen() {
       }
 
       // Add product images
+      console.log('🖼️ Checking productImages before saving:', productImages.length);
+      console.log('🖼️ productImages state:', JSON.stringify(productImages, null, 2));
+      
       if (productImages.length > 0) {
-        const imagesToInsert = productImages.map((img, index) => ({
-          product_id: productId,
-          image_url: img.url || '',
-          display_order: index,
-          is_primary: index === 0, // First image is primary
-        }));
-
-        const imagesResponse = await fetch(`${supabaseUrl}/rest/v1/product_images`, {
-          method: 'POST',
-          headers: {
-            'apikey': supabaseKey || '',
-            'Authorization': `Bearer ${accessToken}`,
-            'Content-Type': 'application/json',
-            'Prefer': 'return=representation'
-          },
-          body: JSON.stringify(imagesToInsert)
-        });
-
-        if (!imagesResponse.ok) {
-          const errorText = await imagesResponse.text();
-          console.warn('⚠️ Failed to add product images:', errorText);
-          // Continue anyway - product is created
+        console.log('📸 Preparing to save product images:', productImages.length);
+        console.log('📸 Product images data:', productImages.map(img => ({ uri: img.uri, url: img.url })));
+        
+        // Filter out images without URLs (failed uploads)
+        const validImages = productImages.filter(img => img.url && img.url.trim() !== '');
+        console.log('📸 Valid images (with URLs):', validImages.length, 'out of', productImages.length);
+        
+        if (validImages.length === 0) {
+          console.error('❌ CRITICAL: No valid images found! All images are missing URLs.');
+          console.error('❌ This means images were not uploaded to imgbb successfully.');
+          console.error('❌ Check imgbb API key and network connection.');
+        }
+        
+        if (validImages.length === 0) {
+          console.warn('⚠️ No valid images to save (all images missing URLs)');
         } else {
-          console.log('✅ Product images added:', imagesToInsert.length);
+          console.log('📤 Starting to insert', validImages.length, 'images one by one...');
+          
+          // Verify Supabase session before inserting (with timeout to prevent hanging)
+          console.log('🔐 Step 1: Checking Supabase session...');
+          try {
+            console.log('🔐 Step 2: Calling supabase.auth.getSession() with timeout...');
+            const sessionPromise = supabase.auth.getSession();
+            const sessionTimeout = new Promise((_, reject) => 
+              setTimeout(() => reject(new Error('Session timeout after 3 seconds')), 3000)
+            );
+            
+            console.log('🔐 Step 3: Racing session promise with timeout...');
+            const sessionResult = await Promise.race([sessionPromise, sessionTimeout]) as any;
+            console.log('🔐 Step 4: Got session result:', { hasResult: !!sessionResult, hasData: !!sessionResult?.data, hasSession: !!sessionResult?.data?.session });
+            
+            const sessionData = sessionResult?.data;
+            const sessionError = sessionResult?.error;
+            
+            if (sessionError || !sessionData?.session) {
+              console.error('❌ No valid Supabase session found:', sessionError);
+              console.error('❌ Session data:', sessionData);
+              // Try to continue anyway - the insert might still work with RLS
+              console.warn('⚠️ Continuing without verified session - will attempt insert anyway');
+            } else {
+              console.log('✅ Supabase session verified');
+            }
+            console.log('🔐 Step 5: Proceeding with image insertion...');
+          } catch (sessionCheckError: any) {
+            console.error('❌ Error checking Supabase session:', sessionCheckError);
+            console.error('❌ Error message:', sessionCheckError?.message);
+            // Don't return - try to continue anyway, the insert might work
+            console.warn('⚠️ Session check failed, but continuing with image insertion anyway');
+          }
+          
+          // Get full session from storage (needed for auth.setSession())
+          const sessionData = await getSessionFromStorage();
+          console.log('🔑 Got session data from storage:', !!sessionData);
+          
+          // Create a Supabase client and set the session properly
+          // This ensures auth.uid() works correctly in RLS policies
+          const supabaseWithAuth = createClient(
+            process.env.EXPO_PUBLIC_SUPABASE_URL || '',
+            process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || ''
+          );
+          
+          // Set the session in the client to ensure auth.uid() works
+          if (sessionData && sessionData.access_token) {
+            try {
+              console.log('🔑 Session data from storage:', {
+                hasAccessToken: !!sessionData.access_token,
+                hasRefreshToken: !!sessionData.refresh_token,
+                hasUser: !!sessionData.user,
+                userId: sessionData.user?.id,
+                expiresAt: sessionData.expires_at,
+              });
+              
+              // Create a session object compatible with Supabase
+              const session = {
+                access_token: sessionData.access_token,
+                refresh_token: sessionData.refresh_token || '',
+                expires_in: sessionData.expires_in || 3600,
+                expires_at: sessionData.expires_at || Math.floor(Date.now() / 1000) + 3600,
+                token_type: 'bearer',
+                user: sessionData.user || null,
+              };
+              
+              console.log('🔑 Setting session with user ID:', session.user?.id);
+              
+              const { data: sessionResult, error: sessionError } = await supabaseWithAuth.auth.setSession(session);
+              if (sessionError) {
+                console.error('❌ Error setting session:', sessionError);
+                // Fallback: try with just access token
+                await supabaseWithAuth.auth.setAccessToken(sessionData.access_token);
+              } else {
+                console.log('✅ Session set successfully in Supabase client');
+                console.log('🔑 Session result:', {
+                  hasSession: !!sessionResult.session,
+                  userId: sessionResult.session?.user?.id,
+                });
+                
+                // Try to refresh the session to ensure it's fully active
+                try {
+                  const { data: refreshResult, error: refreshError } = await supabaseWithAuth.auth.refreshSession();
+                  if (refreshError) {
+                    console.warn('⚠️ Error refreshing session (non-critical):', refreshError);
+                  } else {
+                    console.log('✅ Session refreshed successfully');
+                  }
+                } catch (refreshException) {
+                  console.warn('⚠️ Exception refreshing session (non-critical):', refreshException);
+                }
+                
+                // Verify that auth.uid() will work by checking the current user
+                const { data: { user: currentUser }, error: userError } = await supabaseWithAuth.auth.getUser();
+                if (userError) {
+                  console.error('❌ Error getting user after setSession:', userError);
+                } else {
+                  console.log('✅ Current user after setSession:', {
+                    userId: currentUser?.id,
+                    email: currentUser?.email,
+                  });
+                  
+                  if (!currentUser) {
+                    console.error('❌ CRITICAL: No user found after setSession! RLS policies will fail.');
+                  }
+                }
+              }
+            } catch (sessionSetError: any) {
+              console.error('❌ Exception setting session:', sessionSetError);
+              // Fallback: try with just access token
+              if (sessionData.access_token) {
+                try {
+                  await supabaseWithAuth.auth.setAccessToken(sessionData.access_token);
+                  console.log('✅ Access token set as fallback');
+                } catch (tokenError) {
+                  console.error('❌ Failed to set access token:', tokenError);
+                }
+              }
+            }
+          } else {
+            console.warn('⚠️ No session data found, RLS policies may fail');
+          }
+          
+          // Get access token for fetch requests
+          const accessToken = sessionData?.access_token || await getAccessToken();
+          console.log('🔑 Using access token for fetch, length:', accessToken?.length || 0);
+          
+          const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || '';
+          const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || '';
+          
+          // Verify token is valid by checking user info
+          try {
+            console.log('🔍 Verifying access token before insert...');
+            const userCheckResponse = await fetch(`${supabaseUrl}/auth/v1/user`, {
+              headers: {
+                'apikey': supabaseKey,
+                'Authorization': `Bearer ${accessToken}`,
+              },
+            });
+            
+            if (userCheckResponse.ok) {
+              const userData = await userCheckResponse.json();
+              console.log('✅ Token verified, user ID:', userData.id);
+              console.log('✅ User email:', userData.email);
+              
+              // Check user role in users table
+              const userRoleResponse = await fetch(`${supabaseUrl}/rest/v1/users?id=eq.${userData.id}&select=id,role`, {
+                headers: {
+                  'apikey': supabaseKey,
+                  'Authorization': `Bearer ${accessToken}`,
+                },
+              });
+              
+              if (userRoleResponse.ok) {
+                const userRoleData = await userRoleResponse.json();
+                console.log('✅ User role data:', userRoleData);
+                if (userRoleData && userRoleData.length > 0) {
+                  console.log('✅ User role:', userRoleData[0].role);
+                  if (userRoleData[0].role !== 'admin' && userRoleData[0].role !== 'manager') {
+                    console.error('❌ User does not have admin or manager role!');
+                    sweetAlert.showError('خطأ', 'ليس لديك صلاحية لإضافة الصور. يجب أن تكون admin أو manager.');
+                    return;
+                  }
+                } else {
+                  console.error('❌ User not found in users table!');
+                  sweetAlert.showError('خطأ', 'المستخدم غير موجود في جدول users.');
+                  return;
+                }
+              } else {
+                console.error('❌ Failed to check user role:', userRoleResponse.status);
+              }
+            } else {
+              const errorText = await userCheckResponse.text();
+              console.error('❌ Token verification failed:', userCheckResponse.status, errorText);
+              sweetAlert.showError('خطأ', 'فشل التحقق من المصادقة. يرجى تسجيل الدخول مرة أخرى.');
+              return;
+            }
+          } catch (verifyError: any) {
+            console.error('❌ Error verifying token:', verifyError);
+            sweetAlert.showError('خطأ', 'فشل التحقق من المصادقة.');
+            return;
+          }
+          
+          // Insert images one by one using fetch directly with Authorization header
+          // This ensures RLS policies work correctly because Supabase REST API recognizes the Authorization header
+          const insertedImages: any[] = [];
+          const failedImages: Array<{ index: number; error: string }> = [];
+          
+          for (let index = 0; index < validImages.length; index++) {
+            const img = validImages[index];
+            try {
+              console.log(`📤 Inserting image ${index + 1}/${validImages.length}:`, img.url);
+              console.log(`📤 Product ID:`, productId);
+              console.log(`📤 Image data:`, {
+                product_id: productId,
+                image_url: img.url!,
+                variant_id: null,
+                display_order: index,
+                is_primary: index === 0,
+              });
+              
+              // Use fetch directly with Authorization header (ensures RLS works correctly)
+              const response = await fetch(`${supabaseUrl}/rest/v1/product_images?select=*`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'apikey': supabaseKey,
+                  'Authorization': `Bearer ${accessToken}`,
+                  'Prefer': 'return=representation',
+                },
+                body: JSON.stringify({
+                  product_id: productId,
+                  image_url: img.url!,
+                  variant_id: null, // General images, not variant-specific
+                  display_order: index,
+                  is_primary: index === 0, // First image is primary
+                }),
+              });
+              
+              if (!response.ok) {
+                const errorData = await response.json().catch(() => ({ message: response.statusText }));
+                console.error(`❌ Failed to insert image ${index + 1}:`, errorData);
+                console.error(`❌ Response status:`, response.status);
+                console.error(`❌ Response headers:`, Object.fromEntries(response.headers.entries()));
+                failedImages.push({ index, error: errorData.message || `HTTP ${response.status}` });
+              } else {
+                const insertedImage = await response.json();
+                // Supabase returns array when using select=*, so get first element
+                const imageData = Array.isArray(insertedImage) ? insertedImage[0] : insertedImage;
+                console.log(`✅ Successfully inserted image ${index + 1}:`, imageData);
+                insertedImages.push(imageData);
+              }
+            } catch (error: any) {
+              console.error(`❌ Exception inserting image ${index + 1}:`, error);
+              console.error(`❌ Exception details:`, JSON.stringify(error, null, 2));
+              failedImages.push({ index, error: error?.message || 'خطأ غير معروف' });
+            }
+          }
+          
+          // Report results
+          if (failedImages.length > 0) {
+            console.error(`❌ Failed to insert ${failedImages.length} out of ${validImages.length} images`);
+            const errorMessages = failedImages.map(f => `صورة ${f.index + 1}: ${f.error}`).join('\n');
+            sweetAlert.showError('تحذير', `تم حفظ ${insertedImages.length} من أصل ${validImages.length} صورة.\n\nالأخطاء:\n${errorMessages}`);
+          } else {
+            console.log(`✅ Successfully inserted all ${insertedImages.length} images!`);
+          }
+          
+          // Verify images were saved in database
+          try {
+            const { data: savedImages, error: verifyError } = await supabase
+              .from('product_images')
+              .select('id, image_url, display_order')
+              .eq('product_id', productId)
+              .is('variant_id', null);
+            
+            if (verifyError) {
+              console.error('❌ Failed to verify images:', verifyError);
+            } else {
+              console.log(`🔍 Verification: Found ${savedImages?.length || 0} images in database for product ${productId}`);
+              console.log('🔍 Saved images:', savedImages?.map((img: any) => ({ id: img.id, url: img.image_url, order: img.display_order })));
+              
+              if (savedImages && savedImages.length !== validImages.length) {
+                console.warn(`⚠️ Mismatch: Expected ${validImages.length} images, but found ${savedImages.length} in database`);
+              } else if (savedImages && savedImages.length === validImages.length) {
+                console.log(`✅ Verification passed: All ${validImages.length} images are in database`);
+              }
+            }
+          } catch (verifyError) {
+            console.error('❌ Error verifying images:', verifyError);
+          }
         }
       }
 
       // Add product variants
+      console.log('📦 Checking productVariants:', productVariants.length);
+      console.log('📦 productVariants data:', productVariants);
+      
       if (productVariants.length > 0) {
-        const variantsToInsert = productVariants.map((variant, index) => ({
-          product_id: productId,
-          variant_name: variant.variant_name,
-          color: variant.color,
-          size: variant.size,
-          size_unit: variant.size_unit,
-          material: variant.material,
-          price: variant.price,
-          stock_quantity: variant.stock_quantity,
-          sku: variant.sku,
-          image_url: variant.image_url,
-          is_active: variant.is_active,
-          is_default: variant.is_default,
-          display_order: index,
-        }));
+        const variantsToInsert = productVariants.map((variant, index) => {
+          const variantData: any = {
+            product_id: productId,
+            variant_name: variant.variant_name || `${variant.color || ''}${variant.color && variant.size ? ' - ' : ''}${variant.size || ''}`.trim() || 'متغير',
+            color: variant.color || null,
+            size: variant.size || null,
+            size_unit: variant.size_unit || null,
+            material: variant.material || null,
+            price: variant.price || null,
+            stock_quantity: variant.stock_quantity || 0,
+            sku: variant.sku || null,
+            image_url: variant.image_url || null,
+            is_active: variant.is_active !== undefined ? variant.is_active : true,
+            is_default: variant.is_default !== undefined ? variant.is_default : (index === 0),
+            display_order: index,
+          };
+          console.log(`📝 Variant ${index} data:`, variantData);
+          return variantData;
+        });
 
+        console.log('📤 Sending variants to insert:', variantsToInsert.length);
+        console.log('📤 Variants JSON:', JSON.stringify(variantsToInsert, null, 2));
+
+        // Verify that we have a real access_token, not just anon key
+        if (accessToken === supabaseKey) {
+          console.error('❌ CRITICAL: No valid access_token found for variants! Using anon key will fail RLS policies.');
+          console.error('❌ Please ensure you are logged in and have admin/manager role.');
+          sweetAlert.showError('خطأ', 'فشل المصادقة. يرجى تسجيل الدخول مرة أخرى.');
+          return;
+        }
+
+        console.log('✅ Access token verified (not anon key) for variants');
         const variantsResponse = await fetch(`${supabaseUrl}/rest/v1/product_variants`, {
           method: 'POST',
           headers: {
@@ -1731,6 +2151,8 @@ export default function AdminScreen() {
           },
           body: JSON.stringify(variantsToInsert)
         });
+        
+        console.log('📡 Variants response status:', variantsResponse.status);
 
         if (variantsResponse.ok) {
           const variantsData = await variantsResponse.json();
@@ -1738,42 +2160,66 @@ export default function AdminScreen() {
           console.log('📦 Variants data with images:', variantsData.map((v: any) => ({ id: v.id, color: v.color, size: v.size, image_url: v.image_url })));
           
           // Link variant images to product_images
+          console.log('🔗 Starting to link variant images to product_images...');
+          console.log('🔗 Variants with images:', variantsData.filter(v => v.image_url).length, 'out of', variantsData.length);
+          
+          // Get access token for variant images (reuse if already got, otherwise get new one)
+          const variantAccessToken = accessToken || await getAccessToken();
+          console.log('🔑 Using access token for variant images, length:', variantAccessToken?.length || 0);
+          
           for (const variant of variantsData) {
             if (variant.image_url) {
-              console.log('🖼️ Linking variant image:', variant.id, variant.image_url);
-              // Add variant image to product_images with variant_id
-              const variantImageResponse = await fetch(`${supabaseUrl}/rest/v1/product_images`, {
-                method: 'POST',
-                headers: {
-                  'apikey': supabaseKey || '',
-                  'Authorization': `Bearer ${accessToken}`,
-                  'Content-Type': 'application/json',
-                  'Prefer': 'return=representation'
-                },
-                body: JSON.stringify({
-                  product_id: productId,
-                  image_url: variant.image_url,
-                  variant_id: variant.id,
-                  display_order: 0,
-                  is_primary: false,
-                })
-              });
+              console.log('🖼️ Linking variant image:', variant.id, variant.color, variant.size, variant.image_url);
               
-              if (variantImageResponse.ok) {
-                const imageData = await variantImageResponse.json();
-                console.log('✅ Variant image linked successfully:', variant.id, variant.image_url, imageData);
-              } else {
-                const errorText = await variantImageResponse.text();
-                console.error('❌ Failed to link variant image:', variant.id, errorText);
+              try {
+                // Use fetch directly with Authorization header (ensures RLS works correctly)
+                const response = await fetch(`${supabaseUrl}/rest/v1/product_images?select=*`, {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'apikey': supabaseKey,
+                    'Authorization': `Bearer ${variantAccessToken}`,
+                    'Prefer': 'return=representation',
+                  },
+                  body: JSON.stringify({
+                    product_id: productId,
+                    image_url: variant.image_url,
+                    variant_id: variant.id,
+                    display_order: 0,
+                    is_primary: false,
+                  }),
+                });
+                
+                if (!response.ok) {
+                  const errorData = await response.json().catch(() => ({ message: response.statusText }));
+                  console.error('❌ Failed to link variant image:', variant.id, errorData);
+                  console.error('❌ Response status:', response.status);
+                } else {
+                  const imageData = await response.json();
+                  const imageResult = Array.isArray(imageData) ? imageData[0] : imageData;
+                  console.log('✅ Variant image linked successfully:', variant.id, variant.image_url, imageResult);
+                }
+              } catch (error: any) {
+                console.error('❌ Exception during variant image insert:', variant.id, error);
+                console.error('❌ Error message:', error?.message);
+                console.error('❌ Error stack:', error?.stack);
               }
             } else {
               console.warn('⚠️ Variant has no image_url:', variant.id, variant.color, variant.size);
             }
           }
+          
+          console.log('🔗 Finished linking variant images');
         } else {
           const errorText = await variantsResponse.text();
-          console.error('❌ Failed to add product variants:', errorText);
+          console.error('❌ Failed to add product variants:', variantsResponse.status, errorText);
+          console.error('❌ Request body was:', JSON.stringify(variantsToInsert, null, 2));
+          console.error('❌ Response headers:', Object.fromEntries(variantsResponse.headers.entries()));
+          sweetAlert.showError('خطأ', `فشل حفظ المتغيرات: ${errorText}`);
+          throw new Error(`Failed to save variants: ${variantsResponse.status} ${errorText}`);
         }
+      } else {
+        console.log('ℹ️ No variants to add for this product');
       }
 
       sweetAlert.showSuccess('نجح', 'تم إضافة المنتج بنجاح', () => {
@@ -1790,7 +2236,7 @@ export default function AdminScreen() {
           stock_quantity: '',
           source_type: 'warehouse',
           sku: '',
-          image_url: '',
+          // image_url removed - all images are stored in product_images table using imgbb links
           sold_count: '0',
           is_limited_time_offer: false,
           offer_duration_days: '',
@@ -1822,30 +2268,58 @@ export default function AdminScreen() {
   };
 
   const startEditProduct = async (product: Product) => {
+    console.log('🔄 Starting edit product:', product);
+    console.log('📦 Product data:', JSON.stringify(product, null, 2));
+    
     setEditingProduct(product);
     // الحصول على section_id من الفئة المرتبطة بالمنتج
     const productCategory = categories.find(c => c.id === product.category_id);
     const sectionId = productCategory?.section_id || product.section_data?.id || '';
     
-    setNewProduct({
-      name: product.name,
+    const newProductData = {
+      name: product.name || '',
       description: product.description || '',
-      price: product.price.toString(),
-      original_price: product.original_price?.toString() || '',
-      discount_percentage: product.discount_percentage?.toString() || '',
+      price: (product.price || 0).toString(),
+      original_price: (product.original_price || '').toString(),
+      discount_percentage: (product.discount_percentage || '').toString(),
       section_id: sectionId,
       category: product.category || '',
       category_id: product.category_id || '',
-      stock_quantity: product.stock_quantity.toString(),
+      stock_quantity: (product.stock_quantity || 0).toString(),
       source_type: product.source_type || 'warehouse',
       sku: product.sku || '',
-      image_url: product.image_url || '',
+      // image_url removed - all images are stored in product_images table using imgbb links
       sold_count: (product.sold_count || 0).toString(),
       is_limited_time_offer: product.is_limited_time_offer || false,
-      offer_duration_days: product.offer_duration_days?.toString() || '',
-    });
+      offer_duration_days: (product.offer_duration_days || '').toString(),
+    };
+    
+    console.log('📝 Setting newProduct data:', JSON.stringify(newProductData, null, 2));
+    // Ensure all values are strings and not null/undefined
+    const safeNewProductData = {
+      name: String(newProductData.name || ''),
+      description: String(newProductData.description || ''),
+      price: String(newProductData.price || '0'),
+      original_price: String(newProductData.original_price || ''),
+      discount_percentage: String(newProductData.discount_percentage || ''),
+      section_id: String(newProductData.section_id || ''),
+      category: String(newProductData.category || ''),
+      category_id: String(newProductData.category_id || ''),
+      stock_quantity: String(newProductData.stock_quantity || '0'),
+      source_type: newProductData.source_type || 'warehouse',
+      sku: String(newProductData.sku || ''),
+      // image_url removed - all images are stored in product_images table using imgbb links
+      sold_count: String(newProductData.sold_count || '0'),
+      is_limited_time_offer: Boolean(newProductData.is_limited_time_offer),
+      offer_duration_days: String(newProductData.offer_duration_days || ''),
+    };
+    console.log('🔒 Safe newProduct data:', JSON.stringify(safeNewProductData, null, 2));
+    setNewProduct(safeNewProductData);
     setProductImages([]);
     setEditProductImages([]);
+    
+    // Small delay to ensure state is updated before continuing
+    await new Promise(resolve => setTimeout(resolve, 100));
     
     // Load product images
     try {
@@ -1908,26 +2382,17 @@ export default function AdminScreen() {
         }
       }
       
-      // If still no images found, use product.image_url as fallback
-      if (loadedImages.length === 0 && product.image_url) {
-        loadedImages = [{
-          uri: product.image_url,
-          url: product.image_url,
-        }];
-        console.log('✅ Using product.image_url as fallback:', product.image_url);
+      // No longer using product.image_url as fallback - all images should be in product_images
+      if (loadedImages.length === 0) {
+        console.warn('⚠️ No images found in product_images for product:', product.id);
       }
       
       setProductImages(loadedImages);
       console.log('🖼️ Final images data:', loadedImages);
     } catch (error) {
       console.error('Error loading product images:', error);
-      // Fallback to product.image_url if error occurs
-      if (product.image_url) {
-        setProductImages([{
-          uri: product.image_url,
-          url: product.image_url,
-        }]);
-      }
+      // No longer using product.image_url as fallback
+      setProductImages([]);
     }
     
     // Load product variants
@@ -1944,8 +2409,11 @@ export default function AdminScreen() {
         }
       });
       
+      console.log('📡 Variants response status:', variantsResponse.status);
       if (variantsResponse.ok) {
         const variantsData = await variantsResponse.json();
+        console.log('📦 Raw variants data from API:', variantsData);
+        console.log('📦 Variants count:', variantsData?.length || 0);
         
         // Load variant images for each variant
         const variantsWithImages = await Promise.all((variantsData || []).map(async (variant: ProductVariant) => {
@@ -2000,9 +2468,24 @@ export default function AdminScreen() {
           hasImage: !!v.image_url,
           image_url: v.image_url 
         })));
+        
+        if (variantsWithImages.length === 0) {
+          console.log('ℹ️ No variants found for this product. User can add variants using the UI.');
+        }
+      } else {
+        const errorText = await variantsResponse.text();
+        console.error('❌ Failed to load variants:', variantsResponse.status, errorText);
+        console.error('❌ Response headers:', Object.fromEntries(variantsResponse.headers.entries()));
+        setProductVariants([]);
+        
+        // Show user-friendly message if it's an auth error
+        if (variantsResponse.status === 403 || variantsResponse.status === 401) {
+          console.error('❌ Authentication error when loading variants. User may need to log in again.');
+        }
       }
     } catch (error) {
-      console.error('Error loading product variants:', error);
+      console.error('❌ Error loading product variants:', error);
+      setProductVariants([]);
     }
     
     // Load category colors and sizes if category is selected
@@ -2050,6 +2533,12 @@ export default function AdminScreen() {
   };
 
   const updateProduct = async () => {
+    // Prevent multiple clicks
+    if (loading) {
+      console.warn('⚠️ Update product already in progress, ignoring click');
+      return;
+    }
+
     if (!editingProduct || !newProduct.name || !newProduct.price || !newProduct.sku) {
       sweetAlert.showError('خطأ', 'يرجى ملء جميع الحقول المطلوبة (الاسم، السعر، كود المنتج)');
       return;
@@ -2063,6 +2552,7 @@ export default function AdminScreen() {
     }
 
     setLoading(true);
+    console.log('🔄 Starting product update...');
     try {
       const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
       const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
@@ -2090,7 +2580,7 @@ export default function AdminScreen() {
           stock_quantity: newProduct.source_type === 'warehouse' ? (parseInt(newProduct.stock_quantity) || 0) : 0,
           source_type: newProduct.source_type,
           sku: newProduct.sku,
-          image_url: newProduct.image_url || productImages[0]?.url || editingProduct.image_url,
+          // image_url removed - all images are stored in product_images table using imgbb links
           sold_count: parseInt(newProduct.sold_count) || editingProduct.sold_count || 0,
           is_limited_time_offer: newProduct.is_limited_time_offer,
           offer_start_date: newProduct.is_limited_time_offer ? (editingProduct?.offer_start_date || new Date().toISOString()) : null,
@@ -2106,38 +2596,197 @@ export default function AdminScreen() {
       // Update product images if new images were added
       // Only update general images (variant_id is null), not variant-specific images
       if (productImages.length > 0) {
-        // Delete old general images only (variant_id is null)
-        await fetch(`${supabaseUrl}/rest/v1/product_images?product_id=eq.${editingProduct.id}&variant_id=is.null`, {
-          method: 'DELETE',
-          headers: {
-            'apikey': supabaseKey || '',
-            'Authorization': `Bearer ${accessToken}`,
-            'Content-Type': 'application/json',
+        console.log('📸 Preparing to update product images:', productImages.length);
+        console.log('📸 Product images data:', productImages.map(img => ({ uri: img.uri, url: img.url })));
+        
+        // Filter out images without URLs (failed uploads)
+        const validImages = productImages.filter(img => img.url && img.url.trim() !== '');
+        console.log('📸 Valid images (with URLs):', validImages.length, 'out of', productImages.length);
+        console.log('📸 About to check if validImages.length === 0...');
+        
+        if (validImages.length === 0) {
+          console.warn('⚠️ No valid images to update (all images missing URLs)');
+        } else {
+          console.log('✅ Entering else block - validImages.length > 0');
+          console.log('🗑️ About to delete old general images...');
+          console.log('🗑️ Product ID:', editingProduct.id);
+          console.log('🗑️ Supabase client available:', !!supabase);
+          
+          try {
+            console.log('🗑️ About to execute delete query...');
+            console.log('🗑️ Using direct fetch instead of Supabase client (more reliable on web)...');
+            
+            // Use direct fetch instead of Supabase client for better reliability on web
+            const deleteUrl = `${supabaseUrl}/rest/v1/product_images?product_id=eq.${editingProduct.id}&variant_id=is.null`;
+            console.log('🗑️ Delete URL:', deleteUrl);
+            
+            const deleteResponse = await fetch(deleteUrl, {
+              method: 'DELETE',
+              headers: {
+                'apikey': supabaseKey || '',
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json',
+                'Prefer': 'return=minimal'
+              }
+            });
+            
+            console.log('🗑️ Delete operation completed, checking response...');
+            console.log('🗑️ Delete response status:', deleteResponse.status);
+            
+            if (!deleteResponse.ok) {
+              const errorText = await deleteResponse.text();
+              console.warn('⚠️ Failed to delete old images:', deleteResponse.status, errorText);
+              throw new Error(`Failed to delete old images: ${deleteResponse.status} ${errorText}`);
+            } else {
+              console.log('✅ Old general images deleted successfully');
+            }
+          } catch (deleteException: any) {
+            console.error('❌ Exception while deleting old images:', deleteException);
+            console.error('❌ Exception message:', deleteException.message);
+            console.error('❌ Exception stack:', deleteException.stack);
           }
-        });
 
-        // Insert new general images (variant_id is null)
-        const imagesToInsert = productImages.map((img, index) => ({
-          product_id: editingProduct.id,
-          image_url: img.url || '',
-          variant_id: null, // General images, not variant-specific
-          display_order: index,
-          is_primary: index === 0,
-        }));
 
-        const imagesResponse = await fetch(`${supabaseUrl}/rest/v1/product_images`, {
-          method: 'POST',
-          headers: {
-            'apikey': supabaseKey || '',
-            'Authorization': `Bearer ${accessToken}`,
-            'Content-Type': 'application/json',
-            'Prefer': 'return=representation'
-          },
-          body: JSON.stringify(imagesToInsert)
-        });
-
-        if (!imagesResponse.ok) {
-          console.warn('⚠️ Failed to update product images');
+          // Insert new general images (variant_id is null) using fetch directly
+          console.log('📤 Starting to insert', validImages.length, 'images one by one...');
+          
+          // Get access token for fetch requests
+          const updateAccessToken = accessToken || await getAccessToken();
+          console.log('🔑 Using access token for update, length:', updateAccessToken?.length || 0);
+          
+          // Verify token is valid by checking user info
+          try {
+            console.log('🔍 Verifying access token before insert...');
+            const userCheckResponse = await fetch(`${supabaseUrl}/auth/v1/user`, {
+              headers: {
+                'apikey': supabaseKey,
+                'Authorization': `Bearer ${updateAccessToken}`,
+              },
+            });
+            
+            if (userCheckResponse.ok) {
+              const userData = await userCheckResponse.json();
+              console.log('✅ Token verified, user ID:', userData.id);
+              console.log('✅ User email:', userData.email);
+              
+              // Check user role in users table
+              const userRoleResponse = await fetch(`${supabaseUrl}/rest/v1/users?id=eq.${userData.id}&select=id,role`, {
+                headers: {
+                  'apikey': supabaseKey,
+                  'Authorization': `Bearer ${updateAccessToken}`,
+                },
+              });
+              
+              if (userRoleResponse.ok) {
+                const userRoleData = await userRoleResponse.json();
+                console.log('✅ User role data:', userRoleData);
+                if (userRoleData && userRoleData.length > 0) {
+                  console.log('✅ User role:', userRoleData[0].role);
+                  if (userRoleData[0].role !== 'admin' && userRoleData[0].role !== 'manager') {
+                    console.error('❌ User does not have admin or manager role!');
+                    sweetAlert.showError('خطأ', 'ليس لديك صلاحية لإضافة الصور. يجب أن تكون admin أو manager.');
+                    return;
+                  }
+                } else {
+                  console.error('❌ User not found in users table!');
+                  sweetAlert.showError('خطأ', 'المستخدم غير موجود في جدول users.');
+                  return;
+                }
+              } else {
+                console.error('❌ Failed to check user role:', userRoleResponse.status);
+              }
+            } else {
+              const errorText = await userCheckResponse.text();
+              console.error('❌ Token verification failed:', userCheckResponse.status, errorText);
+              sweetAlert.showError('خطأ', 'فشل التحقق من المصادقة. يرجى تسجيل الدخول مرة أخرى.');
+              return;
+            }
+          } catch (verifyError: any) {
+            console.error('❌ Error verifying token:', verifyError);
+            sweetAlert.showError('خطأ', 'فشل التحقق من المصادقة.');
+            return;
+          }
+          
+          // Insert images one by one using fetch directly with Authorization header
+          // This ensures RLS policies work correctly because Supabase REST API recognizes the Authorization header
+          const insertedImages: any[] = [];
+          const failedImages: Array<{ index: number; error: string }> = [];
+          
+          for (let index = 0; index < validImages.length; index++) {
+            const img = validImages[index];
+            try {
+              console.log(`📤 Inserting image ${index + 1}/${validImages.length}:`, img.url);
+              
+              // Use fetch directly with Authorization header (ensures RLS works correctly)
+              const response = await fetch(`${supabaseUrl}/rest/v1/product_images?select=*`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'apikey': supabaseKey,
+                  'Authorization': `Bearer ${updateAccessToken}`,
+                  'Prefer': 'return=representation',
+                },
+                body: JSON.stringify({
+                  product_id: editingProduct.id,
+                  image_url: img.url!,
+                  variant_id: null, // General images, not variant-specific
+                  display_order: index,
+                  is_primary: index === 0,
+                }),
+              });
+              
+              if (!response.ok) {
+                const errorData = await response.json().catch(() => ({ message: response.statusText }));
+                console.error(`❌ Failed to insert image ${index + 1}:`, errorData);
+                console.error(`❌ Response status:`, response.status);
+                console.error(`❌ Response headers:`, Object.fromEntries(response.headers.entries()));
+                failedImages.push({ index, error: errorData.message || `HTTP ${response.status}` });
+              } else {
+                const insertedImage = await response.json();
+                // Supabase returns array when using select=*, so get first element
+                const imageData = Array.isArray(insertedImage) ? insertedImage[0] : insertedImage;
+                console.log(`✅ Successfully inserted image ${index + 1}:`, imageData);
+                insertedImages.push(imageData);
+              }
+            } catch (error: any) {
+              console.error(`❌ Exception inserting image ${index + 1}:`, error);
+              console.error(`❌ Exception details:`, JSON.stringify(error, null, 2));
+              failedImages.push({ index, error: error?.message || 'خطأ غير معروف' });
+            }
+          }
+          
+          // Report results
+          if (failedImages.length > 0) {
+            console.error(`❌ Failed to insert ${failedImages.length} out of ${validImages.length} images`);
+            const errorMessages = failedImages.map(f => `صورة ${f.index + 1}: ${f.error}`).join('\n');
+            sweetAlert.showError('تحذير', `تم حفظ ${insertedImages.length} من أصل ${validImages.length} صورة.\n\nالأخطاء:\n${errorMessages}`);
+          } else {
+            console.log(`✅ Successfully inserted all ${insertedImages.length} images!`);
+          }
+          
+          // Verify images were saved in database
+          try {
+            const { data: savedImages, error: verifyError } = await supabase
+              .from('product_images')
+              .select('id, image_url, display_order')
+              .eq('product_id', editingProduct.id)
+              .is('variant_id', null);
+            
+            if (verifyError) {
+              console.error('❌ Failed to verify images:', verifyError);
+            } else {
+              console.log(`🔍 Verification: Found ${savedImages?.length || 0} images in database for product ${editingProduct.id}`);
+              console.log('🔍 Saved images:', savedImages?.map((img: any) => ({ id: img.id, url: img.image_url, order: img.display_order })));
+              
+              if (savedImages && savedImages.length !== validImages.length) {
+                console.warn(`⚠️ Mismatch: Expected ${validImages.length} images, but found ${savedImages.length} in database`);
+              } else if (savedImages && savedImages.length === validImages.length) {
+                console.log(`✅ Verification passed: All ${validImages.length} images are in database`);
+              }
+            }
+          } catch (verifyError) {
+            console.error('❌ Error verifying images:', verifyError);
+          }
         }
       }
 
@@ -2153,23 +2802,42 @@ export default function AdminScreen() {
       });
 
       // Insert new variants
+      console.log('📦 Updating productVariants:', productVariants.length);
+      console.log('📦 productVariants data:', productVariants);
+      
       if (productVariants.length > 0) {
-        const variantsToInsert = productVariants.map((variant, index) => ({
-          product_id: editingProduct.id,
-          variant_name: variant.variant_name,
-          color: variant.color,
-          size: variant.size,
-          size_unit: variant.size_unit,
-          material: variant.material,
-          price: variant.price,
-          stock_quantity: variant.stock_quantity,
-          sku: variant.sku,
-          image_url: variant.image_url,
-          is_active: variant.is_active,
-          is_default: variant.is_default,
-          display_order: index,
-        }));
+        const variantsToInsert = productVariants.map((variant, index) => {
+          const variantData: any = {
+            product_id: editingProduct.id,
+            variant_name: variant.variant_name || `${variant.color || ''}${variant.color && variant.size ? ' - ' : ''}${variant.size || ''}`.trim() || 'متغير',
+            color: variant.color || null,
+            size: variant.size || null,
+            size_unit: variant.size_unit || null,
+            material: variant.material || null,
+            price: variant.price || null,
+            stock_quantity: variant.stock_quantity || 0,
+            sku: variant.sku || null,
+            image_url: variant.image_url || null,
+            is_active: variant.is_active !== undefined ? variant.is_active : true,
+            is_default: variant.is_default !== undefined ? variant.is_default : (index === 0),
+            display_order: index,
+          };
+          console.log(`📝 Variant ${index} data (update):`, variantData);
+          return variantData;
+        });
 
+        console.log('📤 Sending variants to update:', variantsToInsert.length);
+        console.log('📤 Variants JSON (update):', JSON.stringify(variantsToInsert, null, 2));
+
+        // Verify that we have a real access_token, not just anon key
+        if (accessToken === supabaseKey) {
+          console.error('❌ CRITICAL: No valid access_token found for variants (update)! Using anon key will fail RLS policies.');
+          console.error('❌ Please ensure you are logged in and have admin/manager role.');
+          sweetAlert.showError('خطأ', 'فشل المصادقة. يرجى تسجيل الدخول مرة أخرى.');
+          return;
+        }
+
+        console.log('✅ Access token verified (not anon key) for variants (update)');
         const variantsResponse = await fetch(`${supabaseUrl}/rest/v1/product_variants`, {
           method: 'POST',
           headers: {
@@ -2180,6 +2848,8 @@ export default function AdminScreen() {
           },
           body: JSON.stringify(variantsToInsert)
         });
+        
+        console.log('📡 Variants response status (update):', variantsResponse.status);
 
         if (variantsResponse.ok) {
           const variantsData = await variantsResponse.json();
@@ -2187,49 +2857,91 @@ export default function AdminScreen() {
           console.log('📦 Updated variants data with images:', variantsData.map((v: any) => ({ id: v.id, color: v.color, size: v.size, image_url: v.image_url })));
           
           // Link variant images to product_images
+          console.log('🔗 Starting to link variant images to product_images (update)...');
+          console.log('🔗 Variants with images:', variantsData.filter(v => v.image_url).length, 'out of', variantsData.length);
+          
           for (const variant of variantsData) {
             if (variant.image_url) {
-              console.log('🖼️ Linking variant image for update:', variant.id, variant.image_url);
-              // Delete old variant images for this specific variant
-              await fetch(`${supabaseUrl}/rest/v1/product_images?product_id=eq.${editingProduct.id}&variant_id=eq.${variant.id}`, {
-                method: 'DELETE',
-                headers: {
-                  'apikey': supabaseKey || '',
-                  'Authorization': `Bearer ${accessToken}`,
-                  'Content-Type': 'application/json',
+              console.log('🖼️ Linking variant image for update:', variant.id, variant.color, variant.size, variant.image_url);
+              
+              try {
+                // Verify that we have a real access_token, not just anon key
+                if (accessToken === supabaseKey) {
+                  console.error('❌ CRITICAL: No valid access_token found for variant image (update)! Using anon key will fail RLS policies.');
+                  continue; // Skip this variant image
                 }
-              });
-              
-              // Add variant image to product_images with variant_id
-              const variantImageResponse = await fetch(`${supabaseUrl}/rest/v1/product_images`, {
-                method: 'POST',
-                headers: {
-                  'apikey': supabaseKey || '',
-                  'Authorization': `Bearer ${accessToken}`,
-                  'Content-Type': 'application/json',
-                  'Prefer': 'return=representation'
-                },
-                body: JSON.stringify({
-                  product_id: editingProduct.id,
-                  image_url: variant.image_url,
-                  variant_id: variant.id,
-                  display_order: 0,
-                  is_primary: false,
-                })
-              });
-              
-              if (variantImageResponse.ok) {
-                const imageData = await variantImageResponse.json();
-                console.log('✅ Variant image linked successfully (update):', variant.id, variant.image_url, imageData);
-              } else {
-                const errorText = await variantImageResponse.text();
-                console.error('❌ Failed to link variant image (update):', variant.id, errorText);
+                
+                // Delete old variant images for this specific variant using direct fetch
+                console.log('🗑️ Deleting old variant images for variant:', variant.id);
+                const deleteUrl = `${supabaseUrl}/rest/v1/product_images?product_id=eq.${editingProduct.id}&variant_id=eq.${variant.id}`;
+                const deleteResponse = await fetch(deleteUrl, {
+                  method: 'DELETE',
+                  headers: {
+                    'apikey': supabaseKey || '',
+                    'Authorization': `Bearer ${accessToken}`,
+                    'Content-Type': 'application/json',
+                    'Prefer': 'return=minimal'
+                  }
+                });
+                
+                if (!deleteResponse.ok) {
+                  const errorText = await deleteResponse.text();
+                  console.error('❌ Failed to delete old variant images:', variant.id, deleteResponse.status, errorText);
+                } else {
+                  console.log('✅ Old variant images deleted for variant:', variant.id);
+                }
+                
+                // Add variant image to product_images with variant_id using fetch directly
+                console.log('⏳ Starting variant image insert with fetch (update)...');
+                
+                // Use fetch directly with Authorization header (ensures RLS works correctly)
+                const response = await fetch(`${supabaseUrl}/rest/v1/product_images?select=*`, {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'apikey': supabaseKey,
+                    'Authorization': `Bearer ${updateAccessToken}`,
+                    'Prefer': 'return=representation',
+                  },
+                  body: JSON.stringify({
+                    product_id: editingProduct.id,
+                    image_url: variant.image_url,
+                    variant_id: variant.id,
+                    display_order: 0,
+                    is_primary: false,
+                  }),
+                });
+                
+                if (!response.ok) {
+                  const errorData = await response.json().catch(() => ({ message: response.statusText }));
+                  console.error('❌ Failed to link variant image (update):', variant.id, errorData);
+                  console.error('❌ Response status:', response.status);
+                } else {
+                  const imageData = await response.json();
+                  const imageResult = Array.isArray(imageData) ? imageData[0] : imageData;
+                  console.log('✅ Variant image linked successfully (update):', variant.id, variant.image_url, imageResult);
+                }
+              } catch (error: any) {
+                console.error('❌ Exception during variant image insert (update):', variant.id, error);
+                console.error('❌ Error message:', error?.message);
+                console.error('❌ Error stack:', error?.stack);
               }
             } else {
               console.warn('⚠️ Variant has no image_url (update):', variant.id, variant.color, variant.size);
             }
           }
+          
+          console.log('🔗 Finished linking variant images (update)');
+        } else {
+          const errorText = await variantsResponse.text();
+          console.error('❌ Failed to update product variants:', variantsResponse.status, errorText);
+          console.error('❌ Request body was:', JSON.stringify(variantsToInsert, null, 2));
+          console.error('❌ Response headers:', Object.fromEntries(variantsResponse.headers.entries()));
+          sweetAlert.showError('خطأ', `فشل تحديث المتغيرات: ${errorText}`);
+          throw new Error(`Failed to update variants: ${variantsResponse.status} ${errorText}`);
         }
+      } else {
+        console.log('ℹ️ No variants to update for this product');
       }
 
       sweetAlert.showSuccess('نجح', 'تم تحديث المنتج بنجاح', () => {
@@ -2392,7 +3104,7 @@ export default function AdminScreen() {
         stock_quantity: product.stock_quantity,
         source_type: product.source_type,
         sku: `${product.sku}-COPY-${Date.now()}`,
-        image_url: product.image_url,
+        // image_url removed - all images are stored in product_images table using imgbb links
         sold_count: 0,
         is_limited_time_offer: product.is_limited_time_offer,
         offer_duration_days: product.offer_duration_days,
@@ -2412,6 +3124,43 @@ export default function AdminScreen() {
       
       if (response.ok) {
         const newProduct = await response.json();
+        const newProductId = newProduct[0]?.id;
+        
+        if (newProductId) {
+          // Copy product images from product_images table
+          try {
+            const imagesResponse = await fetch(`${supabaseUrl}/rest/v1/product_images?product_id=eq.${product.id}&variant_id=is.null&order=display_order.asc`, {
+              headers: {
+                'apikey': supabaseKey || '',
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json',
+              }
+            });
+            
+            if (imagesResponse.ok) {
+              const imagesData = await imagesResponse.json();
+              if (imagesData && imagesData.length > 0) {
+                const imagesToInsert = imagesData.map((img: any, index: number) => ({
+                  product_id: newProductId,
+                  image_url: img.image_url, // imgbb link
+                  variant_id: null,
+                  display_order: index,
+                  is_primary: index === 0,
+                }));
+                
+                await supabase
+                  .from('product_images')
+                  .insert(imagesToInsert);
+                
+                console.log(`✅ Copied ${imagesToInsert.length} images to duplicated product`);
+              }
+            }
+          } catch (imagesError) {
+            console.error('Error copying product images:', imagesError);
+            // Continue even if image copying fails
+          }
+        }
+        
         sweetAlert.showSuccess('نجح', 'تم نسخ المنتج بنجاح', () => {
           loadData();
         });
@@ -3469,64 +4218,97 @@ export default function AdminScreen() {
                 
                 {/* Variants List */}
                 {productVariants.length > 0 ? (
-                  <View style={styles.variantsList}>
+                  <View style={styles.variantsGrid}>
                     {productVariants.map((variant) => (
                       <View key={variant.id} style={styles.variantCard}>
-                        <View style={styles.variantHeader}>
-                          <View style={styles.variantInfo}>
+                        {/* Variant Image */}
+                        <View style={styles.variantImageContainer}>
+                          {variant.image_url ? (
+                            <Image 
+                              source={{ uri: variant.image_url }} 
+                              style={styles.variantCardImage}
+                              onError={(e) => {
+                                console.error('❌ Error loading variant image:', variant.image_url, e.nativeEvent.error);
+                              }}
+                              onLoad={() => {
+                                console.log('✅ Variant image loaded successfully:', variant.image_url);
+                              }}
+                            />
+                          ) : (
+                            <View style={[styles.variantCardImage, styles.variantImagePlaceholder]}>
+                              <Ionicons name="image-outline" size={40} color="#ccc" />
+                              <Text style={styles.variantImagePlaceholderText}>لا توجد صورة</Text>
+                            </View>
+                          )}
+                        </View>
+
+                        {/* Variant Info */}
+                        <View style={styles.variantCardContent}>
+                          <View style={styles.variantCardHeader}>
                             {variant.color && (
                               <View style={styles.variantColorBadge}>
-                                <Text style={styles.variantColorText}>{variant.color}</Text>
+                                <Ionicons name="color-palette-outline" size={14} color="#fff" />
+                                <Text style={styles.variantColorText}>{String(variant.color || '')}</Text>
                               </View>
                             )}
                             {variant.size && (
-                              <Text style={styles.variantSizeText}>
-                                {variant.size}{variant.size_unit ? ` (${variant.size_unit})` : ''}
-                              </Text>
+                              <View style={styles.variantSizeBadge}>
+                                <Ionicons name="resize-outline" size={14} color="#666" />
+                                <Text style={styles.variantSizeText}>
+                                  {String(variant.size || '')}{variant.size_unit ? ` ${String(variant.size_unit)}` : ''}
+                                </Text>
+                              </View>
                             )}
-                            {variant.price && (
-                              <Text style={styles.variantPriceText}>{formatPrice(variant.price)} ج.م</Text>
-                            )}
-                            <Text style={styles.variantStockText}>مخزون: {variant.stock_quantity}</Text>
                           </View>
-                          <View style={{ flexDirection: 'row', gap: 8 }}>
-                            <TouchableOpacity
-                              style={styles.variantEditButton}
-                              onPress={() => startEditVariant(variant)}
-                            >
-                              <Ionicons name="create-outline" size={16} color="#2196F3" />
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                              style={styles.variantDeleteButton}
-                              onPress={() => deleteVariant(variant.id)}
-                            >
-                              <Ionicons name="trash-outline" size={16} color="#f44336" />
-                            </TouchableOpacity>
+
+                          <View style={styles.variantCardDetails}>
+                            {variant.price && (
+                              <View style={styles.variantDetailRow}>
+                                <Ionicons name="cash-outline" size={14} color="#4CAF50" />
+                                <Text style={styles.variantPriceText}>{formatPrice(variant.price)} ج.م</Text>
+                              </View>
+                            )}
+                            <View style={styles.variantDetailRow}>
+                              <Ionicons name="cube-outline" size={14} color="#2196F3" />
+                              <Text style={styles.variantStockText}>المخزون: {variant.stock_quantity}</Text>
+                            </View>
+                            {variant.sku && (
+                              <View style={styles.variantDetailRow}>
+                                <Ionicons name="barcode-outline" size={14} color="#999" />
+                                <Text style={styles.variantSkuText}>SKU: {variant.sku}</Text>
+                              </View>
+                            )}
                           </View>
                         </View>
-                        {variant.image_url ? (
-                          <Image 
-                            source={{ uri: variant.image_url }} 
-                            style={styles.variantImage}
-                            onError={(e) => {
-                              console.error('❌ Error loading variant image:', variant.image_url, e.nativeEvent.error);
-                            }}
-                            onLoad={() => {
-                              console.log('✅ Variant image loaded successfully:', variant.image_url);
-                            }}
-                          />
-                        ) : (
-                          <View style={[styles.variantImage, { backgroundColor: '#f0f0f0', justifyContent: 'center', alignItems: 'center' }]}>
-                            <Text style={{ color: '#999', fontSize: 12 }}>لا توجد صورة</Text>
-                          </View>
-                        )}
+
+                        {/* Variant Actions */}
+                        <View style={styles.variantCardActions}>
+                          <TouchableOpacity
+                            style={styles.variantEditButton}
+                            onPress={() => startEditVariant(variant)}
+                          >
+                            <Ionicons name="create-outline" size={18} color="#2196F3" />
+                            <Text style={styles.variantActionText}>تعديل</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={styles.variantDeleteButton}
+                            onPress={() => deleteVariant(variant.id)}
+                          >
+                            <Ionicons name="trash-outline" size={18} color="#f44336" />
+                            <Text style={[styles.variantActionText, { color: '#f44336' }]}>حذف</Text>
+                          </TouchableOpacity>
+                        </View>
                       </View>
                     ))}
                   </View>
                 ) : (
-                  <View style={{ padding: 15, backgroundColor: '#F9FAFB', borderRadius: 8, marginBottom: 15 }}>
-                    <Text style={styles.helpText}>
-                      لا توجد متغيرات مضافة بعد. أضف متغير جديد أدناه.
+                  <View style={styles.emptyVariantsContainer}>
+                    <Ionicons name="color-palette-outline" size={48} color="#ccc" />
+                    <Text style={styles.emptyVariantsText}>
+                      لا توجد متغيرات مضافة بعد
+                    </Text>
+                    <Text style={styles.emptyVariantsSubtext}>
+                      أضف متغير جديد أدناه
                     </Text>
                   </View>
                 )}
@@ -3566,7 +4348,7 @@ export default function AdminScreen() {
                               styles.variantOptionChipText,
                               newVariant.color === color.color_name && styles.variantOptionChipTextActive
                             ]}>
-                              {color.color_name}
+                              {String(color.color_name || '')}
                             </Text>
                           </TouchableOpacity>
                         ))}
@@ -3902,11 +4684,11 @@ export default function AdminScreen() {
 
                 return (
                   <View key={product.id} style={styles.gridCard}>
-                    {product.image_url && (
+                    {(product.primary_image_url || product.image_url) && (
                       <Image
-                        source={{ uri: product.image_url }}
+                        source={{ uri: product.primary_image_url || product.image_url }}
                         style={styles.gridProductImage}
-                        resizeMode="cover"
+                        resizeMode="contain"
                       />
                     )}
                     
@@ -3953,7 +4735,7 @@ export default function AdminScreen() {
                               <Text style={styles.gridOriginalPrice}>{formatPrice(product.original_price)} ج.م</Text>
                               <Text style={styles.gridDiscountPrice}>{formatPrice(product.price)} ج.م</Text>
                               {product.discount_percentage && (
-                                <Text style={styles.gridDiscountBadge}>-{product.discount_percentage}%</Text>
+                                <Text style={styles.gridDiscountBadge}>-{String(product.discount_percentage || 0)}%</Text>
                               )}
                             </View>
                           ) : (
@@ -4422,7 +5204,7 @@ export default function AdminScreen() {
                           keyboardType="numeric"
                         />
                       ) : (
-                        <Text style={styles.gridCardMetaText}>ترتيب: {category.display_order}</Text>
+                        <Text style={styles.gridCardMetaText}>ترتيب: {String(category.display_order || 0)}</Text>
                       )}
                       <TouchableOpacity
                         style={[styles.statusBadgeSmall, displayActive ? styles.statusBadgeActive : styles.statusBadgeInactive]}
@@ -4584,11 +5366,11 @@ export default function AdminScreen() {
                                   {color.color_hex && (
                                     <View style={[styles.colorCircle, { backgroundColor: color.color_hex }]} />
                                   )}
-                                  <Text style={styles.variantColorText}>{color.color_name}</Text>
+                                  <Text style={styles.variantColorText}>{String(color.color_name || '')}</Text>
                                   {color.color_hex && (
-                                    <Text style={styles.variantColorText}>({color.color_hex})</Text>
+                                    <Text style={styles.variantColorText}>({String(color.color_hex)})</Text>
                                   )}
-                                  <Text style={styles.variantStockText}>ترتيب: {color.display_order || 0}</Text>
+                                  <Text style={styles.variantStockText}>ترتيب: {String(color.display_order || 0)}</Text>
                                 </View>
                                 <TouchableOpacity
                                   style={styles.variantDeleteButton}
@@ -4644,9 +5426,9 @@ export default function AdminScreen() {
                               <View style={styles.variantHeader}>
                                 <View style={styles.variantInfo}>
                                   <Text style={styles.variantSizeText}>
-                                    {size.size_value}{size.size_unit ? ` (${size.size_unit})` : ''}
+                                    {String(size.size_value || '')}{size.size_unit ? ` (${String(size.size_unit)})` : ''}
                                   </Text>
-                                  <Text style={styles.variantStockText}>ترتيب: {size.display_order || 0}</Text>
+                                  <Text style={styles.variantStockText}>ترتيب: {String(size.display_order || 0)}</Text>
                                 </View>
                                 <TouchableOpacity
                                   style={styles.variantDeleteButton}
@@ -4878,7 +5660,7 @@ export default function AdminScreen() {
                           keyboardType="numeric"
                         />
                       ) : (
-                        <Text style={styles.gridCardMetaText}>ترتيب: {section.display_order}</Text>
+                        <Text style={styles.gridCardMetaText}>ترتيب: {String(section.display_order || 0)}</Text>
                       )}
                       <TouchableOpacity
                         style={[styles.statusBadgeSmall, displayActive ? styles.statusBadgeActive : styles.statusBadgeInactive]}
@@ -5192,6 +5974,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     marginBottom: 8,
     backgroundColor: '#F3F4F6',
+    objectFit: 'contain', // For web compatibility
   },
   gridProductPrice: {
     marginBottom: 8,
@@ -5944,16 +6727,52 @@ const styles = StyleSheet.create({
     marginBottom: 15,
     marginTop: 10,
   },
-  variantsList: {
+  variantsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
     marginBottom: 20,
-    gap: 10,
   },
   variantCard: {
     backgroundColor: '#fff',
-    padding: 12,
-    borderRadius: 8,
+    borderRadius: 12,
     borderWidth: 1,
     borderColor: '#E5E7EB',
+    width: '48%',
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  variantImageContainer: {
+    width: '100%',
+    height: 160,
+    backgroundColor: '#F9FAFB',
+  },
+  variantCardImage: {
+    width: '100%',
+    height: '100%',
+    resizeMode: 'cover',
+  },
+  variantImagePlaceholder: {
+    backgroundColor: '#F3F4F6',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  variantImagePlaceholderText: {
+    color: '#9CA3AF',
+    fontSize: 12,
+    marginTop: 8,
+  },
+  variantCardContent: {
+    padding: 12,
+  },
+  variantCardHeader: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
     marginBottom: 10,
   },
   variantHeader: {
@@ -5972,33 +6791,109 @@ const styles = StyleSheet.create({
   variantColorBadge: {
     backgroundColor: '#EE1C47',
     paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
   },
   variantColorText: {
     color: '#fff',
     fontSize: 12,
     fontWeight: '600',
   },
+  variantSizeBadge: {
+    backgroundColor: '#F3F4F6',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
   variantSizeText: {
-    fontSize: 14,
+    fontSize: 12,
     color: '#374151',
     fontWeight: '500',
   },
+  variantCardDetails: {
+    gap: 6,
+  },
+  variantDetailRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
   variantPriceText: {
     fontSize: 14,
-    color: '#EE1C47',
+    color: '#4CAF50',
     fontWeight: '600',
   },
   variantStockText: {
     fontSize: 12,
+    color: '#374151',
+  },
+  variantSkuText: {
+    fontSize: 11,
     color: '#6B7280',
   },
+  variantCardActions: {
+    flexDirection: 'row',
+    borderTopWidth: 1,
+    borderTopColor: '#E5E7EB',
+    paddingTop: 8,
+    paddingHorizontal: 12,
+    paddingBottom: 12,
+    gap: 8,
+  },
+  variantActionText: {
+    fontSize: 12,
+    color: '#2196F3',
+    fontWeight: '500',
+    marginLeft: 4,
+  },
+  emptyVariantsContainer: {
+    padding: 40,
+    backgroundColor: '#F9FAFB',
+    borderRadius: 12,
+    marginBottom: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emptyVariantsText: {
+    fontSize: 16,
+    color: '#6B7280',
+    fontWeight: '600',
+    marginTop: 12,
+  },
+  emptyVariantsSubtext: {
+    fontSize: 14,
+    color: '#9CA3AF',
+    marginTop: 4,
+  },
   variantEditButton: {
-    padding: 8,
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    backgroundColor: '#E3F2FD',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#2196F3',
   },
   variantDeleteButton: {
-    padding: 8,
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    backgroundColor: '#FFEBEE',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#f44336',
   },
   updateVariantButton: {
     backgroundColor: '#2196F3',
