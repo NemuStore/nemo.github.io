@@ -21,11 +21,54 @@ export default function CartScreen() {
   const { cartItems, removeFromCart, updateQuantity, getTotal, clearCart } = useCart();
   const [loading, setLoading] = useState(false);
   const [user, setUser] = useState<any>(null);
+  const [variantImages, setVariantImages] = useState<Record<string, string>>({}); // variant_id -> image_url
   const router = useRouter();
 
   useEffect(() => {
     loadUser();
-  }, []);
+    loadVariantImages();
+  }, [cartItems]);
+
+  const loadVariantImages = async () => {
+    const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+    const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+    const imagesMap: Record<string, string> = {};
+    
+    // Get all unique variant_ids from cart items
+    const variantIds = cartItems
+      .map(item => (item.product as any).variant_id)
+      .filter((id): id is string => Boolean(id));
+    
+    if (variantIds.length === 0) return;
+    
+    try {
+      // Load images for all variants at once
+      const variantIdConditions = variantIds.map(id => `variant_id.eq.${id}`).join(',');
+      const response = await fetch(
+        `${supabaseUrl}/rest/v1/product_images?or=(${variantIdConditions})&order=display_order.asc,is_primary.desc&limit=100`,
+        {
+          headers: {
+            'apikey': supabaseKey || '',
+            'Authorization': `Bearer ${supabaseKey || ''}`,
+            'Content-Type': 'application/json',
+          }
+        }
+      );
+      
+      if (response.ok) {
+        const imagesData = await response.json();
+        // Map variant_id to first image_url
+        imagesData.forEach((img: any) => {
+          if (img.variant_id && !imagesMap[img.variant_id]) {
+            imagesMap[img.variant_id] = img.image_url;
+          }
+        });
+        setVariantImages(imagesMap);
+      }
+    } catch (error) {
+      console.warn('⚠️ Error loading variant images:', error);
+    }
+  };
 
   const loadUser = async () => {
     let timeoutId: NodeJS.Timeout | null = null;
@@ -428,41 +471,118 @@ export default function CartScreen() {
     <View style={styles.container}>
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
         <View style={[styles.cartItemsContainer, { maxWidth: maxContentWidth, alignSelf: 'center', width: '100%' }]}>
-          {cartItems.map((item) => (
-            <View key={item.product.id} style={styles.cartItem}>
-            <Image
-              source={{ uri: item.product.image_url }}
-              style={styles.itemImage}
-            />
-            <View style={styles.itemInfo}>
-              <Text style={styles.itemName}>{item.product.name}</Text>
-              <Text style={styles.itemPrice}>
-                {item.product.price.toFixed(2)} ج.م
-              </Text>
-              <View style={styles.quantityContainer}>
+          {cartItems.map((item) => {
+            const variantId = (item.product as any).variant_id;
+            const variantName = (item.product as any).variant_name || '';
+            const variantImage = variantId ? variantImages[variantId] : null;
+            const displayImage = variantImage || item.product.image_url;
+            
+            // Extract color and size from variant_name (format: "لون - مقاس" or "لون - مقاس (وحدة)")
+            let color = '';
+            let size = '';
+            if (variantName) {
+              const parts = variantName.split(' - ');
+              if (parts.length >= 1) color = parts[0].trim();
+              if (parts.length >= 2) {
+                size = parts[1].split('(')[0].trim(); // Remove unit if exists
+              }
+            }
+            
+            // Calculate discount info
+            const currentPrice = item.product.price;
+            const originalPrice = item.product.original_price;
+            const discountPercentage = item.product.discount_percentage;
+            const hasDiscount = originalPrice && originalPrice > currentPrice;
+            
+            return (
+              <TouchableOpacity
+                key={item.product.id}
+                style={styles.cartItem}
+                onPress={() => router.push(`/product/${item.product.id}`)}
+                activeOpacity={0.7}
+              >
+                <Image
+                  source={{ uri: displayImage }}
+                  style={styles.itemImage}
+                />
+                <View style={styles.itemInfo}>
+                  <Text style={styles.itemName}>{item.product.name}</Text>
+                  
+                  {/* Variant Info (Color & Size) */}
+                  {(color || size) && (
+                    <View style={styles.variantInfo}>
+                      {color && (
+                        <View style={styles.variantBadge}>
+                          <Text style={styles.variantBadgeText}>اللون: {color}</Text>
+                        </View>
+                      )}
+                      {size && (
+                        <View style={styles.variantBadge}>
+                          <Text style={styles.variantBadgeText}>المقاس: {size}</Text>
+                        </View>
+                      )}
+                    </View>
+                  )}
+                  
+                  {/* Price Info */}
+                  <View style={styles.priceInfo}>
+                    {hasDiscount ? (
+                      <View style={styles.priceRow}>
+                        <View style={styles.priceColumn}>
+                          <Text style={styles.itemPrice}>
+                            {currentPrice.toFixed(2)} ج.م
+                          </Text>
+                          <Text style={styles.originalPrice}>
+                            {originalPrice?.toFixed(2)} ج.م
+                          </Text>
+                        </View>
+                        {discountPercentage && (
+                          <View style={styles.discountBadge}>
+                            <Text style={styles.discountBadgeText}>-{discountPercentage}%</Text>
+                          </View>
+                        )}
+                      </View>
+                    ) : (
+                      <Text style={styles.itemPrice}>
+                        {currentPrice.toFixed(2)} ج.م
+                      </Text>
+                    )}
+                  </View>
+                  
+                  <View style={styles.quantityContainer}>
+                    <TouchableOpacity
+                      style={styles.quantityButton}
+                      onPress={(e) => {
+                        e.stopPropagation();
+                        updateQuantity(item.product.id, item.quantity - 1);
+                      }}
+                    >
+                      <Ionicons name="remove" size={20} color="#EE1C47" />
+                    </TouchableOpacity>
+                    <Text style={styles.quantity}>{item.quantity}</Text>
+                    <TouchableOpacity
+                      style={styles.quantityButton}
+                      onPress={(e) => {
+                        e.stopPropagation();
+                        updateQuantity(item.product.id, item.quantity + 1);
+                      }}
+                    >
+                      <Ionicons name="add" size={20} color="#EE1C47" />
+                    </TouchableOpacity>
+                  </View>
+                </View>
                 <TouchableOpacity
-                  style={styles.quantityButton}
-                  onPress={() => updateQuantity(item.product.id, item.quantity - 1)}
+                  style={styles.removeButton}
+                  onPress={(e) => {
+                    e.stopPropagation();
+                    removeFromCart(item.product.id);
+                  }}
                 >
-                  <Ionicons name="remove" size={20} color="#EE1C47" />
+                  <Ionicons name="trash-outline" size={20} color="#ff4444" />
                 </TouchableOpacity>
-                <Text style={styles.quantity}>{item.quantity}</Text>
-                <TouchableOpacity
-                  style={styles.quantityButton}
-                  onPress={() => updateQuantity(item.product.id, item.quantity + 1)}
-                >
-                  <Ionicons name="add" size={20} color="#EE1C47" />
-                </TouchableOpacity>
-              </View>
-            </View>
-            <TouchableOpacity
-              style={styles.removeButton}
-              onPress={() => removeFromCart(item.product.id)}
-            >
-              <Ionicons name="trash-outline" size={20} color="#ff4444" />
-            </TouchableOpacity>
-          </View>
-          ))}
+              </TouchableOpacity>
+            );
+          })}
         </View>
       </ScrollView>
 
@@ -551,11 +671,56 @@ const styles = StyleSheet.create({
     color: '#333',
     marginBottom: 5,
   },
+  variantInfo: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginBottom: 8,
+  },
+  variantBadge: {
+    backgroundColor: '#F0F0F0',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  variantBadgeText: {
+    fontSize: 12,
+    color: '#666',
+    fontWeight: '500',
+  },
+  priceInfo: {
+    marginBottom: 10,
+  },
+  priceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  priceColumn: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 8,
+  },
   itemPrice: {
-    fontSize: 14,
+    fontSize: 16,
     color: '#EE1C47',
     fontWeight: 'bold',
-    marginBottom: 10,
+  },
+  originalPrice: {
+    fontSize: 13,
+    color: '#9CA3AF',
+    textDecorationLine: 'line-through',
+  },
+  discountBadge: {
+    backgroundColor: '#DC2626',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 4,
+  },
+  discountBadgeText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: 'bold',
   },
   quantityContainer: {
     flexDirection: 'row',

@@ -109,6 +109,8 @@ export default function AdminScreen() {
   const [editProductImages, setEditProductImages] = useState<Array<{ uri: string; url?: string; variantId?: string }>>([]);
   // Product variants management
   const [productVariants, setProductVariants] = useState<ProductVariant[]>([]);
+  const [variantsUpdateKey, setVariantsUpdateKey] = useState(0); // Key to force re-render when variants change
+  const [variantsRenderTimestamp, setVariantsRenderTimestamp] = useState(Date.now()); // Timestamp to force re-render
   const [editingVariant, setEditingVariant] = useState<ProductVariant | null>(null);
   const [newVariant, setNewVariant] = useState({
     color: '',
@@ -119,6 +121,7 @@ export default function AdminScreen() {
     sku: '',
     image_url: '',
   });
+  const [showImageSelector, setShowImageSelector] = useState(false);
   // Category variant options (colors and sizes)
   const [categoryColors, setCategoryColors] = useState<CategoryColor[]>([]);
   const [categorySizes, setCategorySizes] = useState<CategorySize[]>([]);
@@ -245,6 +248,111 @@ export default function AdminScreen() {
       totalProducts: filteredAndSortedProducts.length,
     };
   }, [filteredAndSortedProducts, productCurrentPage, productsPerPage]);
+
+  // Memoize grouped variants by color
+  const groupedVariants = useMemo(() => {
+    console.log('🔄 groupedVariants useMemo recalculating...', {
+      variantsCount: productVariants.length,
+      variantsUpdateKey,
+      variantsRenderTimestamp,
+      variantIds: productVariants.map(v => v.id)
+    });
+    
+    if (productVariants.length === 0) {
+      console.log('🔄 groupedVariants: No variants, returning empty object');
+      return {};
+    }
+    
+    // إنشاء كائن جديد تماماً في كل مرة لضمان إعادة الرسم
+    const grouped: Record<string, ProductVariant[]> = {};
+    
+    // إنشاء نسخة عميقة من كل متغير لضمان مرجع جديد تماماً
+    productVariants.forEach((variant) => {
+      const colorKey = String(variant.color || 'بدون لون');
+      if (!grouped[colorKey]) {
+        grouped[colorKey] = [];
+      }
+      // إنشاء نسخة عميقة جديدة من المتغير لضمان مرجع جديد تماماً
+      grouped[colorKey].push({
+        ...variant,
+        // إضافة timestamp لضمان الاختلاف
+        updated_at: variant.updated_at || new Date().toISOString()
+      });
+    });
+    
+    console.log('🔄 groupedVariants: Grouped result:', Object.keys(grouped).map(color => ({
+      color,
+      count: grouped[color].length,
+      variantIds: grouped[color].map(v => v.id)
+    })));
+    
+    // إرجاع كائن جديد تماماً
+    return { ...grouped };
+  }, [productVariants, variantsUpdateKey, variantsRenderTimestamp]);
+
+  // Effect to log when productVariants changes
+  useEffect(() => {
+    console.log('🔄 productVariants state changed:', {
+      count: productVariants.length,
+      variantsUpdateKey,
+      variantIds: productVariants.map(v => v.id),
+      variantData: productVariants.map(v => ({
+        id: v.id,
+        color: v.color,
+        size: v.size,
+        variant_name: v.variant_name
+      }))
+    });
+    
+    // Log grouped variants info
+    if (productVariants.length > 0) {
+      const grouped: Record<string, ProductVariant[]> = {};
+      productVariants.forEach((variant) => {
+        const colorKey = variant.color || 'بدون لون';
+        if (!grouped[colorKey]) {
+          grouped[colorKey] = [];
+        }
+        grouped[colorKey].push(variant);
+      });
+      
+      console.log('🎨 RENDERING variants container:', {
+        variantsUpdateKey,
+        variantsRenderTimestamp,
+        groupedVariantsKeys: Object.keys(grouped),
+        groupedVariantsCount: Object.keys(grouped).length,
+        totalVariants: productVariants.length
+      });
+      
+      Object.entries(grouped).forEach(([color, variants]) => {
+        console.log(`🎨 RENDERING color group "${color}":`, {
+          variantsCount: variants.length,
+          variantIds: variants.map(v => v.id),
+          variantNames: variants.map(v => v.variant_name),
+          variantSizes: variants.map(v => v.size)
+        });
+        
+        variants.forEach((variant) => {
+          console.log(`🎨 RENDERING variant "${variant.variant_name}":`, {
+            id: variant.id,
+            color: variant.color,
+            size: variant.size,
+            variant_name: variant.variant_name,
+            updated_at: variant.updated_at
+          });
+        });
+      });
+    }
+  }, [productVariants, variantsUpdateKey, variantsRenderTimestamp]);
+
+  // Effect to force re-render when groupedVariants changes
+  useEffect(() => {
+    if (Object.keys(groupedVariants).length > 0) {
+      console.log('🎨 groupedVariants changed, forcing re-render:', {
+        colors: Object.keys(groupedVariants),
+        totalVariants: Object.values(groupedVariants).reduce((sum, variants) => sum + variants.length, 0)
+      });
+    }
+  }, [groupedVariants]);
 
   const loadUsers = async () => {
     try {
@@ -1369,6 +1477,8 @@ export default function AdminScreen() {
         image_url: '',
       });
       setSelectedSizes([]);
+      setVariantsUpdateKey(prev => prev + 1); // Force re-render
+      setVariantsRenderTimestamp(Date.now()); // Force re-render with timestamp
       
       sweetAlert.showSuccess('نجح', `تم إضافة ${sizesCount} متغير بنجاح`);
       return;
@@ -1423,6 +1533,8 @@ export default function AdminScreen() {
       image_url: '',
     });
     setSelectedSizes([]);
+    setVariantsUpdateKey(prev => prev + 1); // Force re-render
+    setVariantsRenderTimestamp(Date.now()); // Force re-render with timestamp
     
     sweetAlert.showSuccess('نجح', 'تم إضافة المتغير بنجاح');
   };
@@ -1439,6 +1551,10 @@ export default function AdminScreen() {
       image_url: variant.image_url || '',
     });
     setSelectedSizes([]); // مسح المقاسات المختارة عند التعديل
+    // إظهار حقل المقاس إذا كان هناك مقاس موجود
+    if (variant.size) {
+      setShowSizeInput(true);
+    }
   };
 
   const cancelEditVariant = () => {
@@ -1457,36 +1573,280 @@ export default function AdminScreen() {
     setShowSizeInput(false);
   };
 
-  const updateVariant = () => {
-    if (!editingVariant) return;
+  const updateVariant = async () => {
+    if (!editingVariant) {
+      console.error('❌ updateVariant: editingVariant is null');
+      return;
+    }
+
+    console.log('🔄 updateVariant called for variant:', editingVariant.id);
+    console.log('📝 New variant data:', newVariant);
 
     if (!newVariant.color && !newVariant.size) {
       sweetAlert.showError('خطأ', 'يرجى إدخال لون أو مقاس على الأقل');
       return;
     }
 
-    setProductVariants((prevVariants) => {
-      return prevVariants.map((variant) => {
-        if (variant.id === editingVariant.id) {
-          return {
-            ...variant,
-            variant_name: `${newVariant.color || ''}${newVariant.color && newVariant.size ? ' - ' : ''}${newVariant.size || ''}`.trim(),
-            color: newVariant.color || null,
-            size: newVariant.size || null,
-            size_unit: newVariant.size_unit || null,
-            price: newVariant.price ? parseFloat(newVariant.price) : null,
-            stock_quantity: newVariant.stock_quantity ? parseInt(newVariant.stock_quantity) : 0,
-            sku: newVariant.sku || null,
-            image_url: newVariant.image_url || null,
-            updated_at: new Date().toISOString(),
-          };
-        }
-        return variant;
-      });
-    });
+    // بناء variant_name بشكل صحيح
+    const variantNameParts: string[] = [];
+    if (newVariant.color) variantNameParts.push(newVariant.color);
+    if (newVariant.size) {
+      const sizeText = newVariant.size + (newVariant.size_unit ? ` (${newVariant.size_unit})` : '');
+      variantNameParts.push(sizeText);
+    }
+    const variantName = variantNameParts.length > 0 
+      ? variantNameParts.join(' - ') 
+      : 'متغير';
 
-    cancelEditVariant();
-    sweetAlert.showSuccess('نجح', 'تم تحديث المتغير بنجاح');
+    console.log('📝 Generated variant_name:', variantName);
+
+    // بيانات التحديث
+    const updatedVariantData = {
+      variant_name: variantName,
+      color: newVariant.color || null,
+      size: newVariant.size || null,
+      size_unit: newVariant.size_unit || null,
+      price: newVariant.price ? parseFloat(newVariant.price) : null,
+      stock_quantity: newVariant.stock_quantity ? parseInt(newVariant.stock_quantity) : 0,
+      sku: newVariant.sku || null,
+      updated_at: new Date().toISOString(),
+    };
+
+    // حفظ التحديث في قاعدة البيانات مباشرة (بدون تحديث متفائل)
+    try {
+      setLoading(true);
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+      const accessToken = await getAccessToken();
+
+      if (accessToken === supabaseKey) {
+        console.error('❌ CRITICAL: No valid access_token found for variant update!');
+        sweetAlert.showError('خطأ', 'فشل المصادقة. يرجى تسجيل الدخول مرة أخرى.');
+        return;
+      }
+
+      console.log('💾 Saving variant update to database:', editingVariant.id);
+      console.log('💾 Update data:', JSON.stringify(updatedVariantData, null, 2));
+      console.log('💾 Access token length:', accessToken?.length || 0);
+      console.log('💾 Access token starts with:', accessToken?.substring(0, 20) || 'N/A');
+      
+      const updateUrl = `${supabaseUrl}/rest/v1/product_variants?id=eq.${editingVariant.id}`;
+      console.log('💾 Update URL:', updateUrl);
+      
+      const updateResponse = await fetch(updateUrl, {
+        method: 'PATCH',
+        headers: {
+          'apikey': supabaseKey || '',
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=representation' // تغيير إلى return=representation لنرى البيانات المحدثة
+        },
+        body: JSON.stringify(updatedVariantData)
+      });
+
+      console.log('💾 Update response status:', updateResponse.status);
+      console.log('💾 Update response headers:', Object.fromEntries(updateResponse.headers.entries()));
+
+      if (!updateResponse.ok) {
+        const errorText = await updateResponse.text();
+        console.error('❌ Failed to update variant:', updateResponse.status, errorText);
+        console.error('❌ Response headers:', Object.fromEntries(updateResponse.headers.entries()));
+        sweetAlert.showError('خطأ', `فشل تحديث المتغير: ${errorText}`);
+        return;
+      }
+
+      // قراءة البيانات المحدثة من الـ response للتحقق
+      const updatedVariant = await updateResponse.json();
+      console.log('✅ Variant updated successfully in database');
+      console.log('✅ Updated variant data from response:', JSON.stringify(updatedVariant, null, 2));
+      
+      // التحقق من أن البيانات تم تحديثها فعلياً
+      if (updatedVariant && updatedVariant.length > 0) {
+        const variant = updatedVariant[0];
+        console.log('✅ Verification - Updated variant:', {
+          id: variant.id,
+          variant_name: variant.variant_name,
+          color: variant.color,
+          size: variant.size,
+          size_unit: variant.size_unit,
+          updated_at: variant.updated_at
+        });
+      } else {
+        console.warn('⚠️ Warning: Update response is empty or invalid');
+      }
+      
+      // التحقق المباشر من قاعدة البيانات بعد التحديث
+      console.log('🔍 Verifying update in database...');
+      try {
+        const verifyUrl = `${supabaseUrl}/rest/v1/product_variants?id=eq.${editingVariant.id}&select=id,variant_name,color,size,size_unit,updated_at`;
+        const verifyResponse = await fetch(verifyUrl, {
+          headers: {
+            'apikey': supabaseKey || '',
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          }
+        });
+        
+        if (verifyResponse.ok) {
+          const verifiedVariant = await verifyResponse.json();
+          if (verifiedVariant && verifiedVariant.length > 0) {
+            const variant = verifiedVariant[0];
+            console.log('🔍 Verified variant in database:', {
+              id: variant.id,
+              variant_name: variant.variant_name,
+              color: variant.color,
+              size: variant.size,
+              size_unit: variant.size_unit,
+              updated_at: variant.updated_at
+            });
+            
+            // مقارنة البيانات للتأكد من التحديث
+            if (variant.variant_name !== variantName) {
+              console.error('❌ CRITICAL: variant_name mismatch! Expected:', variantName, 'Got:', variant.variant_name);
+            }
+            if (variant.color !== (newVariant.color || null)) {
+              console.error('❌ CRITICAL: color mismatch! Expected:', newVariant.color, 'Got:', variant.color);
+            }
+            if (variant.size !== (newVariant.size || null)) {
+              console.error('❌ CRITICAL: size mismatch! Expected:', newVariant.size, 'Got:', variant.size);
+            }
+            if (variant.size_unit !== (newVariant.size_unit || null)) {
+              console.error('❌ CRITICAL: size_unit mismatch! Expected:', newVariant.size_unit, 'Got:', variant.size_unit);
+            }
+          } else {
+            console.error('❌ CRITICAL: Variant not found in database after update!');
+          }
+        } else {
+          const errorText = await verifyResponse.text();
+          console.error('❌ Failed to verify variant update:', verifyResponse.status, errorText);
+        }
+      } catch (verifyError) {
+        console.error('❌ Error verifying variant update:', verifyError);
+      }
+      
+      // إعادة تحميل المتغيرات من قاعدة البيانات لضمان التحديث في الواجهة
+      if (editingProduct) {
+        console.log('🔄 Reloading variants from database after update...');
+        try {
+          const reloadUrl = `${supabaseUrl}/rest/v1/product_variants?product_id=eq.${editingProduct.id}&order=display_order.asc`;
+          const reloadResponse = await fetch(reloadUrl, {
+            headers: {
+              'apikey': supabaseKey || '',
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json',
+            }
+          });
+          
+          if (reloadResponse.ok) {
+            const reloadedVariants = await reloadResponse.json();
+            console.log('✅ Reloaded variants from database:', reloadedVariants.length);
+            
+            // تحميل صور المتغيرات وإنشاء مراجع جديدة تماماً للمصفوفة والكائنات
+            const reloadedVariantsWithImages = await Promise.all(
+              reloadedVariants.map(async (variant: ProductVariant) => {
+                try {
+                  const imageUrl = `${supabaseUrl}/rest/v1/product_images?variant_id=eq.${variant.id}&order=display_order.asc&limit=1&select=image_url`;
+                  const imageResponse = await fetch(imageUrl, {
+                    headers: {
+                      'apikey': supabaseKey || '',
+                      'Authorization': `Bearer ${accessToken}`,
+                      'Content-Type': 'application/json',
+                    }
+                  });
+                  
+                  if (imageResponse.ok) {
+                    const images = await imageResponse.json();
+                    if (images && images.length > 0) {
+                      console.log(`✅ Loaded variant image from product_images for variant ${variant.id}: ${images[0].image_url}`);
+                      // إنشاء كائن جديد تماماً لضمان تحديث React
+                      return { 
+                        ...variant, 
+                        image_url: images[0].image_url,
+                        updated_at: variant.updated_at || new Date().toISOString() // إضافة timestamp لضمان الاختلاف
+                      };
+                    }
+                  }
+                } catch (error) {
+                  console.warn(`⚠️ Error loading image for variant ${variant.id}:`, error);
+                }
+                // إنشاء كائن جديد تماماً حتى لو لم تكن هناك صورة
+                return { 
+                  ...variant,
+                  updated_at: variant.updated_at || new Date().toISOString() // إضافة timestamp لضمان الاختلاف
+                };
+              })
+            );
+            
+            // إنشاء مصفوفة جديدة تماماً وفرض إعادة الرسم
+            console.log('🔄 Setting productVariants with reloaded data, count:', reloadedVariantsWithImages.length);
+            console.log('🔄 Reloaded variants data:', JSON.stringify(reloadedVariantsWithImages.map(v => ({ 
+              id: v.id, 
+              color: v.color, 
+              size: v.size, 
+              variant_name: v.variant_name 
+            })), null, 2));
+            
+            // تحديث الحالة مع إنشاء مرجع جديد تماماً للمصفوفة
+            // إنشاء نسخة عميقة من كل متغير لضمان مرجع جديد تماماً
+            const newVariants = reloadedVariantsWithImages.map(v => ({
+              ...v,
+              // إضافة timestamp جديد لضمان الاختلاف
+              updated_at: v.updated_at || new Date().toISOString()
+            }));
+            console.log('🔄 Setting productVariants with new array reference, count:', newVariants.length);
+            
+            // تحديث المفاتيح أولاً لضمان إعادة الحساب
+            const newKey = variantsUpdateKey + 1;
+            const newTimestamp = Date.now();
+            setVariantsUpdateKey(newKey);
+            setVariantsRenderTimestamp(newTimestamp);
+            console.log('🔄 Incrementing variantsUpdateKey to', newKey, 'and timestamp to', newTimestamp);
+            
+            // تحديث editingVariant إذا كان المستخدم لا يزال في وضع التعديل
+            if (editingVariant) {
+              const updatedEditingVariant = newVariants.find(v => v.id === editingVariant.id);
+              if (updatedEditingVariant) {
+                console.log('🔄 Updating editingVariant with reloaded data:', updatedEditingVariant.id);
+                setEditingVariant(updatedEditingVariant);
+                // تحديث newVariant أيضاً ليعكس البيانات المحدثة
+                setNewVariant({
+                  color: updatedEditingVariant.color || '',
+                  size: updatedEditingVariant.size || '',
+                  size_unit: updatedEditingVariant.size_unit || '',
+                  price: updatedEditingVariant.price?.toString() || '',
+                  stock_quantity: updatedEditingVariant.stock_quantity?.toString() || '',
+                  sku: updatedEditingVariant.sku || '',
+                  image_url: updatedEditingVariant.image_url || '',
+                });
+                // إظهار حقل المقاس إذا كان هناك مقاس موجود
+                if (updatedEditingVariant.size) {
+                  setShowSizeInput(true);
+                }
+              } else {
+                console.warn('⚠️ Updated variant not found in reloaded variants, keeping current editingVariant');
+              }
+            }
+            
+            // ثم تحديث الحالة
+            setProductVariants(newVariants);
+            console.log('✅ Variants state updated with reloaded data');
+          } else {
+            console.warn('⚠️ Failed to reload variants, using state update only');
+          }
+        } catch (reloadError) {
+          console.warn('⚠️ Error reloading variants:', reloadError);
+          // نستمر حتى لو فشل إعادة التحميل - التحديث في الـ state كافٍ
+        }
+      }
+      
+      cancelEditVariant();
+      sweetAlert.showSuccess('نجح', 'تم تحديث المتغير بنجاح');
+    } catch (error: any) {
+      console.error('❌ Error updating variant:', error);
+      sweetAlert.showError('خطأ', error.message || 'فشل تحديث المتغير');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const deleteVariant = (variantId: string) => {
@@ -1499,6 +1859,8 @@ export default function AdminScreen() {
           console.log('🗑️ Deleted variant:', variantId, 'Remaining:', filtered.length);
           return filtered;
         });
+        setVariantsUpdateKey(prev => prev + 1); // Force re-render
+        setVariantsRenderTimestamp(Date.now()); // Force re-render with timestamp
         sweetAlert.showSuccess('نجح', 'تم حذف المتغير بنجاح');
       },
       undefined,
@@ -2142,17 +2504,21 @@ export default function AdminScreen() {
             console.log(`✅ Successfully inserted all ${insertedImages.length} images!`);
           }
           
-          // Verify images were saved in database
+          // Verify images were saved in database (using fetch instead of supabase client to avoid hanging)
           try {
-            const { data: savedImages, error: verifyError } = await supabase
-              .from('product_images')
-              .select('id, image_url, display_order')
-              .eq('product_id', productId)
-              .is('variant_id', null);
+            console.log('🔍 DEBUG: About to verify images with fetch...');
+            const verifyUrl = `${supabaseUrl}/rest/v1/product_images?product_id=eq.${productId}&variant_id=is.null&select=id,image_url,display_order`;
+            const verifyResponse = await fetch(verifyUrl, {
+              method: 'GET',
+              headers: {
+                'apikey': supabaseKey || '',
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json',
+              },
+            });
             
-            if (verifyError) {
-              console.error('❌ Failed to verify images:', verifyError);
-            } else {
+            if (verifyResponse.ok) {
+              const savedImages = await verifyResponse.json();
               console.log(`🔍 Verification: Found ${savedImages?.length || 0} images in database for product ${productId}`);
               console.log('🔍 Saved images:', savedImages?.map((img: any) => ({ id: img.id, url: img.image_url, order: img.display_order })));
               
@@ -2161,16 +2527,29 @@ export default function AdminScreen() {
               } else if (savedImages && savedImages.length === validImages.length) {
                 console.log(`✅ Verification passed: All ${validImages.length} images are in database`);
               }
+            } else {
+              console.warn('⚠️ Failed to verify images (non-critical):', verifyResponse.status);
             }
           } catch (verifyError) {
-            console.error('❌ Error verifying images:', verifyError);
+            console.warn('⚠️ Error verifying images (non-critical):', verifyError);
+            // Don't throw - continue with variant saving
           }
         }
       }
 
+      console.log('🔍 DEBUG: Finished images section, about to save variants...');
+      console.log('🔍 DEBUG: productVariants.length:', productVariants.length);
+      console.log('🔍 DEBUG: productVariants state:', JSON.stringify(productVariants, null, 2));
+
       // Add product variants
+      console.log('📦 ========== VARIANT SAVING DEBUG ==========');
       console.log('📦 Checking productVariants:', productVariants.length);
-      console.log('📦 productVariants data:', productVariants);
+      console.log('📦 productVariants data:', JSON.stringify(productVariants, null, 2));
+      console.log('📦 Variants with image_url:', productVariants.filter(v => (v as any).image_url).map(v => ({
+        color: v.color,
+        size: v.size,
+        image_url: (v as any).image_url
+      })));
       
       if (productVariants.length > 0) {
         const variantsToInsert = productVariants.map((variant, index) => {
@@ -2221,12 +2600,23 @@ export default function AdminScreen() {
         if (variantsResponse.ok) {
           const variantsData = await variantsResponse.json();
           console.log('✅ Variants inserted successfully:', variantsData.length);
+          console.log('✅ Inserted variants data:', JSON.stringify(variantsData, null, 2));
           
           // Link variant images to product_images
           // Match variants from database with variants from state that have image_url
-          console.log('🔗 Starting to link variant images to product_images...');
+          console.log('🔗 ========== LINKING VARIANT IMAGES ==========');
           const variantsWithImages = productVariants.filter(v => (v as any).image_url);
           console.log('🔗 Variants with images in state:', variantsWithImages.length, 'out of', productVariants.length);
+          console.log('🔗 Variants with images details:', variantsWithImages.map(v => ({
+            color: v.color,
+            size: v.size,
+            image_url: (v as any).image_url
+          })));
+          console.log('🔗 Database variants:', variantsData.map((v: any) => ({
+            id: v.id,
+            color: v.color,
+            size: v.size
+          })));
           
           // Get access token for variant images (reuse if already got, otherwise get new one)
           const variantAccessToken = accessToken || await getAccessToken();
@@ -2234,13 +2624,26 @@ export default function AdminScreen() {
           
           for (const stateVariant of variantsWithImages) {
             // Find matching variant from database by color and size
-            const matchingVariant = variantsData.find((v: any) => 
-              v.color === stateVariant.color && 
-              v.size === stateVariant.size
-            );
+            console.log('🔍 Looking for matching variant:', {
+              stateColor: stateVariant.color,
+              stateSize: stateVariant.size,
+              stateImageUrl: (stateVariant as any).image_url
+            });
+            
+            const matchingVariant = variantsData.find((v: any) => {
+              const colorMatch = v.color === stateVariant.color || (v.color === null && stateVariant.color === null);
+              const sizeMatch = v.size === stateVariant.size || (v.size === null && stateVariant.size === null);
+              return colorMatch && sizeMatch;
+            });
             
             if (matchingVariant) {
               const variantImageUrl = (stateVariant as any).image_url;
+              console.log('✅ Found matching variant:', {
+                id: matchingVariant.id,
+                color: matchingVariant.color,
+                size: matchingVariant.size,
+                imageUrl: variantImageUrl
+              });
               console.log('🖼️ Linking variant image:', matchingVariant.id, matchingVariant.color, matchingVariant.size, variantImageUrl);
               
               try {
@@ -2277,7 +2680,17 @@ export default function AdminScreen() {
                 console.error('❌ Error stack:', error?.stack);
               }
             } else {
-              console.warn('⚠️ Could not find matching variant in database for:', stateVariant.color, stateVariant.size);
+              console.error('❌ Could not find matching variant in database!');
+              console.error('❌ State variant:', {
+                color: stateVariant.color,
+                size: stateVariant.size,
+                image_url: (stateVariant as any).image_url
+              });
+              console.error('❌ Available database variants:', variantsData.map((v: any) => ({
+                id: v.id,
+                color: v.color,
+                size: v.size
+              })));
             }
           }
           
@@ -2399,10 +2812,11 @@ export default function AdminScreen() {
       const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
       const accessToken = await getAccessToken();
       
-      // First, try to load images from product_images table (general images only, variant_id is null)
+      // Load ALL images from product_images table (including variant images) for variant image selection
       let loadedImages: Array<{ uri: string; url: string }> = [];
+      let allAvailableImages: Array<{ uri: string; url: string }> = []; // All images including variant images
       
-      // Try loading from product_images table
+      // First, load general images (variant_id is null) for product display
       const imagesResponse = await fetch(`${supabaseUrl}/rest/v1/product_images?product_id=eq.${product.id}&variant_id=is.null&order=display_order.asc`, {
         headers: {
           'apikey': supabaseKey || '',
@@ -2422,36 +2836,30 @@ export default function AdminScreen() {
         }
       }
       
-      // If no images found in product_images, try loading ALL images (including variant images)
-      if (loadedImages.length === 0) {
-        const allImagesResponse = await fetch(`${supabaseUrl}/rest/v1/product_images?product_id=eq.${product.id}&order=display_order.asc`, {
-          headers: {
-            'apikey': supabaseKey || '',
-            'Authorization': `Bearer ${accessToken}`,
-            'Content-Type': 'application/json',
-          }
-        });
-        
-        if (allImagesResponse.ok) {
-          const allImagesData = await allImagesResponse.json();
-          if (allImagesData && allImagesData.length > 0) {
-            // Filter to get only general images (variant_id is null) or use all if none found
-            const generalImages = allImagesData.filter((img: any) => !img.variant_id);
-            if (generalImages.length > 0) {
-              loadedImages = generalImages.map((img: any) => ({
-                uri: img.image_url,
-                url: img.image_url,
-              }));
-            } else {
-              // If no general images, use first image
-              loadedImages = [{
-                uri: allImagesData[0].image_url,
-                url: allImagesData[0].image_url,
-              }];
-            }
-            console.log('✅ Loaded product images from all images:', loadedImages.length);
-          }
+      // Also load ALL images (including variant images) for variant image selection
+      const allImagesResponse = await fetch(`${supabaseUrl}/rest/v1/product_images?product_id=eq.${product.id}&order=display_order.asc`, {
+        headers: {
+          'apikey': supabaseKey || '',
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
         }
+      });
+      
+      if (allImagesResponse.ok) {
+        const allImagesData = await allImagesResponse.json();
+        if (allImagesData && allImagesData.length > 0) {
+          allAvailableImages = allImagesData.map((img: any) => ({
+            uri: img.image_url,
+            url: img.image_url,
+          }));
+          console.log('✅ Loaded all available images (including variants):', allAvailableImages.length);
+        }
+      }
+      
+      // If no general images found, use all images
+      if (loadedImages.length === 0 && allAvailableImages.length > 0) {
+        loadedImages = allAvailableImages;
+        console.log('✅ Using all available images as product images');
       }
       
       // No longer using product.image_url as fallback - all images should be in product_images
@@ -2460,7 +2868,10 @@ export default function AdminScreen() {
       }
       
       setProductImages(loadedImages);
+      // Store all available images in a separate state for variant selection
+      setEditProductImages(allAvailableImages.length > 0 ? allAvailableImages : loadedImages);
       console.log('🖼️ Final images data:', loadedImages);
+      console.log('🖼️ All available images for variant selection:', allAvailableImages.length > 0 ? allAvailableImages.length : loadedImages.length);
     } catch (error) {
       console.error('Error loading product images:', error);
       // No longer using product.image_url as fallback
@@ -2531,6 +2942,8 @@ export default function AdminScreen() {
         }));
         
         setProductVariants(variantsWithImages);
+        setVariantsUpdateKey(prev => prev + 1); // Force re-render
+        setVariantsRenderTimestamp(Date.now()); // Force re-render with timestamp
         console.log('✅ Loaded product variants:', variantsWithImages.length);
         console.log('📦 Variants data:', variantsWithImages);
         console.log('🖼️ Variants with images:', variantsWithImages.map((v: any) => ({ 
@@ -3634,8 +4047,20 @@ export default function AdminScreen() {
         <View style={[styles.contentWrapper, { maxWidth: maxContentWidth, alignSelf: 'center', width: '100%' }]}>
         {activeTab === 'orders' && (
           <View>
-            <View style={styles.gridContainer}>
-              {orders && orders.length > 0 ? orders.map((order) => {
+            {/* External Orders - الطلبات من الخارج */}
+            {orders && orders.filter(o => o.source_type === 'external').length > 0 && (
+              <View style={{ marginBottom: 30 }}>
+                <View style={styles.sectionHeader}>
+                  <Ionicons name="globe-outline" size={20} color="#FF9800" />
+                  <Text style={styles.sectionHeaderText}>الطلبات من الخارج</Text>
+                  <View style={styles.sectionHeaderBadge}>
+                    <Text style={styles.sectionHeaderBadgeText}>
+                      {orders.filter(o => o.source_type === 'external').length}
+                    </Text>
+                  </View>
+                </View>
+                <View style={styles.gridContainer}>
+                  {orders.filter(o => o.source_type === 'external').map((order) => {
                 const isEditing = editingOrderId === order.id;
                 const quickEdit = quickEditOrder[order.id] || {};
                 const displayStatus = isEditing ? (quickEdit.status || order.status) : order.status;
@@ -3755,12 +4180,155 @@ export default function AdminScreen() {
                     )}
                   </View>
                 );
-              }) : (
-                <View style={{ padding: 20, alignItems: 'center', width: '100%' }}>
-                  <Text style={{ color: '#666', fontSize: 16 }}>لا توجد طلبات</Text>
+              })}
                 </View>
-              )}
-            </View>
+              </View>
+            )}
+
+            {/* Warehouse Orders - الطلبات من المخزون الداخلي */}
+            {orders && orders.filter(o => o.source_type === 'warehouse' || !o.source_type).length > 0 && (
+              <View style={{ marginBottom: 30 }}>
+                <View style={styles.sectionHeader}>
+                  <Ionicons name="cube-outline" size={20} color="#10B981" />
+                  <Text style={styles.sectionHeaderText}>الطلبات من المخزون الداخلي</Text>
+                  <View style={styles.sectionHeaderBadge}>
+                    <Text style={styles.sectionHeaderBadgeText}>
+                      {orders.filter(o => o.source_type === 'warehouse' || !o.source_type).length}
+                    </Text>
+                  </View>
+                </View>
+                <View style={styles.gridContainer}>
+                  {orders.filter(o => o.source_type === 'warehouse' || !o.source_type).map((order) => {
+                const isEditing = editingOrderId === order.id;
+                const quickEdit = quickEditOrder[order.id] || {};
+                const displayStatus = isEditing ? (quickEdit.status || order.status) : order.status;
+
+                return (
+                  <View key={order.id} style={styles.gridCard}>
+                    <View style={styles.cardHeader}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.gridCardTitle}>#{order.order_number}</Text>
+                        <Text style={styles.gridCardMetaText}>
+                          {new Date(order.created_at).toLocaleDateString('ar-EG')}
+                        </Text>
+                      </View>
+                      <TouchableOpacity
+                        style={styles.cardMenuButton}
+                        onPress={() => {
+                          if (isEditing) {
+                            setEditingOrderId(null);
+                            setQuickEditOrder({});
+                          } else {
+                            setEditingOrderId(order.id);
+                            setQuickEditOrder({ [order.id]: {} });
+                          }
+                        }}
+                      >
+                        <Ionicons name={isEditing ? "checkmark" : "create-outline"} size={18} color={isEditing ? "#10B981" : "#666"} />
+                      </TouchableOpacity>
+                    </View>
+
+                    <View style={styles.gridProductPrice}>
+                      <Text style={styles.gridPrice}>{formatPrice(order.total_amount)} ج.م</Text>
+                    </View>
+
+                    <View style={styles.gridCardMeta}>
+                      {isEditing ? (
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.gridCardMetaText}>الحالة:</Text>
+                          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ maxHeight: 120 }}>
+                            <View style={styles.statusPicker}>
+                              {['pending', 'confirmed', 'shipped_from_china', 'received_in_uae', 'shipped_from_uae', 'received_in_egypt', 'in_warehouse', 'out_for_delivery', 'delivered', 'cancelled'].map((status) => (
+                                <TouchableOpacity
+                                  key={status}
+                                  style={[
+                                    styles.statusOption,
+                                    displayStatus === status && styles.statusOptionActive
+                                  ]}
+                                  onPress={() => setQuickEditOrder({ ...quickEditOrder, [order.id]: { ...quickEdit, status: status as any } })}
+                                >
+                                  <Text style={[styles.statusOptionText, displayStatus === status && styles.statusOptionTextActive]}>
+                                    {getStatusText(status)}
+                                  </Text>
+                                </TouchableOpacity>
+                              ))}
+                            </View>
+                          </ScrollView>
+                        </View>
+                      ) : (
+                        <View style={[styles.statusBadgeSmall, getStatusBadgeColor(order.status)]}>
+                          <Text style={styles.statusBadgeTextSmall}>{getStatusText(order.status)}</Text>
+                        </View>
+                      )}
+                    </View>
+
+                    {isEditing && (
+                      <View style={styles.quickEditActions}>
+                        <TouchableOpacity
+                          style={[styles.quickEditButton, styles.saveButton]}
+                          onPress={async () => {
+                            const updates = quickEditOrder[order.id];
+                            if (updates && Object.keys(updates).length > 0) {
+                              setLoading(true);
+                              try {
+                                const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+                                const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+                                const accessToken = await getAccessToken();
+
+                                await fetch(`${supabaseUrl}/rest/v1/orders?id=eq.${order.id}`, {
+                                  method: 'PATCH',
+                                  headers: {
+                                    'apikey': supabaseKey || '',
+                                    'Authorization': `Bearer ${accessToken}`,
+                                    'Content-Type': 'application/json',
+                                  },
+                                  body: JSON.stringify(updates)
+                                });
+
+                                sweetAlert.showSuccess('نجح', 'تم التحديث بنجاح', () => {
+                                  setEditingOrderId(null);
+                                  setQuickEditOrder({});
+                                  loadData();
+                                });
+                              } catch (error: any) {
+                                sweetAlert.showError('خطأ', error.message || 'فشل التحديث');
+                              } finally {
+                                setLoading(false);
+                              }
+                            } else {
+                              setEditingOrderId(null);
+                              setQuickEditOrder({});
+                            }
+                          }}
+                        >
+                          <Ionicons name="checkmark" size={14} color="#fff" />
+                          <Text style={styles.quickEditButtonText}>حفظ</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.quickEditButton, styles.cancelQuickEditButton]}
+                          onPress={() => {
+                            setEditingOrderId(null);
+                            setQuickEditOrder({});
+                          }}
+                        >
+                          <Ionicons name="close" size={14} color="#fff" />
+                          <Text style={styles.quickEditButtonText}>إلغاء</Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
+                  </View>
+                );
+              })}
+                </View>
+              </View>
+            )}
+
+            {/* No Orders Message */}
+            {orders && orders.length === 0 && (
+              <View style={{ padding: 20, alignItems: 'center', width: '100%' }}>
+                <Text style={{ color: '#666', fontSize: 16 }}>لا توجد طلبات</Text>
+              </View>
+            )}
           </View>
         )}
 
@@ -4330,92 +4898,8 @@ export default function AdminScreen() {
                   💡 يمكنك إضافة ألوان ومقاسات مختلفة للمنتج. كل لون يمكن أن يكون له صور خاصة به.
                 </Text>
                 
-                {/* Variants List */}
-                {productVariants.length > 0 ? (
-                  <View style={styles.variantsGrid}>
-                    {productVariants.map((variant) => (
-                      <View key={variant.id} style={styles.variantCard}>
-                        {/* Variant Image */}
-                        <View style={styles.variantImageContainer}>
-                          {variant.image_url ? (
-                            <Image 
-                              source={{ uri: variant.image_url }} 
-                              style={styles.variantCardImage}
-                              onError={(e) => {
-                                console.error('❌ Error loading variant image:', variant.image_url, e.nativeEvent.error);
-                              }}
-                              onLoad={() => {
-                                console.log('✅ Variant image loaded successfully:', variant.image_url);
-                              }}
-                            />
-                          ) : (
-                            <View style={[styles.variantCardImage, styles.variantImagePlaceholder]}>
-                              <Ionicons name="image-outline" size={40} color="#ccc" />
-                              <Text style={styles.variantImagePlaceholderText}>لا توجد صورة</Text>
-                            </View>
-                          )}
-                        </View>
-
-                        {/* Variant Info */}
-                        <View style={styles.variantCardContent}>
-                          <View style={styles.variantCardHeader}>
-                            {variant.color && (
-                              <View style={styles.variantColorBadge}>
-                                <Ionicons name="color-palette-outline" size={14} color="#fff" />
-                                <Text style={styles.variantColorText}>{String(variant.color || '')}</Text>
-                              </View>
-                            )}
-                            {variant.size && (
-                              <View style={styles.variantSizeBadge}>
-                                <Ionicons name="resize-outline" size={14} color="#666" />
-                                <Text style={styles.variantSizeText}>
-                                  {String(variant.size || '')}{variant.size_unit ? ` ${String(variant.size_unit)}` : ''}
-                                </Text>
-                              </View>
-                            )}
-                          </View>
-
-                          <View style={styles.variantCardDetails}>
-                            {variant.price && (
-                              <View style={styles.variantDetailRow}>
-                                <Ionicons name="cash-outline" size={14} color="#4CAF50" />
-                                <Text style={styles.variantPriceText}>{formatPrice(variant.price)} ج.م</Text>
-                              </View>
-                            )}
-                            <View style={styles.variantDetailRow}>
-                              <Ionicons name="cube-outline" size={14} color="#2196F3" />
-                              <Text style={styles.variantStockText}>المخزون: {variant.stock_quantity}</Text>
-                            </View>
-                            {variant.sku && (
-                              <View style={styles.variantDetailRow}>
-                                <Ionicons name="barcode-outline" size={14} color="#999" />
-                                <Text style={styles.variantSkuText}>SKU: {variant.sku}</Text>
-                              </View>
-                            )}
-                          </View>
-                        </View>
-
-                        {/* Variant Actions */}
-                        <View style={styles.variantCardActions}>
-                          <TouchableOpacity
-                            style={styles.variantEditButton}
-                            onPress={() => startEditVariant(variant)}
-                          >
-                            <Ionicons name="create-outline" size={18} color="#2196F3" />
-                            <Text style={styles.variantActionText}>تعديل</Text>
-                          </TouchableOpacity>
-                          <TouchableOpacity
-                            style={styles.variantDeleteButton}
-                            onPress={() => deleteVariant(variant.id)}
-                          >
-                            <Ionicons name="trash-outline" size={18} color="#f44336" />
-                            <Text style={[styles.variantActionText, { color: '#f44336' }]}>حذف</Text>
-                          </TouchableOpacity>
-                        </View>
-                      </View>
-                    ))}
-                  </View>
-                ) : (
+                {/* Variants List - Grouped by Color */}
+                {productVariants.length === 0 ? (
                   <View style={styles.emptyVariantsContainer}>
                     <Ionicons name="color-palette-outline" size={48} color="#ccc" />
                     <Text style={styles.emptyVariantsText}>
@@ -4424,6 +4908,108 @@ export default function AdminScreen() {
                     <Text style={styles.emptyVariantsSubtext}>
                       أضف متغير جديد أدناه
                     </Text>
+                  </View>
+                ) : (
+                  <View key={`variants-container-${variantsUpdateKey}-${variantsRenderTimestamp}`} style={styles.variantsGroupedContainer}>
+                    {Object.entries(groupedVariants).map(([color, variants]) => {
+                      // إنشاء key فريد لكل مجموعة لون بناءً على IDs المتغيرات و updated_at
+                      const variantTimestamps = variants.map(v => v.updated_at || v.created_at || '').join('-');
+                      const colorGroupKey = `${color}-${variants.map(v => v.id).sort().join('-')}-${variantsUpdateKey}-${variantsRenderTimestamp}-${variantTimestamps}`;
+                      
+                      // الحصول على صورة اللون (من أول متغير لهذا اللون)
+                      const colorImage = variants.find(v => v.image_url)?.image_url || null;
+                      // الحصول على معلومات اللون من categoryColors إن أمكن
+                      const colorInfo = categoryColors.find(c => c.color_name === color);
+                      
+                      return (
+                        <View key={colorGroupKey} style={styles.colorGroupCard}>
+                            {/* Color Header */}
+                            <View style={styles.colorGroupHeader}>
+                              <View style={styles.colorGroupHeaderLeft}>
+                                {colorImage ? (
+                                  <Image 
+                                    source={{ uri: colorImage }} 
+                                    style={styles.colorGroupImage}
+                                    onError={(e) => {
+                                      console.error('❌ Error loading color group image:', colorImage, e.nativeEvent.error);
+                                    }}
+                                  />
+                                ) : (
+                                  <View style={[styles.colorGroupImage, styles.colorGroupImagePlaceholder]}>
+                                    {colorInfo?.color_hex ? (
+                                      <View style={[styles.colorCircleLarge, { backgroundColor: colorInfo.color_hex }]} />
+                                    ) : (
+                                      <Ionicons name="color-palette-outline" size={32} color="#ccc" />
+                                    )}
+                                  </View>
+                                )}
+                                <View style={styles.colorGroupInfo}>
+                                  <View style={styles.colorGroupTitleRow}>
+                                    <Ionicons name="color-palette" size={18} color="#EE1C47" />
+                                    <Text style={styles.colorGroupTitle}>{color || 'بدون لون'}</Text>
+                                  </View>
+                                  <Text style={styles.colorGroupSizesCount}>
+                                    {variants.length} {variants.length === 1 ? 'مقاس' : 'مقاسات'}
+                                  </Text>
+                                </View>
+                              </View>
+                            </View>
+
+                            {/* Sizes List for this Color */}
+                            <ScrollView 
+                              style={styles.colorGroupSizesList}
+                              nestedScrollEnabled={true}
+                              showsVerticalScrollIndicator={true}
+                            >
+                              {variants.map((variant, variantIndex) => {
+                                // إنشاء key فريد لكل متغير يتضمن id و updated_at و variantsUpdateKey
+                                const variantKey = `${variant.id}-${variant.updated_at || variant.created_at || ''}-${variantsUpdateKey}-${variantsRenderTimestamp}-${variantIndex}`;
+                                return (
+                                  <View key={variantKey} style={styles.sizeVariantCard}>
+                                  <View style={styles.sizeVariantInfo}>
+                                    <View style={styles.sizeVariantHeader}>
+                                      <View style={styles.sizeVariantBadge}>
+                                        <Ionicons name="resize-outline" size={14} color="#666" />
+                                        <Text style={styles.sizeVariantText}>
+                                          {variant.size || 'بدون مقاس'}
+                                          {variant.size_unit ? ` (${variant.size_unit})` : ''}
+                                        </Text>
+                                      </View>
+                                    </View>
+                                    <View style={styles.sizeVariantDetails}>
+                                      {variant.price && (
+                                        <View style={styles.sizeVariantDetailRow}>
+                                          <Ionicons name="cash-outline" size={12} color="#4CAF50" />
+                                          <Text style={styles.sizeVariantPriceText}>{formatPrice(variant.price)} ج.م</Text>
+                                        </View>
+                                      )}
+                                      <View style={styles.sizeVariantDetailRow}>
+                                        <Ionicons name="cube-outline" size={12} color="#2196F3" />
+                                        <Text style={styles.sizeVariantStockText}>المخزون: {variant.stock_quantity ?? 0}</Text>
+                                      </View>
+                                      {variant.sku && (
+                                        <View style={styles.sizeVariantDetailRow}>
+                                          <Ionicons name="barcode-outline" size={12} color="#999" />
+                                          <Text style={styles.sizeVariantSkuText}>SKU: {variant.sku}</Text>
+                                        </View>
+                                      )}
+                                    </View>
+                                  </View>
+                                  <View style={styles.sizeVariantActions}>
+                                    <TouchableOpacity
+                                      style={styles.sizeVariantDeleteButton}
+                                      onPress={() => deleteVariant(variant.id)}
+                                    >
+                                      <Ionicons name="trash-outline" size={16} color="#f44336" />
+                                    </TouchableOpacity>
+                                  </View>
+                                </View>
+                              );
+                              })}
+                            </ScrollView>
+                          </View>
+                        );
+                      })}
                   </View>
                 )}
 
@@ -4498,6 +5084,27 @@ export default function AdminScreen() {
                     <Text style={[styles.helpText, { marginBottom: 10, fontSize: 12 }]}>
                       💡 اختر عدة مقاسات لنفس اللون لإضافتها دفعة واحدة
                     </Text>
+                    
+                    {/* حقل المقاس في وضع التعديل */}
+                    {editingVariant && (
+                      <View style={{ marginBottom: 15 }}>
+                        <Text style={[styles.selectLabel, { fontSize: 14, marginBottom: 5 }]}>المقاس الحالي:</Text>
+                        <View style={styles.sizeInputRow}>
+                          <TextInput
+                            style={[styles.input, { flex: 2, marginRight: 10 }]}
+                            placeholder="المقاس (مثل: L, 42, 100x200)"
+                            value={newVariant.size}
+                            onChangeText={(text) => setNewVariant({ ...newVariant, size: text })}
+                          />
+                          <TextInput
+                            style={[styles.input, { flex: 1 }]}
+                            placeholder="وحدة القياس (مثل: مقاس، رقم، سم)"
+                            value={newVariant.size_unit}
+                            onChangeText={(text) => setNewVariant({ ...newVariant, size_unit: text })}
+                          />
+                        </View>
+                      </View>
+                    )}
                     
                     {/* عرض المقاسات المختارة */}
                     {selectedSizes.length > 0 && (
@@ -4639,17 +5246,76 @@ export default function AdminScreen() {
                     value={newVariant.sku}
                     onChangeText={(text) => setNewVariant({ ...newVariant, sku: text })}
                   />
-                  <TouchableOpacity 
-                    style={styles.imageButton} 
-                    onPress={() => pickVariantImage()}
-                  >
-                    <Text style={styles.imageButtonText}>
-                      {newVariant.image_url ? 'تم رفع صورة' : 'اختر صورة لهذا اللون'}
-                    </Text>
-                  </TouchableOpacity>
-                  {newVariant.image_url && (
-                    <Image source={{ uri: newVariant.image_url }} style={styles.variantImagePreview} />
-                  )}
+                  {/* Image Selection - اختيار الصورة */}
+                  <View style={styles.imageSelectionContainer}>
+                    <Text style={styles.selectLabel}>صورة اللون:</Text>
+                    <View style={styles.imageSelectionButtons}>
+                      <TouchableOpacity 
+                        style={[styles.imageButton, { flex: 1, marginRight: 8 }]} 
+                        onPress={() => pickVariantImage()}
+                      >
+                        <Ionicons name="camera-outline" size={18} color="#fff" style={{ marginLeft: 5 }} />
+                        <Text style={styles.imageButtonText}>
+                          رفع صورة جديدة
+                        </Text>
+                      </TouchableOpacity>
+                      {(productImages.length > 0 || editProductImages.length > 0) && (
+                        <TouchableOpacity 
+                          style={[styles.imageButton, { flex: 1, backgroundColor: '#10B981' }]} 
+                          onPress={() => setShowImageSelector(!showImageSelector)}
+                        >
+                          <Ionicons name="images-outline" size={18} color="#fff" style={{ marginLeft: 5 }} />
+                          <Text style={styles.imageButtonText}>
+                            اختر من الصور الموجودة
+                          </Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                    
+                    {/* Image Selector - قائمة الصور الموجودة */}
+                    {showImageSelector && (productImages.length > 0 || editProductImages.length > 0) && (
+                      <View style={styles.imageSelectorContainer}>
+                        <Text style={[styles.selectLabel, { marginBottom: 10 }]}>اختر صورة من الصور الموجودة:</Text>
+                        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.imageSelectorScroll}>
+                          {(editProductImages.length > 0 ? editProductImages : productImages).map((img, index) => (
+                            <TouchableOpacity
+                              key={index}
+                              style={[
+                                styles.imageSelectorItem,
+                                newVariant.image_url === img.url && styles.imageSelectorItemSelected
+                              ]}
+                              onPress={() => {
+                                setNewVariant({ ...newVariant, image_url: img.url || '' });
+                                setShowImageSelector(false);
+                              }}
+                            >
+                              <Image source={{ uri: img.url }} style={styles.imageSelectorThumbnail} />
+                              {newVariant.image_url === img.url && (
+                                <View style={styles.imageSelectorCheckmark}>
+                                  <Ionicons name="checkmark-circle" size={24} color="#10B981" />
+                                </View>
+                              )}
+                            </TouchableOpacity>
+                          ))}
+                        </ScrollView>
+                      </View>
+                    )}
+                    
+                    {/* Selected Image Preview */}
+                    {newVariant.image_url && (
+                      <View style={styles.selectedImageContainer}>
+                        <Text style={[styles.selectLabel, { marginBottom: 8 }]}>الصورة المختارة:</Text>
+                        <Image source={{ uri: newVariant.image_url }} style={styles.variantImagePreview} />
+                        <TouchableOpacity
+                          style={styles.removeImageButton}
+                          onPress={() => setNewVariant({ ...newVariant, image_url: '' })}
+                        >
+                          <Ionicons name="close-circle" size={20} color="#DC2626" />
+                          <Text style={styles.removeImageButtonText}>إزالة الصورة</Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
+                  </View>
                   <TouchableOpacity
                     style={[styles.addVariantButton, editingVariant && styles.updateVariantButton]}
                     onPress={editingVariant ? updateVariant : addVariant}
@@ -6025,6 +6691,35 @@ const styles = StyleSheet.create({
     gap: 12,
     marginTop: 10,
   },
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 15,
+    marginTop: 10,
+    paddingBottom: 10,
+    borderBottomWidth: 2,
+    borderBottomColor: '#f0f0f0',
+  },
+  sectionHeaderText: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#333',
+    flex: 1,
+  },
+  sectionHeaderBadge: {
+    backgroundColor: '#EE1C47',
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    minWidth: 30,
+    alignItems: 'center',
+  },
+  sectionHeaderBadgeText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: 'bold',
+  },
   gridCard: {
     backgroundColor: '#fff',
     padding: 12,
@@ -7064,6 +7759,156 @@ const styles = StyleSheet.create({
     color: '#9CA3AF',
     marginTop: 4,
   },
+  // Grouped Variants Styles
+  variantsGroupedContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    marginBottom: 20,
+  },
+  colorGroupCard: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+    width: '48%',
+    maxHeight: 500,
+  },
+  colorGroupHeader: {
+    backgroundColor: '#F9FAFB',
+    padding: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  colorGroupHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  colorGroupImage: {
+    width: 50,
+    height: 50,
+    borderRadius: 8,
+    backgroundColor: '#F3F4F6',
+  },
+  colorGroupImagePlaceholder: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  colorCircleLarge: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    borderWidth: 2,
+    borderColor: '#E5E7EB',
+  },
+  colorGroupInfo: {
+    flex: 1,
+  },
+  colorGroupTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 4,
+  },
+  colorGroupTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#111827',
+  },
+  colorGroupSizesCount: {
+    fontSize: 12,
+    color: '#6B7280',
+  },
+  colorGroupSizesList: {
+    padding: 10,
+    gap: 6,
+    maxHeight: 380,
+    flexGrow: 0,
+  },
+  sizeVariantCard: {
+    flexDirection: 'row',
+    backgroundColor: '#F9FAFB',
+    borderRadius: 8,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    marginBottom: 6,
+  },
+  sizeVariantInfo: {
+    flex: 1,
+  },
+  sizeVariantHeader: {
+    marginBottom: 8,
+  },
+  sizeVariantBadge: {
+    backgroundColor: '#fff',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    alignSelf: 'flex-start',
+  },
+  sizeVariantText: {
+    fontSize: 13,
+    color: '#374151',
+    fontWeight: '600',
+  },
+  sizeVariantDetails: {
+    gap: 4,
+  },
+  sizeVariantDetailRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  sizeVariantPriceText: {
+    fontSize: 12,
+    color: '#4CAF50',
+    fontWeight: '600',
+  },
+  sizeVariantStockText: {
+    fontSize: 11,
+    color: '#374151',
+  },
+  sizeVariantSkuText: {
+    fontSize: 10,
+    color: '#6B7280',
+  },
+  sizeVariantActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingLeft: 8,
+  },
+  sizeVariantEditButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 8,
+    backgroundColor: '#E3F2FD',
+    borderWidth: 1,
+    borderColor: '#2196F3',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  sizeVariantDeleteButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 8,
+    backgroundColor: '#FFEBEE',
+    borderWidth: 1,
+    borderColor: '#f44336',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   variantEditButton: {
     flex: 1,
     flexDirection: 'row',
@@ -7096,6 +7941,73 @@ const styles = StyleSheet.create({
     height: 150,
     borderRadius: 8,
     marginTop: 8,
+  },
+  imageSelectionContainer: {
+    marginBottom: 16,
+  },
+  imageSelectionButtons: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 12,
+  },
+  imageSelectorContainer: {
+    marginTop: 12,
+    padding: 12,
+    backgroundColor: '#F9FAFB',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  imageSelectorScroll: {
+    maxHeight: 120,
+  },
+  imageSelectorItem: {
+    width: 100,
+    height: 100,
+    marginRight: 10,
+    borderRadius: 8,
+    borderWidth: 2,
+    borderColor: 'transparent',
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  imageSelectorItemSelected: {
+    borderColor: '#10B981',
+  },
+  imageSelectorThumbnail: {
+    width: '100%',
+    height: '100%',
+    resizeMode: 'cover',
+  },
+  imageSelectorCheckmark: {
+    position: 'absolute',
+    top: 4,
+    right: 4,
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    borderRadius: 12,
+  },
+  selectedImageContainer: {
+    marginTop: 12,
+    padding: 12,
+    backgroundColor: '#F9FAFB',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  removeImageButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 10,
+    padding: 8,
+    backgroundColor: '#FFEBEE',
+    borderRadius: 6,
+    gap: 6,
+  },
+  removeImageButtonText: {
+    color: '#DC2626',
+    fontSize: 14,
+    fontWeight: '600',
   },
   variantImagePreview: {
     width: '100%',
