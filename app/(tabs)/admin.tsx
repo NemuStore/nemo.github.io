@@ -124,6 +124,8 @@ export default function AdminScreen() {
   const [categorySizes, setCategorySizes] = useState<CategorySize[]>([]);
   const [showColorInput, setShowColorInput] = useState(false);
   const [showSizeInput, setShowSizeInput] = useState(false);
+  // Selected sizes for bulk variant addition (لون واحد + عدة مقاسات)
+  const [selectedSizes, setSelectedSizes] = useState<Array<{size: string, size_unit: string}>>([]);
   // Category variant management
   const [selectedCategoryForVariants, setSelectedCategoryForVariants] = useState<string | null>(null);
   const [categoryColorsList, setCategoryColorsList] = useState<CategoryColor[]>([]);
@@ -1312,9 +1314,67 @@ export default function AdminScreen() {
   };
 
   const addVariant = () => {
-    console.log('🔄 Adding variant:', newVariant);
+    console.log('🔄 addVariant called');
+    console.log('🔄 Adding variant:', JSON.stringify(newVariant, null, 2));
     console.log('🖼️ Variant image_url:', newVariant.image_url);
+    console.log('📦 Current productVariants state before adding:', productVariants.length);
+    console.log('📦 Selected sizes:', selectedSizes);
     
+    // إذا كان هناك مقاسات مختارة، نضيف عدة متغيرات دفعة واحدة
+    if (selectedSizes.length > 0) {
+      if (!newVariant.color) {
+        sweetAlert.showError('خطأ', 'يرجى اختيار لون أولاً قبل إضافة المقاسات');
+        return;
+      }
+      const sizesCount = selectedSizes.length; // حفظ العدد قبل المسح
+      console.log('📦 Adding multiple variants for color:', newVariant.color, 'with', sizesCount, 'sizes');
+      
+      setProductVariants((prevVariants) => {
+        const newVariants: ProductVariant[] = selectedSizes.map((sizeItem, index) => {
+          const variant: ProductVariant = {
+            id: `temp-${Date.now()}-${Math.random()}-${index}`,
+            product_id: editingProduct?.id || '',
+            variant_name: `${newVariant.color || ''}${newVariant.color && sizeItem.size ? ' - ' : ''}${sizeItem.size || ''}`.trim(),
+            color: newVariant.color || null,
+            size: sizeItem.size || null,
+            size_unit: sizeItem.size_unit || null,
+            material: null,
+            price: newVariant.price ? parseFloat(newVariant.price) : null,
+            stock_quantity: newVariant.stock_quantity ? parseInt(newVariant.stock_quantity) : 0,
+            sku: newVariant.sku || null,
+            image_url: newVariant.image_url || null,
+            is_active: true,
+            is_default: prevVariants.length === 0 && index === 0,
+            display_order: prevVariants.length + index,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          };
+          return variant;
+        });
+        
+        const updatedVariants = [...prevVariants, ...newVariants];
+        console.log('✅ Variants updated, new count:', updatedVariants.length);
+        console.log('🖼️ All variants images:', updatedVariants.map((v: any) => ({ color: v.color, size: v.size, image_url: v.image_url })));
+        
+        return updatedVariants;
+      });
+      
+      setNewVariant({
+        color: '',
+        size: '',
+        size_unit: '',
+        price: '',
+        stock_quantity: '',
+        sku: '',
+        image_url: '',
+      });
+      setSelectedSizes([]);
+      
+      sweetAlert.showSuccess('نجح', `تم إضافة ${sizesCount} متغير بنجاح`);
+      return;
+    }
+    
+    // الطريقة القديمة: إضافة متغير واحد
     if (!newVariant.color && !newVariant.size) {
       sweetAlert.showError('خطأ', 'يرجى إدخال لون أو مقاس على الأقل');
       return;
@@ -1322,6 +1382,7 @@ export default function AdminScreen() {
 
     // Use functional update to ensure we get the latest state
     setProductVariants((prevVariants) => {
+      console.log('📦 Inside setProductVariants callback, prevVariants.length:', prevVariants.length);
       const variant: ProductVariant = {
         id: `temp-${Date.now()}-${Math.random()}`,
         product_id: editingProduct?.id || '',
@@ -1361,6 +1422,7 @@ export default function AdminScreen() {
       sku: '',
       image_url: '',
     });
+    setSelectedSizes([]);
     
     sweetAlert.showSuccess('نجح', 'تم إضافة المتغير بنجاح');
   };
@@ -1376,6 +1438,7 @@ export default function AdminScreen() {
       sku: variant.sku || '',
       image_url: variant.image_url || '',
     });
+    setSelectedSizes([]); // مسح المقاسات المختارة عند التعديل
   };
 
   const cancelEditVariant = () => {
@@ -1389,6 +1452,7 @@ export default function AdminScreen() {
       sku: '',
       image_url: '',
     });
+    setSelectedSizes([]); // مسح المقاسات المختارة عند الإلغاء
     setShowColorInput(false);
     setShowSizeInput(false);
   };
@@ -2120,7 +2184,7 @@ export default function AdminScreen() {
             price: variant.price || null,
             stock_quantity: variant.stock_quantity || 0,
             sku: variant.sku || null,
-            image_url: variant.image_url || null,
+            // image_url removed - all images are stored in product_images table with variant_id
             is_active: variant.is_active !== undefined ? variant.is_active : true,
             is_default: variant.is_default !== undefined ? variant.is_default : (index === 0),
             display_order: index,
@@ -2157,19 +2221,27 @@ export default function AdminScreen() {
         if (variantsResponse.ok) {
           const variantsData = await variantsResponse.json();
           console.log('✅ Variants inserted successfully:', variantsData.length);
-          console.log('📦 Variants data with images:', variantsData.map((v: any) => ({ id: v.id, color: v.color, size: v.size, image_url: v.image_url })));
           
           // Link variant images to product_images
+          // Match variants from database with variants from state that have image_url
           console.log('🔗 Starting to link variant images to product_images...');
-          console.log('🔗 Variants with images:', variantsData.filter(v => v.image_url).length, 'out of', variantsData.length);
+          const variantsWithImages = productVariants.filter(v => (v as any).image_url);
+          console.log('🔗 Variants with images in state:', variantsWithImages.length, 'out of', productVariants.length);
           
           // Get access token for variant images (reuse if already got, otherwise get new one)
           const variantAccessToken = accessToken || await getAccessToken();
           console.log('🔑 Using access token for variant images, length:', variantAccessToken?.length || 0);
           
-          for (const variant of variantsData) {
-            if (variant.image_url) {
-              console.log('🖼️ Linking variant image:', variant.id, variant.color, variant.size, variant.image_url);
+          for (const stateVariant of variantsWithImages) {
+            // Find matching variant from database by color and size
+            const matchingVariant = variantsData.find((v: any) => 
+              v.color === stateVariant.color && 
+              v.size === stateVariant.size
+            );
+            
+            if (matchingVariant) {
+              const variantImageUrl = (stateVariant as any).image_url;
+              console.log('🖼️ Linking variant image:', matchingVariant.id, matchingVariant.color, matchingVariant.size, variantImageUrl);
               
               try {
                 // Use fetch directly with Authorization header (ensures RLS works correctly)
@@ -2183,8 +2255,8 @@ export default function AdminScreen() {
                   },
                   body: JSON.stringify({
                     product_id: productId,
-                    image_url: variant.image_url,
-                    variant_id: variant.id,
+                    image_url: variantImageUrl,
+                    variant_id: matchingVariant.id,
                     display_order: 0,
                     is_primary: false,
                   }),
@@ -2192,20 +2264,20 @@ export default function AdminScreen() {
                 
                 if (!response.ok) {
                   const errorData = await response.json().catch(() => ({ message: response.statusText }));
-                  console.error('❌ Failed to link variant image:', variant.id, errorData);
+                  console.error('❌ Failed to link variant image:', matchingVariant.id, errorData);
                   console.error('❌ Response status:', response.status);
                 } else {
                   const imageData = await response.json();
                   const imageResult = Array.isArray(imageData) ? imageData[0] : imageData;
-                  console.log('✅ Variant image linked successfully:', variant.id, variant.image_url, imageResult);
+                  console.log('✅ Variant image linked successfully:', matchingVariant.id, variantImageUrl, imageResult);
                 }
               } catch (error: any) {
-                console.error('❌ Exception during variant image insert:', variant.id, error);
+                console.error('❌ Exception during variant image insert:', matchingVariant.id, error);
                 console.error('❌ Error message:', error?.message);
                 console.error('❌ Error stack:', error?.stack);
               }
             } else {
-              console.warn('⚠️ Variant has no image_url:', variant.id, variant.color, variant.size);
+              console.warn('⚠️ Could not find matching variant in database for:', stateVariant.color, stateVariant.size);
             }
           }
           
@@ -2497,6 +2569,7 @@ export default function AdminScreen() {
   const cancelEdit = () => {
     setEditingProduct(null);
     setEditingVariant(null);
+    setSelectedSizes([]); // مسح المقاسات المختارة عند إلغاء التعديل
     setNewProduct({
       name: '',
       description: '',
@@ -2553,12 +2626,17 @@ export default function AdminScreen() {
 
     setLoading(true);
     console.log('🔄 Starting product update...');
+    console.log('📦 productVariants at start of update:', productVariants.length, 'variants');
+    console.log('📦 productVariants details at start:', JSON.stringify(productVariants, null, 2));
     try {
       const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
       const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
       
       // Get access_token (with auto-refresh if expired)
       const accessToken = await getAccessToken();
+      // Define updateAccessToken at function scope for use throughout
+      const updateAccessToken = accessToken || await getAccessToken();
+      console.log('🔑 Access token obtained, length:', accessToken?.length || 0);
 
       // Update product
       const productResponse = await fetch(`${supabaseUrl}/rest/v1/products?id=eq.${editingProduct.id}`, {
@@ -2649,9 +2727,6 @@ export default function AdminScreen() {
 
           // Insert new general images (variant_id is null) using fetch directly
           console.log('📤 Starting to insert', validImages.length, 'images one by one...');
-          
-          // Get access token for fetch requests
-          const updateAccessToken = accessToken || await getAccessToken();
           console.log('🔑 Using access token for update, length:', updateAccessToken?.length || 0);
           
           // Verify token is valid by checking user info
@@ -2764,17 +2839,26 @@ export default function AdminScreen() {
             console.log(`✅ Successfully inserted all ${insertedImages.length} images!`);
           }
           
-          // Verify images were saved in database
+          // Verify images were saved in database (using fetch instead of supabase client to avoid hanging)
           try {
-            const { data: savedImages, error: verifyError } = await supabase
-              .from('product_images')
-              .select('id, image_url, display_order')
-              .eq('product_id', editingProduct.id)
-              .is('variant_id', null);
+            console.log('🔍 DEBUG: About to verify images with fetch...');
+            const verifyUrl = `${supabaseUrl}/rest/v1/product_images?product_id=eq.${editingProduct.id}&variant_id=is.null&select=id,image_url,display_order`;
+            const verifyResponse = await fetch(verifyUrl, {
+              method: 'GET',
+              headers: {
+                'apikey': supabaseKey || '',
+                'Authorization': `Bearer ${updateAccessToken}`,
+                'Content-Type': 'application/json',
+              },
+            });
             
-            if (verifyError) {
-              console.error('❌ Failed to verify images:', verifyError);
+            console.log('🔍 DEBUG: Fetch verification response status:', verifyResponse.status);
+            
+            if (!verifyResponse.ok) {
+              const errorText = await verifyResponse.text();
+              console.error('❌ Failed to verify images:', verifyResponse.status, errorText);
             } else {
+              const savedImages = await verifyResponse.json();
               console.log(`🔍 Verification: Found ${savedImages?.length || 0} images in database for product ${editingProduct.id}`);
               console.log('🔍 Saved images:', savedImages?.map((img: any) => ({ id: img.id, url: img.image_url, order: img.display_order })));
               
@@ -2784,15 +2868,32 @@ export default function AdminScreen() {
                 console.log(`✅ Verification passed: All ${validImages.length} images are in database`);
               }
             }
+            console.log('🔍 DEBUG: Finished verification try block');
           } catch (verifyError) {
             console.error('❌ Error verifying images:', verifyError);
+            console.error('❌ Error details:', JSON.stringify(verifyError, null, 2));
           }
+          console.log('🔍 DEBUG: After verification catch block');
         }
       }
 
+      // CRITICAL: Log after images section to ensure we reach this point
+      console.log('🔍 DEBUG: Finished images section, about to update variants...');
+      console.log('🔍 DEBUG: productVariants.length:', productVariants.length);
+      console.log('🔍 DEBUG: productVariants state:', JSON.stringify(productVariants, null, 2));
+      
+      // CRITICAL: Log before variants update to ensure we reach this point
+      console.log('🔍 DEBUG: About to update variants. productVariants.length:', productVariants.length);
+      console.log('🔍 DEBUG: productVariants state:', JSON.stringify(productVariants, null, 2));
+      
       // Update product variants
+      console.log('🔄 Starting to update product variants...');
+      console.log('📦 Current productVariants state:', productVariants.length, 'variants');
+      console.log('📦 productVariants details:', JSON.stringify(productVariants, null, 2));
+      
       // Delete old variants
-      await fetch(`${supabaseUrl}/rest/v1/product_variants?product_id=eq.${editingProduct.id}`, {
+      console.log('🗑️ Deleting old variants for product:', editingProduct.id);
+      const deleteVariantsResponse = await fetch(`${supabaseUrl}/rest/v1/product_variants?product_id=eq.${editingProduct.id}`, {
         method: 'DELETE',
         headers: {
           'apikey': supabaseKey || '',
@@ -2800,12 +2901,14 @@ export default function AdminScreen() {
           'Content-Type': 'application/json',
         }
       });
+      console.log('🗑️ Delete variants response status:', deleteVariantsResponse.status);
 
       // Insert new variants
       console.log('📦 Updating productVariants:', productVariants.length);
-      console.log('📦 productVariants data:', productVariants);
+      console.log('📦 productVariants data:', JSON.stringify(productVariants, null, 2));
       
       if (productVariants.length > 0) {
+        console.log('✅ productVariants.length > 0, proceeding with variant insertion...');
         const variantsToInsert = productVariants.map((variant, index) => {
           const variantData: any = {
             product_id: editingProduct.id,
@@ -2817,7 +2920,7 @@ export default function AdminScreen() {
             price: variant.price || null,
             stock_quantity: variant.stock_quantity || 0,
             sku: variant.sku || null,
-            image_url: variant.image_url || null,
+            // image_url removed - all images are stored in product_images table with variant_id
             is_active: variant.is_active !== undefined ? variant.is_active : true,
             is_default: variant.is_default !== undefined ? variant.is_default : (index === 0),
             display_order: index,
@@ -2850,19 +2953,34 @@ export default function AdminScreen() {
         });
         
         console.log('📡 Variants response status (update):', variantsResponse.status);
+        
+        if (!variantsResponse.ok) {
+          const errorText = await variantsResponse.text();
+          console.error('❌ Failed to insert variants:', variantsResponse.status, errorText);
+          throw new Error(`Failed to insert variants: ${variantsResponse.status} ${errorText}`);
+        }
 
-        if (variantsResponse.ok) {
-          const variantsData = await variantsResponse.json();
-          console.log('✅ Variants updated successfully:', variantsData.length);
-          console.log('📦 Updated variants data with images:', variantsData.map((v: any) => ({ id: v.id, color: v.color, size: v.size, image_url: v.image_url })));
-          
-          // Link variant images to product_images
-          console.log('🔗 Starting to link variant images to product_images (update)...');
-          console.log('🔗 Variants with images:', variantsData.filter(v => v.image_url).length, 'out of', variantsData.length);
-          
-          for (const variant of variantsData) {
-            if (variant.image_url) {
-              console.log('🖼️ Linking variant image for update:', variant.id, variant.color, variant.size, variant.image_url);
+        const variantsData = await variantsResponse.json();
+        console.log('✅ Variants updated successfully:', variantsData.length);
+        console.log('📦 Variants data from database:', JSON.stringify(variantsData, null, 2));
+        
+        // Link variant images to product_images
+        // Match variants from database with variants from state that have image_url
+        console.log('🔗 Starting to link variant images to product_images (update)...');
+        const variantsWithImages = productVariants.filter(v => (v as any).image_url);
+        console.log('🔗 Variants with images in state:', variantsWithImages.length, 'out of', productVariants.length);
+        
+        if (variantsWithImages.length > 0) {
+          for (const stateVariant of variantsWithImages) {
+            // Find matching variant from database by color and size
+            const matchingVariant = variantsData.find((v: any) => 
+              v.color === stateVariant.color && 
+              v.size === stateVariant.size
+            );
+            
+            if (matchingVariant) {
+              const variantImageUrl = (stateVariant as any).image_url;
+              console.log('🖼️ Linking variant image for update:', matchingVariant.id, matchingVariant.color, matchingVariant.size, variantImageUrl);
               
               try {
                 // Verify that we have a real access_token, not just anon key
@@ -2872,8 +2990,8 @@ export default function AdminScreen() {
                 }
                 
                 // Delete old variant images for this specific variant using direct fetch
-                console.log('🗑️ Deleting old variant images for variant:', variant.id);
-                const deleteUrl = `${supabaseUrl}/rest/v1/product_images?product_id=eq.${editingProduct.id}&variant_id=eq.${variant.id}`;
+                console.log('🗑️ Deleting old variant images for variant:', matchingVariant.id);
+                const deleteUrl = `${supabaseUrl}/rest/v1/product_images?product_id=eq.${editingProduct.id}&variant_id=eq.${matchingVariant.id}`;
                 const deleteResponse = await fetch(deleteUrl, {
                   method: 'DELETE',
                   headers: {
@@ -2886,9 +3004,9 @@ export default function AdminScreen() {
                 
                 if (!deleteResponse.ok) {
                   const errorText = await deleteResponse.text();
-                  console.error('❌ Failed to delete old variant images:', variant.id, deleteResponse.status, errorText);
+                  console.error('❌ Failed to delete old variant images:', matchingVariant.id, deleteResponse.status, errorText);
                 } else {
-                  console.log('✅ Old variant images deleted for variant:', variant.id);
+                  console.log('✅ Old variant images deleted for variant:', matchingVariant.id);
                 }
                 
                 // Add variant image to product_images with variant_id using fetch directly
@@ -2905,8 +3023,8 @@ export default function AdminScreen() {
                   },
                   body: JSON.stringify({
                     product_id: editingProduct.id,
-                    image_url: variant.image_url,
-                    variant_id: variant.id,
+                    image_url: variantImageUrl,
+                    variant_id: matchingVariant.id,
                     display_order: 0,
                     is_primary: false,
                   }),
@@ -2914,34 +3032,30 @@ export default function AdminScreen() {
                 
                 if (!response.ok) {
                   const errorData = await response.json().catch(() => ({ message: response.statusText }));
-                  console.error('❌ Failed to link variant image (update):', variant.id, errorData);
+                  console.error('❌ Failed to link variant image (update):', matchingVariant.id, errorData);
                   console.error('❌ Response status:', response.status);
                 } else {
                   const imageData = await response.json();
                   const imageResult = Array.isArray(imageData) ? imageData[0] : imageData;
-                  console.log('✅ Variant image linked successfully (update):', variant.id, variant.image_url, imageResult);
+                  console.log('✅ Variant image linked successfully (update):', matchingVariant.id, variantImageUrl, imageResult);
                 }
               } catch (error: any) {
-                console.error('❌ Exception during variant image insert (update):', variant.id, error);
+                console.error('❌ Exception during variant image insert (update):', matchingVariant.id, error);
                 console.error('❌ Error message:', error?.message);
                 console.error('❌ Error stack:', error?.stack);
               }
             } else {
-              console.warn('⚠️ Variant has no image_url (update):', variant.id, variant.color, variant.size);
+              console.warn('⚠️ Could not find matching variant in database for (update):', stateVariant.color, stateVariant.size);
             }
           }
           
           console.log('🔗 Finished linking variant images (update)');
         } else {
-          const errorText = await variantsResponse.text();
-          console.error('❌ Failed to update product variants:', variantsResponse.status, errorText);
-          console.error('❌ Request body was:', JSON.stringify(variantsToInsert, null, 2));
-          console.error('❌ Response headers:', Object.fromEntries(variantsResponse.headers.entries()));
-          sweetAlert.showError('خطأ', `فشل تحديث المتغيرات: ${errorText}`);
-          throw new Error(`Failed to update variants: ${variantsResponse.status} ${errorText}`);
+          console.log('⚠️ No variants with images to link');
         }
       } else {
-        console.log('ℹ️ No variants to update for this product');
+        console.log('⚠️ No variants to insert (productVariants.length === 0)');
+        console.log('⚠️ productVariants state is empty, skipping variant insertion');
       }
 
       sweetAlert.showSuccess('نجح', 'تم تحديث المنتج بنجاح', () => {
@@ -4376,32 +4490,79 @@ export default function AdminScreen() {
                     )}
                   </View>
 
-                  {/* Size Selection - اختيار المقاس من الاقتراحات */}
+                  {/* Size Selection - اختيار المقاسات (متعددة) */}
                   <View style={styles.selectContainer}>
-                    <Text style={styles.selectLabel}>المقاس:</Text>
+                    <Text style={styles.selectLabel}>
+                      المقاسات: {selectedSizes.length > 0 && `(${selectedSizes.length} مختار)`}
+                    </Text>
+                    <Text style={[styles.helpText, { marginBottom: 10, fontSize: 12 }]}>
+                      💡 اختر عدة مقاسات لنفس اللون لإضافتها دفعة واحدة
+                    </Text>
+                    
+                    {/* عرض المقاسات المختارة */}
+                    {selectedSizes.length > 0 && (
+                      <View style={{ marginBottom: 10 }}>
+                        <Text style={[styles.selectLabel, { fontSize: 14, marginBottom: 5 }]}>المقاسات المختارة:</Text>
+                        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                          {selectedSizes.map((sizeItem, index) => (
+                            <View key={index} style={[styles.variantOptionChip, styles.variantOptionChipActive, { flexDirection: 'row', alignItems: 'center' }]}>
+                              <Text style={[styles.variantOptionChipText, styles.variantOptionChipTextActive]}>
+                                {sizeItem.size} {sizeItem.size_unit ? `(${sizeItem.size_unit})` : ''}
+                              </Text>
+                              <TouchableOpacity
+                                onPress={() => {
+                                  setSelectedSizes(selectedSizes.filter((_, i) => i !== index));
+                                }}
+                                style={{ marginLeft: 5 }}
+                              >
+                                <Ionicons name="close-circle" size={18} color="#fff" />
+                              </TouchableOpacity>
+                            </View>
+                          ))}
+                        </View>
+                      </View>
+                    )}
+                    
                     {categorySizes.length > 0 ? (
                       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.variantOptionsList}>
-                        {categorySizes.map((size) => (
-                          <TouchableOpacity
-                            key={size.id}
-                            style={[
-                              styles.variantOptionChip,
-                              newVariant.size === size.size_value && newVariant.size_unit === size.size_unit && styles.variantOptionChipActive
-                            ]}
-                            onPress={() => setNewVariant({ 
-                              ...newVariant, 
-                              size: size.size_value,
-                              size_unit: size.size_unit || ''
-                            })}
-                          >
-                            <Text style={[
-                              styles.variantOptionChipText,
-                              newVariant.size === size.size_value && newVariant.size_unit === size.size_unit && styles.variantOptionChipTextActive
-                            ]}>
-                              {size.size_value} {size.size_unit ? `(${size.size_unit})` : ''}
-                            </Text>
-                          </TouchableOpacity>
-                        ))}
+                        {categorySizes.map((size) => {
+                          const isSelected = selectedSizes.some(
+                            s => s.size === size.size_value && s.size_unit === (size.size_unit || '')
+                          );
+                          return (
+                            <TouchableOpacity
+                              key={size.id}
+                              style={[
+                                styles.variantOptionChip,
+                                isSelected && styles.variantOptionChipActive
+                              ]}
+                              onPress={() => {
+                                if (isSelected) {
+                                  // إزالة المقاس من القائمة المختارة
+                                  setSelectedSizes(selectedSizes.filter(
+                                    s => !(s.size === size.size_value && s.size_unit === (size.size_unit || ''))
+                                  ));
+                                } else {
+                                  // إضافة المقاس إلى القائمة المختارة
+                                  setSelectedSizes([...selectedSizes, {
+                                    size: size.size_value,
+                                    size_unit: size.size_unit || ''
+                                  }]);
+                                }
+                              }}
+                            >
+                              {isSelected && (
+                                <Ionicons name="checkmark-circle" size={16} color="#fff" style={{ marginRight: 5 }} />
+                              )}
+                              <Text style={[
+                                styles.variantOptionChipText,
+                                isSelected && styles.variantOptionChipTextActive
+                              ]}>
+                                {size.size_value} {size.size_unit ? `(${size.size_unit})` : ''}
+                              </Text>
+                            </TouchableOpacity>
+                          );
+                        })}
                       </ScrollView>
                     ) : (
                       <Text style={styles.helpText}>
@@ -4422,6 +4583,29 @@ export default function AdminScreen() {
                           value={newVariant.size_unit}
                           onChangeText={(text) => setNewVariant({ ...newVariant, size_unit: text })}
                         />
+                        <TouchableOpacity
+                          style={[styles.addNewButton, { marginLeft: 10, paddingHorizontal: 15 }]}
+                          onPress={() => {
+                            if (newVariant.size) {
+                              const newSize = {
+                                size: newVariant.size,
+                                size_unit: newVariant.size_unit || ''
+                              };
+                              // التحقق من عدم التكرار
+                              const exists = selectedSizes.some(
+                                s => s.size === newSize.size && s.size_unit === newSize.size_unit
+                              );
+                              if (!exists) {
+                                setSelectedSizes([...selectedSizes, newSize]);
+                                setNewVariant({ ...newVariant, size: '', size_unit: '' });
+                              } else {
+                                sweetAlert.showError('خطأ', 'هذا المقاس موجود بالفعل في القائمة المختارة');
+                              }
+                            }
+                          }}
+                        >
+                          <Ionicons name="add-circle" size={18} color="#10B981" />
+                        </TouchableOpacity>
                       </View>
                     ) : (
                       <TouchableOpacity
@@ -4471,9 +4655,18 @@ export default function AdminScreen() {
                     onPress={editingVariant ? updateVariant : addVariant}
                   >
                     <Text style={styles.addVariantButtonText}>
-                      {editingVariant ? 'تحديث المتغير' : 'إضافة متغير'}
+                      {editingVariant 
+                        ? 'تحديث المتغير' 
+                        : selectedSizes.length > 0 
+                          ? `إضافة ${selectedSizes.length} متغير` 
+                          : 'إضافة متغير'}
                     </Text>
                   </TouchableOpacity>
+                  {selectedSizes.length > 0 && (
+                    <Text style={[styles.helpText, { textAlign: 'center', marginTop: 5 }]}>
+                      سيتم إضافة {selectedSizes.length} متغير للون "{newVariant.color || 'المحدد'}"
+                    </Text>
+                  )}
                 </View>
               </View>
               
