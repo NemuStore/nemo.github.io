@@ -9,6 +9,7 @@ import {
   Alert,
   Platform,
   Dimensions,
+  ActivityIndicator,
 } from 'react-native';
 import { supabase } from '@/lib/supabase';
 import { Order } from '@/types';
@@ -16,6 +17,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import * as Location from 'expo-location';
 import { useCart } from '@/contexts/CartContext';
+import { useSweetAlert } from '@/hooks/useSweetAlert';
+import SweetAlert from '@/components/SweetAlert';
 
 export default function CartScreen() {
   const { cartItems, removeFromCart, updateQuantity, getTotal, clearCart } = useCart();
@@ -23,6 +26,7 @@ export default function CartScreen() {
   const [user, setUser] = useState<any>(null);
   const [variantImages, setVariantImages] = useState<Record<string, string>>({}); // variant_id -> image_url
   const router = useRouter();
+  const sweetAlert = useSweetAlert();
 
   useEffect(() => {
     loadUser();
@@ -221,21 +225,14 @@ export default function CartScreen() {
 
   const confirmOrder = async () => {
     if (!user) {
-      if (typeof window !== 'undefined' && Platform.OS === 'web') {
-        window.alert('يجب تسجيل الدخول أولاً');
-      } else {
-        Alert.alert('خطأ', 'يجب تسجيل الدخول أولاً');
-      }
-      router.push('/auth');
+      sweetAlert.showError('خطأ', 'يجب تسجيل الدخول أولاً', () => {
+        router.push('/auth');
+      });
       return;
     }
 
     if (cartItems.length === 0) {
-      if (typeof window !== 'undefined' && Platform.OS === 'web') {
-        window.alert('السلة فارغة');
-      } else {
-        Alert.alert('خطأ', 'السلة فارغة');
-      }
+      sweetAlert.showError('خطأ', 'السلة فارغة');
       return;
     }
 
@@ -405,32 +402,19 @@ export default function CartScreen() {
       
       // عرض رسالة للعميل
       if (createdOrders.length === 2) {
-        if (typeof window !== 'undefined' && Platform.OS === 'web') {
-          window.alert(`تم إنشاء طلبين منفصلين:\n- طلب من المخزن: ${createdOrders[0].order_number}\n- طلب من الخارج: ${createdOrders[1].order_number}`);
-        } else {
-          Alert.alert(
-            'تم إنشاء الطلبين',
-            `تم إنشاء طلبين منفصلين:\n- طلب من المخزن: ${createdOrders[0].order_number}\n- طلب من الخارج: ${createdOrders[1].order_number}`,
-            [{ text: 'موافق', onPress: () => router.push('/(tabs)/orders') }]
-          );
-        }
+        sweetAlert.showSuccess(
+          'تم إنشاء الطلبين',
+          `تم إنشاء طلبين منفصلين:\n- طلب من المخزن: ${createdOrders[0].order_number}\n- طلب من الخارج: ${createdOrders[1].order_number}`,
+          () => router.push('/(tabs)/orders')
+        );
       } else if (createdOrders.length === 1) {
         const order = createdOrders[0];
         const orderType = order.source_type === 'warehouse' ? 'من المخزن' : 'من الخارج';
-        if (typeof window !== 'undefined' && Platform.OS === 'web') {
-          if (window.confirm(`تم إنشاء الطلب بنجاح (${orderType})\nرقم الطلب: ${order.order_number}\nهل تريد الذهاب لصفحة الطلبات؟`)) {
-            router.push('/(tabs)/orders');
-          }
-        } else {
-          Alert.alert(
-            'نجح',
-            `تم إنشاء الطلب بنجاح (${orderType})\nرقم الطلب: ${order.order_number}`,
-            [
-              { text: 'متابعة التسوق', style: 'cancel' },
-              { text: 'الذهاب للطلبات', onPress: () => router.push('/(tabs)/orders') },
-            ]
-          );
-        }
+        sweetAlert.showConfirm(
+          'نجح',
+          `تم إنشاء الطلب بنجاح (${orderType})\nرقم الطلب: ${order.order_number}\nهل تريد الذهاب لصفحة الطلبات؟`,
+          () => router.push('/(tabs)/orders')
+        );
       }
       
       // Clear cart بعد نجاح إنشاء الطلبات
@@ -438,11 +422,7 @@ export default function CartScreen() {
       
     } catch (error: any) {
       console.error('❌ Cart: Error creating order:', error);
-      if (typeof window !== 'undefined' && Platform.OS === 'web') {
-        window.alert(error.message || 'فشل إنشاء الطلب');
-      } else {
-        Alert.alert('خطأ', error.message || 'فشل إنشاء الطلب');
-      }
+      sweetAlert.showError('خطأ', error.message || 'فشل إنشاء الطلب');
     } finally {
       setLoading(false);
     }
@@ -597,12 +577,27 @@ export default function CartScreen() {
           onPress={confirmOrder}
           disabled={loading}
         >
-          <Text style={styles.confirmButtonText}>
-            {loading ? 'جاري المعالجة...' : 'تأكيد الطلب'}
-          </Text>
+          {loading ? (
+            <ActivityIndicator size="small" color="#fff" />
+          ) : (
+            <Text style={styles.confirmButtonText}>تأكيد الطلب</Text>
+          )}
         </TouchableOpacity>
         </View>
       </View>
+      {sweetAlert.alert.options && (
+        <SweetAlert
+          visible={sweetAlert.alert.visible}
+          type={sweetAlert.alert.options.type}
+          title={sweetAlert.alert.options.title}
+          message={sweetAlert.alert.options.message}
+          confirmText={sweetAlert.alert.options.confirmText}
+          cancelText={sweetAlert.alert.options.cancelText}
+          onConfirm={sweetAlert.alert.options.onConfirm}
+          onCancel={sweetAlert.alert.options.onCancel}
+          onClose={sweetAlert.hideAlert}
+        />
+      )}
     </View>
   );
 }

@@ -10,6 +10,7 @@ import {
   Platform,
   Image,
   Dimensions,
+  ActivityIndicator,
 } from 'react-native';
 import { supabase } from '@/lib/supabase';
 import { createClient } from '@supabase/supabase-js';
@@ -107,6 +108,7 @@ export default function AdminScreen() {
   const [productImages, setProductImages] = useState<Array<{ uri: string; url?: string; variantId?: string }>>([]);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [editProductImages, setEditProductImages] = useState<Array<{ uri: string; url?: string; variantId?: string }>>([]);
+  const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0, isUploading: false });
   // Product variants management
   const [productVariants, setProductVariants] = useState<ProductVariant[]>([]);
   const [variantsUpdateKey, setVariantsUpdateKey] = useState(0); // Key to force re-render when variants change
@@ -598,22 +600,9 @@ export default function AdminScreen() {
       'حذف',
       'إلغاء'
     );
-    return;
-    
-    // Old code (kept for reference, will be removed)
-    if (false && typeof window !== 'undefined' && Platform.OS === 'web') {
-      if (!window.confirm('هل أنت متأكد من حذف هذه الفئة؟ سيتم إزالة الفئة من جميع المنتجات المرتبطة بها.')) {
-        return;
-      }
-    } else {
-      Alert.alert('تأكيد', 'هل أنت متأكد من حذف هذه الفئة؟', [
-        { text: 'إلغاء', style: 'cancel' },
-        { text: 'حذف', style: 'destructive', onPress: () => performDeleteCategory(categoryId) },
-      ]);
-      return;
-    }
-    
-    performDeleteCategory(categoryId);
+    sweetAlert.showConfirm('تأكيد', 'هل أنت متأكد من حذف هذه الفئة؟ سيتم إزالة الفئة من جميع المنتجات المرتبطة بها.', () => {
+      performDeleteCategory(categoryId);
+    });
   };
 
   const performDeleteCategory = async (categoryId: string) => {
@@ -637,20 +626,12 @@ export default function AdminScreen() {
         throw new Error(errorText);
       }
 
-      if (typeof window !== 'undefined' && Platform.OS === 'web') {
-        window.alert('تم حذف الفئة بنجاح');
-      } else {
-        Alert.alert('نجح', 'تم حذف الفئة بنجاح');
-      }
-      
-      await loadCategories();
+      sweetAlert.showSuccess('نجح', 'تم حذف الفئة بنجاح', () => {
+        loadCategories();
+      });
     } catch (error: any) {
       console.error('❌ Error deleting category:', error);
-      if (typeof window !== 'undefined' && Platform.OS === 'web') {
-        window.alert(error.message || 'فشل حذف الفئة');
-      } else {
-        Alert.alert('خطأ', error.message || 'فشل حذف الفئة');
-      }
+      sweetAlert.showError('خطأ', error.message || 'فشل حذف الفئة');
     } finally {
       setLoading(false);
     }
@@ -1142,15 +1123,10 @@ export default function AdminScreen() {
         if (!userData || !['admin', 'manager'].includes(userData.role)) {
           console.log('❌ Admin: User does not have admin/manager role. Current role:', userData?.role || 'none');
           setLoading(false);
-          Alert.alert(
+          sweetAlert.showError(
             'غير مصرح', 
             `ليس لديك صلاحية للوصول لهذه الصفحة. دورك الحالي: ${userData?.role === 'customer' ? 'مستخدم' : userData?.role || 'غير معروف'}. يرجى التواصل مع المدير لتغيير دورك.`,
-            [
-              {
-                text: 'موافق',
-                onPress: () => router.replace('/(tabs)')
-              }
-            ]
+            () => router.replace('/(tabs)')
           );
           return;
         }
@@ -1346,10 +1322,13 @@ export default function AdminScreen() {
     if (!result.canceled && result.assets.length > 0) {
       try {
         setLoading(true);
+        setUploadProgress({ current: 0, total: result.assets.length, isUploading: true });
         const uploadedImages = [];
         
-        for (const asset of result.assets) {
+        for (let i = 0; i < result.assets.length; i++) {
+          const asset = result.assets[i];
           try {
+            setUploadProgress({ current: i + 1, total: result.assets.length, isUploading: true });
             const imageUrl = await uploadImageToImgBB(asset.uri);
             uploadedImages.push({ uri: asset.uri, url: imageUrl });
           } catch (error) {
@@ -1361,21 +1340,14 @@ export default function AdminScreen() {
           setProductImages([...productImages, ...uploadedImages]);
           // Images are stored in product_images table using imgbb links, no need to set image_url
           
-          if (typeof window !== 'undefined' && Platform.OS === 'web') {
-            window.alert(`تم رفع ${uploadedImages.length} صورة بنجاح`);
-          } else {
-            Alert.alert('نجح', `تم رفع ${uploadedImages.length} صورة بنجاح`);
-          }
+          sweetAlert.showSuccess('نجح', `تم رفع ${uploadedImages.length} صورة بنجاح`);
         }
       } catch (error) {
         console.error('Error uploading images:', error);
-        if (typeof window !== 'undefined' && Platform.OS === 'web') {
-          window.alert('فشل رفع الصور');
-        } else {
-          Alert.alert('خطأ', 'فشل رفع الصور');
-        }
+        sweetAlert.showError('خطأ', 'فشل رفع الصور');
       } finally {
         setLoading(false);
+        setUploadProgress({ current: 0, total: 0, isUploading: false });
       }
     }
   };
@@ -2175,11 +2147,7 @@ export default function AdminScreen() {
     }
 
     if (productImages.length === 0) {
-      if (typeof window !== 'undefined' && Platform.OS === 'web') {
-        window.alert('يرجى إضافة صورة واحدة على الأقل');
-      } else {
-        Alert.alert('خطأ', 'يرجى إضافة صورة واحدة على الأقل');
-      }
+      sweetAlert.showError('خطأ', 'يرجى إضافة صورة واحدة على الأقل');
       return;
     }
 
@@ -2742,11 +2710,7 @@ export default function AdminScreen() {
       });
     } catch (error: any) {
       console.error('❌ Error adding product:', error);
-      if (typeof window !== 'undefined' && Platform.OS === 'web') {
-        window.alert(error.message || 'فشل إضافة المنتج');
-      } else {
-        Alert.alert('خطأ', error.message || 'فشل إضافة المنتج');
-      }
+      sweetAlert.showError('خطأ', error.message || 'فشل إضافة المنتج');
     } finally {
       setLoading(false);
     }
@@ -3477,11 +3441,7 @@ export default function AdminScreen() {
       });
     } catch (error: any) {
       console.error('❌ Error updating product:', error);
-      if (typeof window !== 'undefined' && Platform.OS === 'web') {
-        window.alert(error.message || 'فشل تحديث المنتج');
-      } else {
-        Alert.alert('خطأ', error.message || 'فشل تحديث المنتج');
-      }
+      sweetAlert.showError('خطأ', error.message || 'فشل تحديث المنتج');
     } finally {
       setLoading(false);
     }
@@ -3703,19 +3663,9 @@ export default function AdminScreen() {
   };
 
   const deleteProduct = async (productId: string) => {
-    if (typeof window !== 'undefined' && Platform.OS === 'web') {
-      if (!window.confirm('هل أنت متأكد من حذف هذا المنتج؟')) {
-        return;
-      }
-    } else {
-      Alert.alert('تأكيد', 'هل أنت متأكد من حذف هذا المنتج؟', [
-        { text: 'إلغاء', style: 'cancel' },
-        { text: 'حذف', style: 'destructive', onPress: () => performDelete(productId) },
-      ]);
-      return;
-    }
-    
-    performDelete(productId);
+    sweetAlert.showConfirm('تأكيد', 'هل أنت متأكد من حذف هذا المنتج؟', () => {
+      performDelete(productId);
+    });
   };
 
   const performDelete = async (productId: string) => {
@@ -3750,21 +3700,12 @@ export default function AdminScreen() {
       const deletedData = await deleteResponse.json();
       console.log('✅ Admin: Product deleted:', deletedData);
 
-      if (typeof window !== 'undefined' && Platform.OS === 'web') {
-        window.alert('تم حذف المنتج بنجاح');
-      } else {
-        Alert.alert('نجح', 'تم حذف المنتج بنجاح');
-      }
-      
-      // Reload data to refresh the list
-      await loadData();
+      sweetAlert.showSuccess('نجح', 'تم حذف المنتج بنجاح', () => {
+        loadData();
+      });
     } catch (error: any) {
       console.error('❌ Error deleting product:', error);
-      if (typeof window !== 'undefined' && Platform.OS === 'web') {
-        window.alert(error.message || 'فشل حذف المنتج');
-      } else {
-        Alert.alert('خطأ', error.message || 'فشل حذف المنتج');
-      }
+      sweetAlert.showError('خطأ', error.message || 'فشل حذف المنتج');
     } finally {
       setLoading(false);
     }
@@ -3772,7 +3713,7 @@ export default function AdminScreen() {
 
   const createShipment = async () => {
     if (!newShipment.cost || newShipment.order_ids.length === 0) {
-      Alert.alert('خطأ', 'يرجى إدخال التكلفة واختيار الطلبات');
+      sweetAlert.showError('خطأ', 'يرجى إدخال التكلفة واختيار الطلبات');
       return;
     }
 
@@ -3813,11 +3754,12 @@ export default function AdminScreen() {
         .update({ status: 'shipped_from_china' })
         .in('id', newShipment.order_ids);
 
-      Alert.alert('نجح', 'تم إنشاء الشحنة بنجاح');
-      setNewShipment({ cost: '', order_ids: [] });
-      loadData();
+      sweetAlert.showSuccess('نجح', 'تم إنشاء الشحنة بنجاح', () => {
+        setNewShipment({ cost: '', order_ids: [] });
+        loadData();
+      });
     } catch (error: any) {
-      Alert.alert('خطأ', error.message);
+      sweetAlert.showError('خطأ', error.message);
     } finally {
       setLoading(false);
     }
@@ -3836,10 +3778,11 @@ export default function AdminScreen() {
       });
 
       if (error) throw error;
-      Alert.alert('نجح', 'تم تحديث حالة الشحنة');
-      loadData();
+      sweetAlert.showSuccess('نجح', 'تم تحديث حالة الشحنة', () => {
+        loadData();
+      });
     } catch (error: any) {
-      Alert.alert('خطأ', error.message);
+      sweetAlert.showError('خطأ', error.message);
     } finally {
       setLoading(false);
     }
@@ -3972,7 +3915,7 @@ export default function AdminScreen() {
   if (!user) {
     return (
       <View style={styles.loadingContainer}>
-        <Text>جاري التحميل...</Text>
+        <ActivityIndicator size="small" color="#EE1C47" />
       </View>
     );
   }
@@ -4850,11 +4793,36 @@ export default function AdminScreen() {
                 )}
               </View>
 
-              <TouchableOpacity style={styles.imageButton} onPress={pickImage}>
+              <TouchableOpacity 
+                style={[styles.imageButton, uploadProgress.isUploading && styles.imageButtonDisabled]} 
+                onPress={pickImage}
+                disabled={uploadProgress.isUploading}
+              >
                 <Text style={styles.imageButtonText}>
-                  {productImages.length > 0 ? `تم رفع ${productImages.length} صورة` : 'اختر صور (متعددة)'}
+                  {uploadProgress.isUploading 
+                    ? `جاري الرفع... ${uploadProgress.current}/${uploadProgress.total}`
+                    : productImages.length > 0 
+                    ? `تم رفع ${productImages.length} صورة` 
+                    : 'اختر صور (متعددة)'}
                 </Text>
               </TouchableOpacity>
+              
+              {/* Upload Progress Bar */}
+              {uploadProgress.isUploading && (
+                <View style={styles.progressContainer}>
+                  <View style={styles.progressBar}>
+                    <View 
+                      style={[
+                        styles.progressBarFill, 
+                        { width: `${(uploadProgress.current / uploadProgress.total) * 100}%` }
+                      ]} 
+                    />
+                  </View>
+                  <Text style={styles.progressText}>
+                    {Math.round((uploadProgress.current / uploadProgress.total) * 100)}%
+                  </Text>
+                </View>
+              )}
               
               {/* Display uploaded images */}
               {productImages.length > 0 && (
@@ -5337,12 +5305,17 @@ export default function AdminScreen() {
               </View>
               
               <TouchableOpacity
-                style={styles.submitButton}
+                style={[styles.submitButton, loading && styles.submitButtonDisabled]}
                 onPress={editingProduct ? updateProduct : addProduct}
+                disabled={loading}
               >
-                <Text style={styles.submitButtonText}>
-                  {editingProduct ? 'تحديث المنتج' : 'إضافة منتج'}
-                </Text>
+                {loading ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Text style={styles.submitButtonText}>
+                    {editingProduct ? 'تحديث المنتج' : 'إضافة منتج'}
+                  </Text>
+                )}
               </TouchableOpacity>
             </View>
 
@@ -7287,6 +7260,32 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#374151',
   },
+  imageButtonDisabled: {
+    opacity: 0.6,
+  },
+  progressContainer: {
+    marginTop: 12,
+    marginBottom: 8,
+  },
+  progressBar: {
+    height: 8,
+    backgroundColor: '#E5E7EB',
+    borderRadius: 4,
+    overflow: 'hidden',
+    marginBottom: 4,
+  },
+  progressBarFill: {
+    height: '100%',
+    backgroundColor: '#EE1C47',
+    borderRadius: 4,
+    transition: 'width 0.3s ease',
+  },
+  progressText: {
+    fontSize: 12,
+    color: '#666',
+    textAlign: 'center',
+    fontWeight: '600',
+  },
   imageButton: {
     backgroundColor: '#2196F3',
     padding: 12,
@@ -7302,6 +7301,12 @@ const styles = StyleSheet.create({
     backgroundColor: '#EE1C47',
     padding: 15,
     borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 50,
+  },
+  submitButtonDisabled: {
+    opacity: 0.6,
   },
   submitButtonText: {
     color: '#fff',

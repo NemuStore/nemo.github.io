@@ -9,14 +9,18 @@ import {
   RefreshControl,
   Platform,
   Dimensions,
+  ActivityIndicator,
 } from 'react-native';
 import { supabase } from '@/lib/supabase';
 import { Order, OrderItem } from '@/types';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import { useSweetAlert } from '@/hooks/useSweetAlert';
+import SweetAlert from '@/components/SweetAlert';
 
 export default function ProfileScreen() {
   const [user, setUser] = useState<any>(null);
+  const sweetAlert = useSweetAlert();
   const [pendingOrders, setPendingOrders] = useState<Order[]>([]);
   const [deliveredOrders, setDeliveredOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
@@ -271,28 +275,15 @@ export default function ProfileScreen() {
   };
 
   const handleLogout = () => {
-    // On web, use window.confirm for better compatibility
-    if (typeof window !== 'undefined' && Platform.OS === 'web') {
-      if (window.confirm('هل أنت متأكد من تسجيل الخروج؟')) {
-        performLogout();
-      }
-    } else {
-      // On mobile, use Alert.alert
-      Alert.alert('تسجيل الخروج', 'هل أنت متأكد؟', [
-        { text: 'إلغاء', style: 'cancel' },
-        {
-          text: 'تسجيل الخروج',
-          style: 'destructive',
-          onPress: performLogout,
-        },
-      ]);
-    }
+    sweetAlert.showConfirm('تسجيل الخروج', 'هل أنت متأكد من تسجيل الخروج؟', () => {
+      performLogout();
+    });
   };
 
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
-        <Text>جاري التحميل...</Text>
+        <ActivityIndicator size="small" color="#EE1C47" />
       </View>
     );
   }
@@ -403,6 +394,19 @@ export default function ProfileScreen() {
           <Text style={styles.logoutButtonText}>تسجيل الخروج</Text>
         </TouchableOpacity>
       </View>
+      {sweetAlert.alert.options && (
+        <SweetAlert
+          visible={sweetAlert.alert.visible}
+          type={sweetAlert.alert.options.type}
+          title={sweetAlert.alert.options.title}
+          message={sweetAlert.alert.options.message}
+          confirmText={sweetAlert.alert.options.confirmText}
+          cancelText={sweetAlert.alert.options.cancelText}
+          onConfirm={sweetAlert.alert.options.onConfirm}
+          onCancel={sweetAlert.alert.options.onCancel}
+          onClose={sweetAlert.hideAlert}
+        />
+      )}
     </ScrollView>
   );
 }

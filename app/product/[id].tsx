@@ -9,6 +9,7 @@ import {
   Alert,
   Platform,
   Dimensions,
+  ActivityIndicator,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { supabase } from '@/lib/supabase';
@@ -16,6 +17,8 @@ import { Product, ProductVariant, ProductImage, ProductFAQ, ProductRelated } fro
 import { Ionicons } from '@expo/vector-icons';
 import { useCart } from '@/contexts/CartContext';
 import CountdownTimer from '@/components/CountdownTimer';
+import { useSweetAlert } from '@/hooks/useSweetAlert';
+import SweetAlert from '@/components/SweetAlert';
 
 export default function ProductDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -33,6 +36,7 @@ export default function ProductDetailScreen() {
   const [loading, setLoading] = useState(true);
   const router = useRouter();
   const { addToCart } = useCart();
+  const sweetAlert = useSweetAlert();
 
   useEffect(() => {
     loadProduct();
@@ -109,8 +113,9 @@ export default function ProductDetailScreen() {
         if (!productLoaded) {
           console.warn('⚠️ Product load timeout');
           setLoading(false);
-          Alert.alert('خطأ', 'استغرق التحميل وقتاً طويلاً');
-          router.back();
+          sweetAlert.showError('خطأ', 'استغرق التحميل وقتاً طويلاً', () => {
+            router.back();
+          });
         }
       }, 30000);
       
@@ -232,17 +237,15 @@ export default function ProductDetailScreen() {
         checkWishlistStatus(id, supabaseUrl, supabaseKey).catch(err => console.warn('Wishlist check error:', err));
       } else {
         console.warn('⚠️ Product not found');
-        Alert.alert('خطأ', 'المنتج غير موجود');
-        router.back();
+        sweetAlert.showError('خطأ', 'المنتج غير موجود', () => {
+          router.back();
+        });
       }
     } catch (error: any) {
       console.error('❌ Error loading product:', error);
-      if (typeof window !== 'undefined' && Platform.OS === 'web') {
-        window.alert(error.message || 'فشل تحميل المنتج');
-      } else {
-        Alert.alert('خطأ', error.message || 'فشل تحميل المنتج');
-      }
-      router.back();
+      sweetAlert.showError('خطأ', error.message || 'فشل تحميل المنتج', () => {
+        router.back();
+      });
     } finally {
       if (timeoutId) clearTimeout(timeoutId);
       // setLoading(false) is called after product is loaded, so we don't need it here
@@ -442,7 +445,7 @@ export default function ProductDetailScreen() {
 
   const handleSizeSelect = (size: string) => {
     if (!selectedColor) {
-      Alert.alert('تنبيه', 'يرجى اختيار اللون أولاً');
+      sweetAlert.showError('تنبيه', 'يرجى اختيار اللون أولاً');
       return;
     }
     
@@ -463,7 +466,7 @@ export default function ProductDetailScreen() {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
-        Alert.alert('تنبيه', 'يجب تسجيل الدخول أولاً');
+        sweetAlert.showError('تنبيه', 'يجب تسجيل الدخول أولاً');
         return;
       }
 
@@ -484,7 +487,7 @@ export default function ProductDetailScreen() {
         
         if (response.ok) {
           setIsInWishlist(false);
-          Alert.alert('نجح', 'تم إزالة المنتج من المفضلة');
+          sweetAlert.showSuccess('نجح', 'تم إزالة المنتج من المفضلة');
         }
       } else {
         // Add to wishlist
@@ -504,12 +507,12 @@ export default function ProductDetailScreen() {
         
         if (response.ok) {
           setIsInWishlist(true);
-          Alert.alert('نجح', 'تم إضافة المنتج للمفضلة');
+          sweetAlert.showSuccess('نجح', 'تم إضافة المنتج للمفضلة');
         }
       }
     } catch (error) {
       console.error('❌ Error toggling wishlist:', error);
-      Alert.alert('خطأ', 'فشل تحديث قائمة المفضلة');
+      sweetAlert.showError('خطأ', 'فشل تحديث قائمة المفضلة');
     }
   };
 
@@ -521,7 +524,7 @@ export default function ProductDetailScreen() {
       
       // لا نتحقق من المخزون للمنتجات من الخارج
       if (product.source_type !== 'external' && product.source_type && finalStock === 0) {
-        Alert.alert('تنبيه', 'هذا المتغير غير متوفر حالياً');
+        sweetAlert.showError('تنبيه', 'هذا المتغير غير متوفر حالياً');
         return;
       }
       
@@ -536,30 +539,16 @@ export default function ProductDetailScreen() {
       
       addToCart(productToAdd, quantity);
       
-      // On web, use window.confirm for better compatibility
-      if (typeof window !== 'undefined' && Platform.OS === 'web') {
-        if (window.confirm('تم إضافة المنتج للسلة. هل تريد الذهاب للسلة؟')) {
-          router.push('/(tabs)/cart');
-        }
-      } else {
-        Alert.alert('نجح', 'تم إضافة المنتج للسلة', [
-          {
-            text: 'متابعة التسوق',
-            style: 'cancel',
-          },
-          {
-            text: 'الذهاب للسلة',
-            onPress: () => router.push('/(tabs)/cart'),
-          },
-        ]);
-      }
+      sweetAlert.showConfirm('نجح', 'تم إضافة المنتج للسلة. هل تريد الذهاب للسلة؟', () => {
+        router.push('/(tabs)/cart');
+      });
     }
   };
 
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
-        <Text>جاري التحميل...</Text>
+        <ActivityIndicator size="small" color="#EE1C47" />
       </View>
     );
   }
@@ -893,6 +882,19 @@ export default function ProductDetailScreen() {
           </Text>
         </TouchableOpacity>
       </View>
+      {sweetAlert.alert.options && (
+        <SweetAlert
+          visible={sweetAlert.alert.visible}
+          type={sweetAlert.alert.options.type}
+          title={sweetAlert.alert.options.title}
+          message={sweetAlert.alert.options.message}
+          confirmText={sweetAlert.alert.options.confirmText}
+          cancelText={sweetAlert.alert.options.cancelText}
+          onConfirm={sweetAlert.alert.options.onConfirm}
+          onCancel={sweetAlert.alert.options.onCancel}
+          onClose={sweetAlert.hideAlert}
+        />
+      )}
     </View>
   );
 }

@@ -9,12 +9,14 @@ import {
   Image,
   Platform,
   Dimensions,
+  ActivityIndicator,
 } from 'react-native';
 import { supabase } from '@/lib/supabase';
 import { Product, Category, Section } from '@/types';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useCart } from '@/contexts/CartContext';
+import CountdownTimer from '@/components/CountdownTimer';
 
 const { width } = Dimensions.get('window');
 const isWeb = Platform.OS === 'web';
@@ -359,7 +361,7 @@ export default function HomeScreen() {
         <View style={[styles.productsGrid, { maxWidth: maxContainerWidth, alignSelf: 'center', width: '100%' }]}>
           {loading ? (
             <View style={styles.centerContainer}>
-              <Text style={styles.loadingText}>جاري التحميل...</Text>
+              <ActivityIndicator size="small" color="#EE1C47" />
             </View>
           ) : error ? (
             <View style={styles.centerContainer}>
@@ -443,6 +445,13 @@ export default function HomeScreen() {
                         </Text>
                       )}
                     </View>
+                    {/* Limited Time Offer Countdown */}
+                    {product.is_limited_time_offer && product.offer_end_date && new Date(product.offer_end_date) > new Date() && (
+                      <CountdownTimer 
+                        endDate={product.offer_end_date}
+                        compact={true}
+                      />
+                    )}
                     {product.source_type !== 'external' && product.source_type && product.stock_quantity === 0 && (
                       <Text style={styles.outOfStock}>غير متوفر</Text>
                     )}
@@ -680,23 +689,12 @@ const styles = StyleSheet.create({
     marginTop: 4,
     fontWeight: '600',
   },
-  loadingText: {
-    textAlign: 'center',
-    marginTop: 50,
-    fontSize: 16,
-    color: '#666',
-  },
   centerContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
     padding: 20,
     minHeight: 200,
-  },
-  loadingText: {
-    textAlign: 'center',
-    fontSize: 16,
-    color: '#666',
   },
   emptyText: {
     textAlign: 'center',

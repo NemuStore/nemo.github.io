@@ -15,6 +15,8 @@ import { supabase } from '@/lib/supabase';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Linking from 'expo-linking';
+import { useSweetAlert } from '@/hooks/useSweetAlert';
+import SweetAlert from '@/components/SweetAlert';
 
 export default function AuthScreen() {
   const [email, setEmail] = useState('');
@@ -24,11 +26,12 @@ export default function AuthScreen() {
   const [isSignUp, setIsSignUp] = useState(false);
   const [loading, setLoading] = useState(false);
   const router = useRouter();
+  const sweetAlert = useSweetAlert();
 
 
   const handleSignIn = async () => {
     if (!email || !password) {
-      Alert.alert('خطأ', 'يرجى إدخال البريد الإلكتروني وكلمة المرور');
+      sweetAlert.showError('خطأ', 'يرجى إدخال البريد الإلكتروني وكلمة المرور');
       return;
     }
 
@@ -60,7 +63,7 @@ export default function AuthScreen() {
 
       router.replace('/(tabs)');
     } catch (error: any) {
-      Alert.alert('خطأ', error.message || 'فشل تسجيل الدخول');
+      sweetAlert.showError('خطأ', error.message || 'فشل تسجيل الدخول');
     } finally {
       setLoading(false);
     }
@@ -68,7 +71,7 @@ export default function AuthScreen() {
 
   const handleSignUp = async () => {
     if (!email || !password || !fullName) {
-      Alert.alert('خطأ', 'يرجى ملء جميع الحقول المطلوبة');
+      sweetAlert.showError('خطأ', 'يرجى ملء جميع الحقول المطلوبة');
       return;
     }
 
@@ -92,20 +95,15 @@ export default function AuthScreen() {
 
       if (profileError) throw profileError;
 
-      Alert.alert('نجح', 'تم إنشاء الحساب بنجاح', [
-        {
-          text: 'موافق',
-          onPress: () => {
-            setIsSignUp(false);
-            setEmail('');
-            setPassword('');
-            setFullName('');
-            setPhone('');
-          },
-        },
-      ]);
+      sweetAlert.showSuccess('نجح', 'تم إنشاء الحساب بنجاح', () => {
+        setIsSignUp(false);
+        setEmail('');
+        setPassword('');
+        setFullName('');
+        setPhone('');
+      });
     } catch (error: any) {
-      Alert.alert('خطأ', error.message || 'فشل إنشاء الحساب');
+      sweetAlert.showError('خطأ', error.message || 'فشل إنشاء الحساب');
     } finally {
       setLoading(false);
     }
@@ -140,7 +138,7 @@ export default function AuthScreen() {
       // The redirect will happen automatically
       // We'll handle the callback in _layout.tsx
     } catch (error: any) {
-      Alert.alert('خطأ', error.message || 'فشل تسجيل الدخول بجوجل');
+      sweetAlert.showError('خطأ', error.message || 'فشل تسجيل الدخول بجوجل');
       setLoading(false);
     }
   };
@@ -246,6 +244,19 @@ export default function AuthScreen() {
         </View>
         </View>
       </ScrollView>
+      {sweetAlert.alert.options && (
+        <SweetAlert
+          visible={sweetAlert.alert.visible}
+          type={sweetAlert.alert.options.type}
+          title={sweetAlert.alert.options.title}
+          message={sweetAlert.alert.options.message}
+          confirmText={sweetAlert.alert.options.confirmText}
+          cancelText={sweetAlert.alert.options.cancelText}
+          onConfirm={sweetAlert.alert.options.onConfirm}
+          onCancel={sweetAlert.alert.options.onCancel}
+          onClose={sweetAlert.hideAlert}
+        />
+      )}
     </KeyboardAvoidingView>
   );
 }

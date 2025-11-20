@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>إصلاح image_url - Supabase</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 900px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #10B981;
+            text-align: center;
+        }
+        .sql-box {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 20px;
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            line-height: 1.6;
+            overflow-x: auto;
+            margin: 20px 0;
+            direction: ltr;
+            text-align: left;
+        }
+        .button {
+            background: #10B981;
+            color: white;
+            padding: 15px 30px;
+            border: none;
+            border-radius: 5px;
+            font-size: 16px;
+            cursor: pointer;
+            display: block;
+            margin: 20px auto;
+            text-decoration: none;
+        }
+        .button:hover {
+            background: #059669;
+        }
+        .steps {
+            background: #FEF3C7;
+            padding: 20px;
+            border-radius: 5px;
+            margin: 20px 0;
+            border-right: 4px solid #F59E0B;
+        }
+        .steps ol {
+            margin: 10px 0;
+            padding-right: 20px;
+        }
+        .copy-btn {
+            background: #3B82F6;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 10px 0;
+        }
+        .copy-btn:hover {
+            background: #2563EB;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔧 إصلاح عمود image_url</h1>
+        
+        <div class="steps">
+            <h2>📋 خطوات التشغيل:</h2>
+            <ol>
+                <li>اضغط على الزر أدناه لفتح Supabase Dashboard</li>
+                <li>اذهب إلى SQL Editor (من القائمة الجانبية)</li>
+                <li>انسخ الكود SQL من المربع أدناه</li>
+                <li>الصقه في SQL Editor</li>
+                <li>اضغط Run (أو Ctrl+Enter)</li>
+            </ol>
+        </div>
+
+        <a href="https://supabase.com/dashboard/project/fdxxynnsxgiozaiiexlm/sql/new" target="_blank" class="button">
+            🚀 فتح Supabase Dashboard
+        </a>
+
+        <h2>📄 كود SQL:</h2>
+        <button class="copy-btn" onclick="copySQL()">📋 نسخ الكود</button>
+        
+        <div class="sql-box" id="sqlCode">
+BEGIN;
+
+-- Step 1: جعل عمود image_url nullable (إزالة قيد NOT NULL)
+ALTER TABLE public.products 
+  ALTER COLUMN image_url DROP NOT NULL;
+
+-- Step 2: حذف عمود image_url تماماً
+ALTER TABLE public.products 
+  DROP COLUMN IF EXISTS image_url;
+
+-- Step 3: التحقق من الحذف
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 
+    FROM information_schema.columns 
+    WHERE table_schema = 'public' 
+      AND table_name = 'products' 
+      AND column_name = 'image_url'
+  ) THEN
+    RAISE WARNING '⚠️ فشل حذف عمود image_url';
+  ELSE
+    RAISE NOTICE '✅ تم حذف عمود image_url من جدول products بنجاح';
+  END IF;
+END $$;
+
+COMMIT;
+        </div>
+
+        <div class="steps">
+            <h2>✅ بعد التشغيل:</h2>
+            <ul>
+                <li>ستظهر رسالة تأكيد في قسم Messages</li>
+                <li>يمكنك الآن إضافة منتجات جديدة بدون مشاكل</li>
+                <li>جميع الصور ستُحفظ في جدول product_images</li>
+            </ul>
+        </div>
+    </div>
+
+    <script>
+        function copySQL() {
+            const sql = document.getElementById('sqlCode').textContent;
+            navigator.clipboard.writeText(sql).then(() => {
+                alert('✅ تم نسخ الكود! الآن الصقه في Supabase SQL Editor');
+            }).catch(err => {
+                // Fallback for older browsers
+                const textArea = document.createElement('textarea');
+                textArea.value = sql;
+                document.body.appendChild(textArea);
+                textArea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textArea);
+                alert('✅ تم نسخ الكود! الآن الصقه في Supabase SQL Editor');
+            });
+        }
+    </script>
+</body>
+</html>
+
