@@ -377,9 +377,17 @@ export default function HomeScreen() {
             filteredProducts.map((product) => {
               const discount = getDiscount(product);
               const hasDiscountValue = hasDiscount(product);
-              // Use original_price from database if available, otherwise calculate it
-              const originalPrice = product.original_price || 
-                (hasDiscountValue ? product.price / (1 - discount / 100) : product.price);
+              
+              // Calculate original price: use from DB if available, otherwise calculate from discount
+              let originalPrice: number | null = null;
+              if (product.original_price && product.original_price > product.price) {
+                originalPrice = product.original_price;
+              } else if (hasDiscountValue && discount > 0) {
+                // Calculate original price from discount percentage
+                originalPrice = product.price / (1 - discount / 100);
+              }
+              
+              const showBothPrices = originalPrice && originalPrice > product.price;
               
               return (
                 <TouchableOpacity
@@ -411,15 +419,24 @@ export default function HomeScreen() {
                       {product.name}
                     </Text>
                     <View style={styles.priceContainer}>
-                      {hasDiscountValue && originalPrice > product.price ? (
-                        <>
-                          <Text style={styles.originalPrice}>
-                            {originalPrice.toFixed(2)} ج.م
-                          </Text>
-                          <Text style={styles.productPrice}>
-                            {product.price.toFixed(2)} ج.م
-                          </Text>
-                        </>
+                      {showBothPrices ? (
+                        <View style={styles.priceRow}>
+                          <View style={styles.priceColumn}>
+                            <Text style={styles.productPrice}>
+                              {product.price.toFixed(2)} ج.م
+                            </Text>
+                            <Text style={styles.originalPrice}>
+                              {originalPrice.toFixed(2)} ج.م
+                            </Text>
+                          </View>
+                          {discount > 0 && (
+                            <View style={styles.discountBadgeSmall}>
+                              <Text style={styles.discountBadgeSmallText}>
+                                -{discount}%
+                              </Text>
+                            </View>
+                          )}
+                        </View>
                       ) : (
                         <Text style={styles.productPrice}>
                           {product.price.toFixed(2)} ج.م
@@ -622,6 +639,15 @@ const styles = StyleSheet.create({
     minHeight: 40,
   },
   priceContainer: {
+    marginBottom: 4,
+  },
+  priceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  priceColumn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
@@ -633,9 +659,20 @@ const styles = StyleSheet.create({
     color: '#EE1C47',
   },
   originalPrice: {
-    fontSize: 14,
-    color: '#999',
+    fontSize: 13,
+    color: '#9CA3AF',
     textDecorationLine: 'line-through',
+  },
+  discountBadgeSmall: {
+    backgroundColor: '#DC2626',
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 4,
+  },
+  discountBadgeSmallText: {
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: 'bold',
   },
   outOfStock: {
     fontSize: 12,
