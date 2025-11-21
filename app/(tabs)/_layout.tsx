@@ -2,10 +2,12 @@ import { Tabs } from 'expo-router';
 import { Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useCart } from '@/contexts/CartContext';
+import { useDarkMode } from '@/contexts/DarkModeContext';
 
 export default function TabsLayout() {
   const isWeb = Platform.OS === 'web';
   const { getItemCount } = useCart();
+  const { isDarkMode, colors } = useDarkMode();
   const cartCount = getItemCount();
 
   if (isWeb) {
@@ -15,12 +17,12 @@ export default function TabsLayout() {
         screenOptions={{
           tabBarPosition: 'top',
           headerShown: true,
-          tabBarActiveTintColor: '#EE1C47',
-          tabBarInactiveTintColor: '#666',
+          tabBarActiveTintColor: colors.primary,
+          tabBarInactiveTintColor: colors.textSecondary,
           tabBarStyle: {
-            backgroundColor: '#fff',
+            backgroundColor: colors.surface,
             borderBottomWidth: 1,
-            borderBottomColor: '#eee',
+            borderBottomColor: colors.border,
           },
         }}
       >
@@ -63,12 +65,12 @@ export default function TabsLayout() {
       screenOptions={{
         tabBarPosition: 'bottom',
         headerShown: true,
-        tabBarActiveTintColor: '#EE1C47',
-        tabBarInactiveTintColor: '#666',
+        tabBarActiveTintColor: colors.primary,
+        tabBarInactiveTintColor: colors.textSecondary,
         tabBarStyle: {
-          backgroundColor: '#fff',
+          backgroundColor: colors.surface,
           borderTopWidth: 1,
-          borderTopColor: '#eee',
+          borderTopColor: colors.border,
         },
       }}
     >

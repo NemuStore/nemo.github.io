@@ -3,6 +3,7 @@ import { useEffect } from 'react';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { supabase } from '@/lib/supabase';
 import { CartProvider } from '@/contexts/CartContext';
+import { DarkModeProvider } from '@/contexts/DarkModeContext';
 import * as Linking from 'expo-linking';
 import { useRouter, useSegments } from 'expo-router';
 
@@ -87,16 +88,18 @@ export default function RootLayout() {
   }, []);
 
   return (
-    <CartProvider>
-      <SafeAreaProvider>
-        <Stack screenOptions={{ headerShown: false }}>
-          <Stack.Screen name="(tabs)" />
-          <Stack.Screen name="auth" />
-          <Stack.Screen name="auth/callback" />
-          <Stack.Screen name="product/[id]" />
-        </Stack>
-      </SafeAreaProvider>
-    </CartProvider>
+    <DarkModeProvider>
+      <CartProvider>
+        <SafeAreaProvider>
+          <Stack screenOptions={{ headerShown: false }}>
+            <Stack.Screen name="(tabs)" />
+            <Stack.Screen name="auth" />
+            <Stack.Screen name="auth/callback" />
+            <Stack.Screen name="product/[id]" />
+          </Stack>
+        </SafeAreaProvider>
+      </CartProvider>
+    </DarkModeProvider>
   );
 }
 

@@ -17,6 +17,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useCart } from '@/contexts/CartContext';
 import CountdownTimer from '@/components/CountdownTimer';
+import { useDarkMode } from '@/contexts/DarkModeContext';
 
 const { width } = Dimensions.get('window');
 const isWeb = Platform.OS === 'web';
@@ -27,6 +28,7 @@ const itemWidth = isWeb
 const maxContainerWidth = isWeb ? 1400 : width; // Max width for web container
 
 export default function HomeScreen() {
+  const { colors, isDarkMode } = useDarkMode();
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [sections, setSections] = useState<Section[]>([]);
@@ -253,14 +255,14 @@ export default function HomeScreen() {
   };
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
       {/* Search Bar */}
-      <View style={styles.searchContainer}>
-        <Ionicons name="search" size={20} color="#666" style={styles.searchIcon} />
+      <View style={[styles.searchContainer, { backgroundColor: colors.surface }]}>
+        <Ionicons name="search" size={20} color={colors.textSecondary} style={styles.searchIcon} />
         <TextInput
-          style={styles.searchInput}
+          style={[styles.searchInput, { color: colors.text }]}
           placeholder="ابحث عن منتج..."
-          placeholderTextColor="#999"
+          placeholderTextColor={colors.textSecondary}
           value={searchQuery}
           onChangeText={setSearchQuery}
         />
@@ -268,10 +270,10 @@ export default function HomeScreen() {
 
       {/* Lightning Deals Banner (inspired by Temu) */}
       {filteredProducts.length > 0 && !loading && (
-        <View style={styles.dealsBanner}>
+        <View style={[styles.dealsBanner, { backgroundColor: isDarkMode ? '#2D1B0E' : '#FFF3E0' }]}>
           <View style={styles.dealsBannerContent}>
             <Ionicons name="flash" size={20} color="#FF6B00" />
-            <Text style={styles.dealsBannerText}>عروض محدودة - خصومات تصل إلى 50%</Text>
+            <Text style={[styles.dealsBannerText, { color: '#FF6B00' }]}>عروض محدودة - خصومات تصل إلى 50%</Text>
           </View>
         </View>
       )}
@@ -279,36 +281,57 @@ export default function HomeScreen() {
       {/* Sections Section */}
       {sections.length > 0 && !loading && (
         <View style={styles.categoriesContainer}>
-          <Text style={styles.sectionTitle}>الأقسام</Text>
+          <Text style={[styles.sectionTitle, { color: colors.text }]}>الأقسام</Text>
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
             contentContainerStyle={styles.categoriesScroll}
           >
             <TouchableOpacity
-              style={[styles.categoryChip, !selectedSection && styles.categoryChipActive]}
+              style={[
+                styles.categoryChip, 
+                !selectedSection && styles.categoryChipActive,
+                !selectedSection && { backgroundColor: colors.surface, borderColor: colors.border }
+              ]}
               onPress={() => {
                 setSelectedSection(null);
                 setSelectedCategory(null);
               }}
             >
-              <Text style={[styles.categoryChipText, !selectedSection && styles.categoryChipTextActive]}>
+              <Text style={[
+                styles.categoryChipText, 
+                !selectedSection && styles.categoryChipTextActive,
+                !selectedSection && { color: colors.textSecondary }
+              ]}>
                 الكل
               </Text>
             </TouchableOpacity>
             {sections.map((section) => (
               <TouchableOpacity
                 key={section.id}
-                style={[styles.categoryChip, selectedSection === section.id && styles.categoryChipActive]}
+                style={[
+                  styles.categoryChip, 
+                  selectedSection === section.id && styles.categoryChipActive,
+                  selectedSection !== section.id && { backgroundColor: colors.surface, borderColor: colors.border }
+                ]}
                 onPress={() => {
                   setSelectedSection(section.id);
                   setSelectedCategory(null);
                 }}
               >
                 {section.icon && (
-                  <Ionicons name={section.icon as any} size={16} color={selectedSection === section.id ? '#fff' : '#666'} style={{ marginRight: 5 }} />
+                  <Ionicons 
+                    name={section.icon as any} 
+                    size={16} 
+                    color={selectedSection === section.id ? '#fff' : colors.textSecondary} 
+                    style={{ marginRight: 5 }} 
+                  />
                 )}
-                <Text style={[styles.categoryChipText, selectedSection === section.id && styles.categoryChipTextActive]}>
+                <Text style={[
+                  styles.categoryChipText, 
+                  selectedSection === section.id && styles.categoryChipTextActive,
+                  selectedSection !== section.id && { color: colors.textSecondary }
+                ]}>
                   {section.name}
                 </Text>
               </TouchableOpacity>
@@ -320,7 +343,7 @@ export default function HomeScreen() {
       {/* Categories Section (inspired by Temu) */}
       {filteredCategories.length > 0 && !loading && (
         <View style={styles.categoriesContainer}>
-          <Text style={styles.sectionTitle}>الفئات</Text>
+          <Text style={[styles.sectionTitle, { color: colors.text }]}>الفئات</Text>
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
@@ -330,20 +353,37 @@ export default function HomeScreen() {
               style={[styles.categoryChip, !selectedCategory && styles.categoryChipActive]}
               onPress={() => setSelectedCategory(null)}
             >
-              <Text style={[styles.categoryChipText, !selectedCategory && styles.categoryChipTextActive]}>
+              <Text style={[
+                styles.categoryChipText, 
+                !selectedCategory && styles.categoryChipTextActive,
+                !selectedCategory && { color: colors.textSecondary }
+              ]}>
                 الكل
               </Text>
             </TouchableOpacity>
             {filteredCategories.map((category) => (
               <TouchableOpacity
                 key={category.id}
-                style={[styles.categoryChip, selectedCategory === category.id && styles.categoryChipActive]}
+                style={[
+                  styles.categoryChip, 
+                  selectedCategory === category.id && styles.categoryChipActive,
+                  selectedCategory !== category.id && { backgroundColor: colors.surface, borderColor: colors.border }
+                ]}
                 onPress={() => setSelectedCategory(category.id)}
               >
                 {category.icon && (
-                  <Ionicons name={category.icon as any} size={16} color={selectedCategory === category.id ? '#fff' : '#666'} style={{ marginRight: 5 }} />
+                  <Ionicons 
+                    name={category.icon as any} 
+                    size={16} 
+                    color={selectedCategory === category.id ? '#fff' : colors.textSecondary} 
+                    style={{ marginRight: 5 }} 
+                  />
                 )}
-                <Text style={[styles.categoryChipText, selectedCategory === category.id && styles.categoryChipTextActive]}>
+                <Text style={[
+                  styles.categoryChipText, 
+                  selectedCategory === category.id && styles.categoryChipTextActive,
+                  selectedCategory !== category.id && { color: colors.textSecondary }
+                ]}>
                   {category.name}
                 </Text>
               </TouchableOpacity>
@@ -372,8 +412,8 @@ export default function HomeScreen() {
             </View>
           ) : filteredProducts.length === 0 ? (
             <View style={styles.centerContainer}>
-              <Text style={styles.emptyText}>لا توجد منتجات</Text>
-              <Text style={styles.emptySubtext}>أضف منتجات من لوحة الإدارة</Text>
+              <Text style={[styles.emptyText, { color: colors.text }]}>لا توجد منتجات</Text>
+              <Text style={[styles.emptySubtext, { color: colors.textSecondary }]}>أضف منتجات من لوحة الإدارة</Text>
             </View>
           ) : (
             filteredProducts.map((product) => {
@@ -394,7 +434,7 @@ export default function HomeScreen() {
               return (
                 <TouchableOpacity
                   key={product.id}
-                  style={styles.productCard}
+                  style={[styles.productCard, { backgroundColor: colors.card }]}
                   onPress={() => handleProductPress(product.id)}
                 >
                   {/* Discount Badge */}
@@ -417,17 +457,17 @@ export default function HomeScreen() {
                     resizeMode="contain"
                   />
                   <View style={styles.productInfo}>
-                    <Text style={styles.productName} numberOfLines={2}>
+                    <Text style={[styles.productName, { color: colors.text }]} numberOfLines={2}>
                       {product.name}
                     </Text>
                     <View style={styles.priceContainer}>
                       {showBothPrices ? (
                         <View style={styles.priceRow}>
                           <View style={styles.priceColumn}>
-                            <Text style={styles.productPrice}>
+                            <Text style={[styles.productPrice, { color: colors.primary }]}>
                               {product.price.toFixed(2)} ج.م
                             </Text>
-                            <Text style={styles.originalPrice}>
+                            <Text style={[styles.originalPrice, { color: colors.textSecondary }]}>
                               {originalPrice.toFixed(2)} ج.م
                             </Text>
                           </View>
@@ -440,7 +480,7 @@ export default function HomeScreen() {
                           )}
                         </View>
                       ) : (
-                        <Text style={styles.productPrice}>
+                        <Text style={[styles.productPrice, { color: colors.primary }]}>
                           {product.price.toFixed(2)} ج.م
                         </Text>
                       )}

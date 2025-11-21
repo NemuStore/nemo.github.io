@@ -21,6 +21,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { uploadImageToImgBB } from '@/lib/imgbb';
 import SweetAlert from '@/components/SweetAlert';
 import { useSweetAlert } from '@/hooks/useSweetAlert';
+import { useDarkMode } from '@/contexts/DarkModeContext';
 
 export default function AdminScreen() {
   // Helper function to safely format numbers
@@ -41,6 +42,7 @@ export default function AdminScreen() {
   const [loading, setLoading] = useState(false);
   const router = useRouter();
   const sweetAlert = useSweetAlert();
+  const { isDarkMode, toggleDarkMode, colors } = useDarkMode();
   
   // State for adding categories when creating section
   const [showAddCategoryToSection, setShowAddCategoryToSection] = useState(false);
@@ -601,7 +603,7 @@ export default function AdminScreen() {
       'إلغاء'
     );
     sweetAlert.showConfirm('تأكيد', 'هل أنت متأكد من حذف هذه الفئة؟ سيتم إزالة الفئة من جميع المنتجات المرتبطة بها.', () => {
-      performDeleteCategory(categoryId);
+    performDeleteCategory(categoryId);
     });
   };
 
@@ -1575,14 +1577,14 @@ export default function AdminScreen() {
     // بيانات التحديث
     const updatedVariantData = {
       variant_name: variantName,
-      color: newVariant.color || null,
-      size: newVariant.size || null,
-      size_unit: newVariant.size_unit || null,
-      price: newVariant.price ? parseFloat(newVariant.price) : null,
-      stock_quantity: newVariant.stock_quantity ? parseInt(newVariant.stock_quantity) : 0,
-      sku: newVariant.sku || null,
-      updated_at: new Date().toISOString(),
-    };
+            color: newVariant.color || null,
+            size: newVariant.size || null,
+            size_unit: newVariant.size_unit || null,
+            price: newVariant.price ? parseFloat(newVariant.price) : null,
+            stock_quantity: newVariant.stock_quantity ? parseInt(newVariant.stock_quantity) : 0,
+            sku: newVariant.sku || null,
+            updated_at: new Date().toISOString(),
+          };
 
     // حفظ التحديث في قاعدة البيانات مباشرة (بدون تحديث متفائل)
     try {
@@ -1810,9 +1812,9 @@ export default function AdminScreen() {
           // نستمر حتى لو فشل إعادة التحميل - التحديث في الـ state كافٍ
         }
       }
-      
-      cancelEditVariant();
-      sweetAlert.showSuccess('نجح', 'تم تحديث المتغير بنجاح');
+
+    cancelEditVariant();
+    sweetAlert.showSuccess('نجح', 'تم تحديث المتغير بنجاح');
     } catch (error: any) {
       console.error('❌ Error updating variant:', error);
       sweetAlert.showError('خطأ', error.message || 'فشل تحديث المتغير');
@@ -2801,21 +2803,21 @@ export default function AdminScreen() {
       }
       
       // Also load ALL images (including variant images) for variant image selection
-      const allImagesResponse = await fetch(`${supabaseUrl}/rest/v1/product_images?product_id=eq.${product.id}&order=display_order.asc`, {
-        headers: {
-          'apikey': supabaseKey || '',
-          'Authorization': `Bearer ${accessToken}`,
-          'Content-Type': 'application/json',
-        }
-      });
-      
-      if (allImagesResponse.ok) {
-        const allImagesData = await allImagesResponse.json();
-        if (allImagesData && allImagesData.length > 0) {
+        const allImagesResponse = await fetch(`${supabaseUrl}/rest/v1/product_images?product_id=eq.${product.id}&order=display_order.asc`, {
+          headers: {
+            'apikey': supabaseKey || '',
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          }
+        });
+        
+        if (allImagesResponse.ok) {
+          const allImagesData = await allImagesResponse.json();
+          if (allImagesData && allImagesData.length > 0) {
           allAvailableImages = allImagesData.map((img: any) => ({
-            uri: img.image_url,
-            url: img.image_url,
-          }));
+                uri: img.image_url,
+                url: img.image_url,
+              }));
           console.log('✅ Loaded all available images (including variants):', allAvailableImages.length);
         }
       }
@@ -3262,7 +3264,7 @@ export default function AdminScreen() {
       // CRITICAL: Log before variants update to ensure we reach this point
       console.log('🔍 DEBUG: About to update variants. productVariants.length:', productVariants.length);
       console.log('🔍 DEBUG: productVariants state:', JSON.stringify(productVariants, null, 2));
-      
+
       // Update product variants
       console.log('🔄 Starting to update product variants...');
       console.log('📦 Current productVariants state:', productVariants.length, 'variants');
@@ -3330,20 +3332,20 @@ export default function AdminScreen() {
         });
         
         console.log('📡 Variants response status (update):', variantsResponse.status);
-        
+
         if (!variantsResponse.ok) {
           const errorText = await variantsResponse.text();
           console.error('❌ Failed to insert variants:', variantsResponse.status, errorText);
           throw new Error(`Failed to insert variants: ${variantsResponse.status} ${errorText}`);
         }
 
-        const variantsData = await variantsResponse.json();
-        console.log('✅ Variants updated successfully:', variantsData.length);
+          const variantsData = await variantsResponse.json();
+          console.log('✅ Variants updated successfully:', variantsData.length);
         console.log('📦 Variants data from database:', JSON.stringify(variantsData, null, 2));
-        
-        // Link variant images to product_images
+          
+          // Link variant images to product_images
         // Match variants from database with variants from state that have image_url
-        console.log('🔗 Starting to link variant images to product_images (update)...');
+          console.log('🔗 Starting to link variant images to product_images (update)...');
         const variantsWithImages = productVariants.filter(v => (v as any).image_url);
         console.log('🔗 Variants with images in state:', variantsWithImages.length, 'out of', productVariants.length);
         
@@ -3664,7 +3666,7 @@ export default function AdminScreen() {
 
   const deleteProduct = async (productId: string) => {
     sweetAlert.showConfirm('تأكيد', 'هل أنت متأكد من حذف هذا المنتج؟', () => {
-      performDelete(productId);
+    performDelete(productId);
     });
   };
 
@@ -3755,8 +3757,8 @@ export default function AdminScreen() {
         .in('id', newShipment.order_ids);
 
       sweetAlert.showSuccess('نجح', 'تم إنشاء الشحنة بنجاح', () => {
-        setNewShipment({ cost: '', order_ids: [] });
-        loadData();
+      setNewShipment({ cost: '', order_ids: [] });
+      loadData();
       });
     } catch (error: any) {
       sweetAlert.showError('خطأ', error.message);
@@ -3779,7 +3781,7 @@ export default function AdminScreen() {
 
       if (error) throw error;
       sweetAlert.showSuccess('نجح', 'تم تحديث حالة الشحنة', () => {
-        loadData();
+      loadData();
       });
     } catch (error: any) {
       sweetAlert.showError('خطأ', error.message);
@@ -3924,10 +3926,35 @@ export default function AdminScreen() {
   const { width } = Dimensions.get('window');
   const maxContentWidth = isWeb ? 1400 : width;
 
+  // Check if user has admin/manager role to show dark mode toggle
+  const canToggleDarkMode = user && ['admin', 'manager'].includes(user.role);
+
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, isDarkMode && styles.containerDark]}>
+      {/* Header with Dark Mode Toggle */}
+      {canToggleDarkMode && (
+        <View style={[styles.headerContainer, { backgroundColor: colors.surface, borderBottomColor: colors.border }]}>
+          <Text style={[styles.headerTitle, { color: colors.text }]}>
+            لوحة التحكم
+          </Text>
+          <TouchableOpacity
+            style={[styles.darkModeToggleButton, { backgroundColor: isDarkMode ? '#2D2D2D' : '#F5F5F5' }]}
+            onPress={toggleDarkMode}
+          >
+            <Ionicons 
+              name={isDarkMode ? 'sunny' : 'moon'} 
+              size={22} 
+              color={isDarkMode ? '#FFD700' : '#333'} 
+            />
+            <Text style={[styles.darkModeToggleText, { color: colors.text }]}>
+              {isDarkMode ? 'نهاري' : 'ليلي'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      )}
+      
       {/* Tabs */}
-      <View style={[styles.tabs, isWeb && styles.tabsWeb]}>
+      <View style={[styles.tabs, isWeb && styles.tabsWeb, { backgroundColor: colors.surface, borderBottomColor: colors.border }]}>
         <TouchableOpacity
           style={[styles.tab, activeTab === 'orders' && styles.activeTab]}
           onPress={() => setActiveTab('orders')}
@@ -3940,7 +3967,12 @@ export default function AdminScreen() {
           style={[styles.tab, activeTab === 'shipments' && styles.activeTab]}
           onPress={() => setActiveTab('shipments')}
         >
-          <Text style={[styles.tabText, activeTab === 'shipments' && styles.activeTabText]}>
+          <Text style={[
+            styles.tabText, 
+            isDarkMode && styles.tabTextDark,
+            activeTab === 'shipments' && styles.activeTabText,
+            activeTab === 'shipments' && isDarkMode && styles.activeTabTextDark
+          ]}>
             الشحنات
           </Text>
         </TouchableOpacity>
@@ -3948,7 +3980,12 @@ export default function AdminScreen() {
           style={[styles.tab, activeTab === 'inventory' && styles.activeTab]}
           onPress={() => setActiveTab('inventory')}
         >
-          <Text style={[styles.tabText, activeTab === 'inventory' && styles.activeTabText]}>
+          <Text style={[
+            styles.tabText, 
+            isDarkMode && styles.tabTextDark,
+            activeTab === 'inventory' && styles.activeTabText,
+            activeTab === 'inventory' && isDarkMode && styles.activeTabTextDark
+          ]}>
             المخزون
           </Text>
         </TouchableOpacity>
@@ -3956,7 +3993,12 @@ export default function AdminScreen() {
           style={[styles.tab, activeTab === 'products' && styles.activeTab]}
           onPress={() => setActiveTab('products')}
         >
-          <Text style={[styles.tabText, activeTab === 'products' && styles.activeTabText]}>
+          <Text style={[
+            styles.tabText, 
+            isDarkMode && styles.tabTextDark,
+            activeTab === 'products' && styles.activeTabText,
+            activeTab === 'products' && isDarkMode && styles.activeTabTextDark
+          ]}>
             المنتجات
           </Text>
         </TouchableOpacity>
@@ -3964,7 +4006,12 @@ export default function AdminScreen() {
           style={[styles.tab, activeTab === 'users' && styles.activeTab]}
           onPress={() => setActiveTab('users')}
         >
-          <Text style={[styles.tabText, activeTab === 'users' && styles.activeTabText]}>
+          <Text style={[
+            styles.tabText, 
+            isDarkMode && styles.tabTextDark,
+            activeTab === 'users' && styles.activeTabText,
+            activeTab === 'users' && isDarkMode && styles.activeTabTextDark
+          ]}>
             المستخدمين
           </Text>
         </TouchableOpacity>
@@ -3972,7 +4019,12 @@ export default function AdminScreen() {
           style={[styles.tab, activeTab === 'categories' && styles.activeTab]}
           onPress={() => setActiveTab('categories')}
         >
-          <Text style={[styles.tabText, activeTab === 'categories' && styles.activeTabText]}>
+          <Text style={[
+            styles.tabText, 
+            isDarkMode && styles.tabTextDark,
+            activeTab === 'categories' && styles.activeTabText,
+            activeTab === 'categories' && isDarkMode && styles.activeTabTextDark
+          ]}>
             الفئات
           </Text>
         </TouchableOpacity>
@@ -3980,7 +4032,12 @@ export default function AdminScreen() {
           style={[styles.tab, activeTab === 'sections' && styles.activeTab]}
           onPress={() => setActiveTab('sections')}
         >
-          <Text style={[styles.tabText, activeTab === 'sections' && styles.activeTabText]}>
+          <Text style={[
+            styles.tabText, 
+            isDarkMode && styles.tabTextDark,
+            activeTab === 'sections' && styles.activeTabText,
+            activeTab === 'sections' && isDarkMode && styles.activeTabTextDark
+          ]}>
             الأقسام
           </Text>
         </TouchableOpacity>
@@ -4002,7 +4059,7 @@ export default function AdminScreen() {
                     </Text>
                   </View>
                 </View>
-                <View style={styles.gridContainer}>
+            <View style={styles.gridContainer}>
                   {orders.filter(o => o.source_type === 'external').map((order) => {
                 const isEditing = editingOrderId === order.id;
                 const quickEdit = quickEditOrder[order.id] || {};
@@ -4268,10 +4325,10 @@ export default function AdminScreen() {
 
             {/* No Orders Message */}
             {orders && orders.length === 0 && (
-              <View style={{ padding: 20, alignItems: 'center', width: '100%' }}>
-                <Text style={{ color: '#666', fontSize: 16 }}>لا توجد طلبات</Text>
-              </View>
-            )}
+                <View style={{ padding: 20, alignItems: 'center', width: '100%' }}>
+                  <Text style={{ color: '#666', fontSize: 16 }}>لا توجد طلبات</Text>
+                </View>
+              )}
           </View>
         )}
 
@@ -4895,31 +4952,31 @@ export default function AdminScreen() {
                             <View style={styles.colorGroupHeader}>
                               <View style={styles.colorGroupHeaderLeft}>
                                 {colorImage ? (
-                                  <Image 
+                            <Image 
                                     source={{ uri: colorImage }} 
                                     style={styles.colorGroupImage}
-                                    onError={(e) => {
+                              onError={(e) => {
                                       console.error('❌ Error loading color group image:', colorImage, e.nativeEvent.error);
-                                    }}
-                                  />
-                                ) : (
+                              }}
+                            />
+                          ) : (
                                   <View style={[styles.colorGroupImage, styles.colorGroupImagePlaceholder]}>
                                     {colorInfo?.color_hex ? (
                                       <View style={[styles.colorCircleLarge, { backgroundColor: colorInfo.color_hex }]} />
                                     ) : (
                                       <Ionicons name="color-palette-outline" size={32} color="#ccc" />
                                     )}
-                                  </View>
-                                )}
+                            </View>
+                          )}
                                 <View style={styles.colorGroupInfo}>
                                   <View style={styles.colorGroupTitleRow}>
                                     <Ionicons name="color-palette" size={18} color="#EE1C47" />
                                     <Text style={styles.colorGroupTitle}>{color || 'بدون لون'}</Text>
-                                  </View>
+                        </View>
                                   <Text style={styles.colorGroupSizesCount}>
                                     {variants.length} {variants.length === 1 ? 'مقاس' : 'مقاسات'}
                                   </Text>
-                                </View>
+                              </View>
                               </View>
                             </View>
 
@@ -4937,45 +4994,45 @@ export default function AdminScreen() {
                                   <View style={styles.sizeVariantInfo}>
                                     <View style={styles.sizeVariantHeader}>
                                       <View style={styles.sizeVariantBadge}>
-                                        <Ionicons name="resize-outline" size={14} color="#666" />
+                                <Ionicons name="resize-outline" size={14} color="#666" />
                                         <Text style={styles.sizeVariantText}>
                                           {variant.size || 'بدون مقاس'}
                                           {variant.size_unit ? ` (${variant.size_unit})` : ''}
-                                        </Text>
-                                      </View>
-                                    </View>
+                                </Text>
+                              </View>
+                          </View>
                                     <View style={styles.sizeVariantDetails}>
-                                      {variant.price && (
+                            {variant.price && (
                                         <View style={styles.sizeVariantDetailRow}>
                                           <Ionicons name="cash-outline" size={12} color="#4CAF50" />
                                           <Text style={styles.sizeVariantPriceText}>{formatPrice(variant.price)} ج.م</Text>
-                                        </View>
-                                      )}
+                              </View>
+                            )}
                                       <View style={styles.sizeVariantDetailRow}>
                                         <Ionicons name="cube-outline" size={12} color="#2196F3" />
                                         <Text style={styles.sizeVariantStockText}>المخزون: {variant.stock_quantity ?? 0}</Text>
-                                      </View>
-                                      {variant.sku && (
+                            </View>
+                            {variant.sku && (
                                         <View style={styles.sizeVariantDetailRow}>
                                           <Ionicons name="barcode-outline" size={12} color="#999" />
                                           <Text style={styles.sizeVariantSkuText}>SKU: {variant.sku}</Text>
-                                        </View>
-                                      )}
-                                    </View>
-                                  </View>
+                              </View>
+                            )}
+                          </View>
+                        </View>
                                   <View style={styles.sizeVariantActions}>
-                                    <TouchableOpacity
+                          <TouchableOpacity
                                       style={styles.sizeVariantDeleteButton}
-                                      onPress={() => deleteVariant(variant.id)}
-                                    >
+                            onPress={() => deleteVariant(variant.id)}
+                          >
                                       <Ionicons name="trash-outline" size={16} color="#f44336" />
-                                    </TouchableOpacity>
-                                  </View>
-                                </View>
+                          </TouchableOpacity>
+                        </View>
+                      </View>
                               );
                               })}
                             </ScrollView>
-                          </View>
+                  </View>
                         );
                       })}
                   </View>
@@ -5105,10 +5162,10 @@ export default function AdminScreen() {
                             s => s.size === size.size_value && s.size_unit === (size.size_unit || '')
                           );
                           return (
-                            <TouchableOpacity
-                              key={size.id}
-                              style={[
-                                styles.variantOptionChip,
+                          <TouchableOpacity
+                            key={size.id}
+                            style={[
+                              styles.variantOptionChip,
                                 isSelected && styles.variantOptionChipActive
                               ]}
                               onPress={() => {
@@ -5120,22 +5177,22 @@ export default function AdminScreen() {
                                 } else {
                                   // إضافة المقاس إلى القائمة المختارة
                                   setSelectedSizes([...selectedSizes, {
-                                    size: size.size_value,
-                                    size_unit: size.size_unit || ''
+                              size: size.size_value,
+                              size_unit: size.size_unit || ''
                                   }]);
                                 }
                               }}
-                            >
+                          >
                               {isSelected && (
                                 <Ionicons name="checkmark-circle" size={16} color="#fff" style={{ marginRight: 5 }} />
                               )}
-                              <Text style={[
-                                styles.variantOptionChipText,
+                            <Text style={[
+                              styles.variantOptionChipText,
                                 isSelected && styles.variantOptionChipTextActive
-                              ]}>
-                                {size.size_value} {size.size_unit ? `(${size.size_unit})` : ''}
-                              </Text>
-                            </TouchableOpacity>
+                            ]}>
+                              {size.size_value} {size.size_unit ? `(${size.size_unit})` : ''}
+                            </Text>
+                          </TouchableOpacity>
                           );
                         })}
                       </ScrollView>
@@ -5218,15 +5275,15 @@ export default function AdminScreen() {
                   <View style={styles.imageSelectionContainer}>
                     <Text style={styles.selectLabel}>صورة اللون:</Text>
                     <View style={styles.imageSelectionButtons}>
-                      <TouchableOpacity 
+                  <TouchableOpacity 
                         style={[styles.imageButton, { flex: 1, marginRight: 8 }]} 
-                        onPress={() => pickVariantImage()}
-                      >
+                    onPress={() => pickVariantImage()}
+                  >
                         <Ionicons name="camera-outline" size={18} color="#fff" style={{ marginLeft: 5 }} />
-                        <Text style={styles.imageButtonText}>
+                    <Text style={styles.imageButtonText}>
                           رفع صورة جديدة
-                        </Text>
-                      </TouchableOpacity>
+                    </Text>
+                  </TouchableOpacity>
                       {(productImages.length > 0 || editProductImages.length > 0) && (
                         <TouchableOpacity 
                           style={[styles.imageButton, { flex: 1, backgroundColor: '#10B981' }]} 
@@ -5270,10 +5327,10 @@ export default function AdminScreen() {
                     )}
                     
                     {/* Selected Image Preview */}
-                    {newVariant.image_url && (
+                  {newVariant.image_url && (
                       <View style={styles.selectedImageContainer}>
                         <Text style={[styles.selectLabel, { marginBottom: 8 }]}>الصورة المختارة:</Text>
-                        <Image source={{ uri: newVariant.image_url }} style={styles.variantImagePreview} />
+                    <Image source={{ uri: newVariant.image_url }} style={styles.variantImagePreview} />
                         <TouchableOpacity
                           style={styles.removeImageButton}
                           onPress={() => setNewVariant({ ...newVariant, image_url: '' })}
@@ -5312,9 +5369,9 @@ export default function AdminScreen() {
                 {loading ? (
                   <ActivityIndicator size="small" color="#fff" />
                 ) : (
-                  <Text style={styles.submitButtonText}>
-                    {editingProduct ? 'تحديث المنتج' : 'إضافة منتج'}
-                  </Text>
+                <Text style={styles.submitButtonText}>
+                  {editingProduct ? 'تحديث المنتج' : 'إضافة منتج'}
+                </Text>
                 )}
               </TouchableOpacity>
             </View>
@@ -6603,6 +6660,56 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#F5F5F5',
   },
+  containerDark: {
+    backgroundColor: '#121212',
+  },
+  headerContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: '#fff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+  },
+  headerContainerDark: {
+    backgroundColor: '#1E1E1E',
+    borderBottomColor: '#333',
+  },
+  headerTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#333',
+  },
+  headerTitleDark: {
+    color: '#fff',
+  },
+  darkModeToggleButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    backgroundColor: '#F5F5F5',
+    borderRadius: 20,
+    gap: 6,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  darkModeToggleButtonDark: {
+    backgroundColor: '#2D2D2D',
+  },
+  darkModeToggleText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#333',
+  },
+  darkModeToggleTextDark: {
+    color: '#fff',
+  },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
@@ -6613,6 +6720,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
     borderBottomWidth: 1,
     borderBottomColor: '#eee',
+  },
+  tabsDark: {
+    backgroundColor: '#1E1E1E',
+    borderBottomColor: '#333',
   },
   tabsWeb: {
     maxWidth: 1400,
@@ -6633,13 +6744,22 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#666',
   },
+  tabTextDark: {
+    color: '#999',
+  },
   activeTabText: {
     color: '#EE1C47',
     fontWeight: 'bold',
   },
+  activeTabTextDark: {
+    color: '#FF6B6B',
+  },
   content: {
     flex: 1,
     padding: 10,
+  },
+  contentDark: {
+    backgroundColor: '#121212',
   },
   scrollContent: {
     padding: Platform.OS === 'web' ? 20 : 0,
@@ -6657,6 +6777,11 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 4,
     elevation: 3,
+  },
+  cardDark: {
+    backgroundColor: '#1E1E1E',
+    shadowColor: '#000',
+    shadowOpacity: 0.3,
   },
   gridContainer: {
     flexDirection: 'row',
