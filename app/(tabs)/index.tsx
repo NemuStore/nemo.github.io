@@ -226,11 +226,25 @@ export default function HomeScreen() {
 
   const filteredProducts = products.filter((product) => {
     const matchesSearch = product.name.toLowerCase().includes(searchQuery.toLowerCase());
+    
+    // Check category match
     const matchesCategory = !selectedCategory || 
       (product.category_id === selectedCategory) || 
       (product.category === selectedCategory); // Backward compatibility
-    const matchesSection = !selectedSection || 
-      (product.category_data?.section_id === selectedSection);
+    
+    // Check section match - find category in loaded categories and check its section_id
+    let matchesSection = true;
+    if (selectedSection) {
+      if (product.category_id) {
+        // Find the category in the loaded categories
+        const productCategory = categories.find(cat => cat.id === product.category_id);
+        matchesSection = productCategory?.section_id === selectedSection;
+      } else {
+        // If no category_id, don't match any section filter
+        matchesSection = false;
+      }
+    }
+    
     return matchesSearch && matchesCategory && matchesSection;
   });
 

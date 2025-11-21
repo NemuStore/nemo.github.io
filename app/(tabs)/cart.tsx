@@ -25,12 +25,14 @@ export default function CartScreen() {
   const [loading, setLoading] = useState(false);
   const [user, setUser] = useState<any>(null);
   const [variantImages, setVariantImages] = useState<Record<string, string>>({}); // variant_id -> image_url
+  const [productImages, setProductImages] = useState<Record<string, string>>({}); // product_id -> primary_image_url
   const router = useRouter();
   const sweetAlert = useSweetAlert();
 
   useEffect(() => {
     loadUser();
     loadVariantImages();
+    loadProductImages();
   }, [cartItems]);
 
   const loadVariantImages = async () => {
@@ -71,6 +73,47 @@ export default function CartScreen() {
       }
     } catch (error) {
       console.warn('⚠️ Error loading variant images:', error);
+    }
+  };
+
+  const loadProductImages = async () => {
+    const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+    const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+    const imagesMap: Record<string, string> = {};
+    
+    // Get all unique product_ids from cart items
+    const productIds = cartItems
+      .map(item => item.product.id)
+      .filter((id): id is string => Boolean(id));
+    
+    if (productIds.length === 0) return;
+    
+    try {
+      // Load primary images for all products at once
+      const productIdConditions = productIds.map(id => `product_id.eq.${id}`).join(',');
+      const response = await fetch(
+        `${supabaseUrl}/rest/v1/product_images?or=(${productIdConditions})&is_primary=eq.true&variant_id=is.null&order=display_order.asc&limit=100`,
+        {
+          headers: {
+            'apikey': supabaseKey || '',
+            'Authorization': `Bearer ${supabaseKey || ''}`,
+            'Content-Type': 'application/json',
+          }
+        }
+      );
+      
+      if (response.ok) {
+        const imagesData = await response.json();
+        // Map product_id to primary image_url
+        imagesData.forEach((img: any) => {
+          if (img.product_id && !imagesMap[img.product_id]) {
+            imagesMap[img.product_id] = img.image_url;
+          }
+        });
+        setProductImages(imagesMap);
+      }
+    } catch (error) {
+      console.warn('⚠️ Error loading product images:', error);
     }
   };
 
@@ -455,7 +498,8 @@ export default function CartScreen() {
             const variantId = (item.product as any).variant_id;
             const variantName = (item.product as any).variant_name || '';
             const variantImage = variantId ? variantImages[variantId] : null;
-            const displayImage = variantImage || item.product.image_url;
+            const productPrimaryImage = productImages[item.product.id];
+            const displayImage = variantImage || productPrimaryImage || item.product.image_url || item.product.primary_image_url || 'https://via.placeholder.com/150';
             
             // Extract color and size from variant_name (format: "لون - مقاس" or "لون - مقاس (وحدة)")
             let color = '';
@@ -481,10 +525,17 @@ export default function CartScreen() {
                 onPress={() => router.push(`/product/${item.product.id}`)}
                 activeOpacity={0.7}
               >
-                <Image
-                  source={{ uri: displayImage }}
-                  style={styles.itemImage}
-                />
+                {displayImage && displayImage !== 'https://via.placeholder.com/150' ? (
+                  <Image
+                    source={{ uri: displayImage }}
+                    style={styles.itemImage}
+                    resizeMode="cover"
+                  />
+                ) : (
+                  <View style={[styles.itemImage, styles.placeholderImage]}>
+                    <Ionicons name="image-outline" size={40} color="#ccc" />
+                  </View>
+                )}
                 <View style={styles.itemInfo}>
                   <Text style={styles.itemName}>{item.product.name}</Text>
                   
@@ -656,6 +707,12 @@ const styles = StyleSheet.create({
     height: 80,
     borderRadius: 8,
     marginRight: 10,
+    backgroundColor: '#f0f0f0',
+  },
+  placeholderImage: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#f0f0f0',
   },
   itemInfo: {
     flex: 1,
