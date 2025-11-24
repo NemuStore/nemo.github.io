@@ -50,25 +50,62 @@ export async function uploadImageToCatbox(imageUri: string): Promise<string> {
     console.log('📤 Starting upload to Catbox via Edge Function...');
     console.log('📏 Image data size:', Math.round(base64String.length / 1024), 'KB');
     
+    // For very large images (>1MB), compress or warn
+    if (base64String.length > 1024 * 1024) {
+      console.warn('⚠️ Large image detected (>1MB). Upload may take longer.');
+    }
+    
     // Use Supabase Edge Function to upload (avoids CORS issues)
     // Note: userhash should be set as CATBOX_USERHASH secret in Supabase Edge Function
     // If not set, it will fallback to sending it in the request body
-    const invokePromise = supabase.functions.invoke('upload-to-catbox', {
-      body: {
-        imageData: base64String,
-        // userhash is optional - Edge Function will use CATBOX_USERHASH secret if available
-        userhash: CATBOX_USERHASH,
+    console.log('🔗 Invoking Edge Function: upload-to-catbox');
+    console.log('🌐 Supabase URL:', process.env.EXPO_PUBLIC_SUPABASE_URL);
+    console.log('🔑 Supabase Key exists:', !!process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY);
+    
+    // Use fetch directly instead of supabase.functions.invoke (more reliable on web)
+    const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+    const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+    const functionUrl = `${supabaseUrl}/functions/v1/upload-to-catbox`;
+    
+    console.log('🌐 Function URL:', functionUrl);
+    console.log('📦 Request body size:', Math.round(JSON.stringify({ imageData: base64String, userhash: CATBOX_USERHASH }).length / 1024), 'KB');
+    
+    const invokePromise = fetch(functionUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${supabaseKey}`,
+        'apikey': supabaseKey || '',
       },
+      body: JSON.stringify({
+        imageData: base64String,
+        userhash: CATBOX_USERHASH,
+      }),
+    }).then(async (response) => {
+      console.log('📥 Response status:', response.status);
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || `HTTP ${response.status}`);
+      }
+      return { data, error: null };
+    }).catch((error) => {
+      console.error('❌ Fetch error:', error);
+      return { data: null, error };
     });
+    
+    // Add a progress check to see if request is being sent
+    console.log('⏳ Waiting for Edge Function response...');
 
-    // Add timeout (60 seconds for large image uploads)
+    // Add timeout (longer for very large images)
+    // For images >1MB, use 120 seconds, otherwise 60 seconds
+    const timeoutDuration = base64String.length > 1024 * 1024 ? 120000 : 60000;
     const timeoutPromise = new Promise((_, reject) => {
       setTimeout(() => {
-        reject(new Error('انتهت مهلة الطلب (60 ثانية). يرجى التحقق من أن Edge Function منشورة بشكل صحيح.'));
-      }, 60000);
+        reject(new Error(`انتهت مهلة الطلب (${timeoutDuration / 1000} ثانية). يرجى التحقق من أن Edge Function منشورة بشكل صحيح.`));
+      }, timeoutDuration);
     });
 
-    console.log('⏱️ Starting upload with 60s timeout...');
+    console.log(`⏱️ Starting upload with ${timeoutDuration / 1000}s timeout...`);
     const startTime = Date.now();
     
     const { data, error } = await Promise.race([invokePromise, timeoutPromise]) as any;
