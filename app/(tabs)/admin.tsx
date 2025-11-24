@@ -18,7 +18,7 @@ import { Order, Shipment, Inventory, Product, User, UserRole, Category, Section,
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
-import { uploadImageToImgBB } from '@/lib/imgbb';
+import { uploadImageToCatbox } from '@/lib/catbox';
 import SweetAlert from '@/components/SweetAlert';
 import { useSweetAlert } from '@/hooks/useSweetAlert';
 import { useDarkMode } from '@/contexts/DarkModeContext';
@@ -1331,10 +1331,14 @@ export default function AdminScreen() {
           const asset = result.assets[i];
           try {
             setUploadProgress({ current: i + 1, total: result.assets.length, isUploading: true });
-            const imageUrl = await uploadImageToImgBB(asset.uri);
+            console.log(`📤 Uploading image ${i + 1}/${result.assets.length}...`);
+            const imageUrl = await uploadImageToCatbox(asset.uri);
+            console.log(`✅ Image ${i + 1} uploaded successfully:`, imageUrl);
             uploadedImages.push({ uri: asset.uri, url: imageUrl });
-          } catch (error) {
-            console.error('Error uploading image:', error);
+          } catch (error: any) {
+            console.error(`❌ Error uploading image ${i + 1}:`, error);
+            const errorMessage = error?.message || 'فشل رفع الصورة';
+            sweetAlert.showError('خطأ', `فشل رفع الصورة ${i + 1}: ${errorMessage}`);
           }
         }
         
@@ -1383,7 +1387,7 @@ export default function AdminScreen() {
     if (!result.canceled && result.assets.length > 0) {
       try {
         setLoading(true);
-        const imageUrl = await uploadImageToImgBB(result.assets[0].uri);
+        const imageUrl = await uploadImageToCatbox(result.assets[0].uri);
         setNewVariant({ ...newVariant, image_url: imageUrl });
         sweetAlert.showSuccess('نجح', 'تم رفع الصورة بنجاح');
       } catch (error) {

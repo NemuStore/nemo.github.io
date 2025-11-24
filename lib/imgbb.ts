@@ -14,8 +14,12 @@ export interface ImgBBResponse {
 
 export async function uploadImageToImgBB(imageUri: string): Promise<string> {
   if (!IMGBB_API_KEY) {
+    console.error('IMGBB API key is missing. Please set EXPO_PUBLIC_IMGBB_API_KEY in your .env file');
     throw new Error('IMGBB API key is not configured');
   }
+  
+  // Debug: Log that API key is present (without exposing the actual key)
+  console.log('ImgBB API key is configured:', IMGBB_API_KEY ? 'Yes' : 'No');
 
   const formData = new FormData();
   formData.append('key', IMGBB_API_KEY);
@@ -69,14 +73,10 @@ export async function uploadImageToImgBB(imageUri: string): Promise<string> {
   }
 
   try {
+    // Don't set Content-Type manually - axios needs to set it with boundary for FormData
     const uploadResponse = await axios.post<ImgBBResponse>(
       'https://api.imgbb.com/1/upload',
-      formData,
-      {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
-      }
+      formData
     );
 
     if (uploadResponse.data.success) {
@@ -89,8 +89,35 @@ export async function uploadImageToImgBB(imageUri: string): Promise<string> {
     if (error.response) {
       console.error('Response data:', error.response.data);
       console.error('Response status:', error.response.status);
+      
+      // Extract and handle specific error messages from imgBB
+      if (error.response.data?.error) {
+        const errorObj = error.response.data.error;
+        let errorMessage = '';
+        
+        // Handle rate limit error specifically
+        if (errorObj.code === 100 || errorObj.message?.includes('Rate limit')) {
+          errorMessage = 'تم الوصول إلى الحد الأقصى لرفع الصور. يرجى المحاولة مرة أخرى لاحقاً أو ترقية حساب imgBB.';
+        } else if (typeof errorObj === 'object') {
+          errorMessage = errorObj.message || JSON.stringify(errorObj);
+        } else {
+          errorMessage = errorObj;
+        }
+        
+        console.error('ImgBB error message:', errorMessage);
+        throw new Error(errorMessage);
+      }
+      
+      // If no specific error message, throw generic error with status
+      throw new Error(`فشل رفع الصورة (خطأ ${error.response.status})`);
     }
-    throw error;
+    
+    // If it's a network error or other issue
+    if (error.message) {
+      throw new Error(`فشل رفع الصورة: ${error.message}`);
+    }
+    
+    throw new Error('حدث خطأ غير متوقع أثناء رفع الصورة');
   }
 }
 
