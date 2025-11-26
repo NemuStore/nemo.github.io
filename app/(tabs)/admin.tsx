@@ -22,6 +22,8 @@ import { uploadImageToCatbox } from '@/lib/catbox';
 import SweetAlert from '@/components/SweetAlert';
 import { useSweetAlert } from '@/hooks/useSweetAlert';
 import { useDarkMode } from '@/contexts/DarkModeContext';
+import CurrencyCalculator from '@/components/CurrencyCalculator';
+import DateTimePickerButton from '@/components/DateTimePickerButton';
 
 export default function AdminScreen() {
   // Helper function to safely format numbers
@@ -31,11 +33,12 @@ export default function AdminScreen() {
   };
 
   const [user, setUser] = useState<any>(null);
-  const [activeTab, setActiveTab] = useState<'orders' | 'shipments' | 'inventory' | 'products' | 'users' | 'categories' | 'sections'>('orders');
+  const [activeTab, setActiveTab] = useState<'orders' | 'shipments' | 'inventory' | 'products' | 'users' | 'categories' | 'sections' | 'limited_discounts'>('orders');
   const [orders, setOrders] = useState<Order[]>([]);
   const [shipments, setShipments] = useState<Shipment[]>([]);
   const [inventory, setInventory] = useState<Inventory[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+  const [limitedDiscountProducts, setLimitedDiscountProducts] = useState<Product[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [sections, setSections] = useState<Section[]>([]);
@@ -59,8 +62,14 @@ export default function AdminScreen() {
     name: '',
     description: '',
     price: '',
+    purchase_price_aed: '', // سعر الشراء بالدرهم الإماراتي
+    cost_multiplier: '1.0', // معامل التكلفة
+    selling_price_egp: '', // سعر البيع بالجنيه المصري (يتم حسابه تلقائياً)
     original_price: '', // Original price before discount
     discount_percentage: '', // Discount percentage (0-100)
+    limited_time_discount_percentage: '', // خصم لفترة محدودة
+    limited_time_discount_start_date: '', // تاريخ بداية الخصم المحدود
+    limited_time_discount_end_date: '', // تاريخ انتهاء الخصم المحدود
     section_id: '', // Section ID - للفلترة
     category: '',
     category_id: '', // Category ID from categories table
@@ -120,7 +129,8 @@ export default function AdminScreen() {
     color: '',
     size: '',
     size_unit: '',
-    price: '',
+    purchase_price_aed: '', // سعر الشراء بالدرهم الإماراتي
+    price: '', // السعر بالجنيه المصري (محسوب تلقائياً)
     stock_quantity: '',
     sku: '',
     image_url: '',
@@ -158,6 +168,127 @@ export default function AdminScreen() {
   // Cache for access token to avoid repeated calls
   const [cachedAccessToken, setCachedAccessToken] = useState<string | null>(null);
   const [tokenExpiresAt, setTokenExpiresAt] = useState<number | null>(null);
+
+  // Function to calculate selling price in EGP
+  const calculateSellingPrice = async (purchasePriceAed: string, costMultiplier: string) => {
+    try {
+      const purchasePrice = parseFloat(purchasePriceAed);
+      const multiplier = parseFloat(costMultiplier) || 1.0; // استخدام 1.0 كقيمة افتراضية
+      
+      if (isNaN(purchasePrice) || purchasePrice <= 0) {
+        setNewProduct(prev => ({ ...prev, selling_price_egp: '' }));
+        return;
+      }
+      
+      // استخدام fetch مباشرة (مثل CurrencyCalculator) لضمان العمل على web
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || '';
+      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || '';
+      
+      let exchangeRate = 12.99; // القيمة الافتراضية المحدثة
+      
+      if (supabaseUrl && supabaseKey) {
+        try {
+          const url = `${supabaseUrl}/rest/v1/currency_exchange_rates?select=rate_to_egp&currency_code=eq.AED&is_active=eq.true&limit=1`;
+          const response = await fetch(url, {
+            headers: {
+              'apikey': supabaseKey,
+              'Authorization': `Bearer ${supabaseKey}`,
+              'Content-Type': 'application/json',
+            },
+          });
+          
+          if (response.ok) {
+            const data = await response.json();
+            if (data && data.length > 0 && data[0].rate_to_egp) {
+              exchangeRate = typeof data[0].rate_to_egp === 'string' 
+                ? parseFloat(data[0].rate_to_egp) 
+                : data[0].rate_to_egp;
+            }
+          }
+        } catch (fetchError) {
+          console.warn('⚠️ فشل جلب سعر الصرف، استخدام القيمة الافتراضية:', fetchError);
+        }
+      }
+      
+      const sellingPrice = purchasePrice * multiplier * exchangeRate;
+      
+      console.log('💰 حساب سعر البيع:', {
+        purchasePrice,
+        multiplier,
+        exchangeRate,
+        sellingPrice: sellingPrice.toFixed(2)
+      });
+      
+      setNewProduct(prev => ({ 
+        ...prev, 
+        selling_price_egp: sellingPrice.toFixed(2),
+        price: sellingPrice.toFixed(2) // Also update the main price field
+      }));
+    } catch (error) {
+      console.error('❌ خطأ في حساب سعر البيع:', error);
+    }
+  };
+
+  // Function to calculate variant price in EGP
+  const calculateVariantPrice = async (purchasePriceAed: string) => {
+    try {
+      const purchasePrice = parseFloat(purchasePriceAed);
+      
+      if (isNaN(purchasePrice) || purchasePrice <= 0) {
+        setNewVariant(prev => ({ ...prev, price: '' }));
+        return;
+      }
+      
+      // استخدام نفس cost_multiplier من المنتج الأساسي
+      const multiplier = parseFloat(newProduct.cost_multiplier) || 1.0;
+      
+      // استخدام fetch مباشرة لضمان العمل على web
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || '';
+      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || '';
+      
+      let exchangeRate = 12.99; // القيمة الافتراضية
+      
+      if (supabaseUrl && supabaseKey) {
+        try {
+          const url = `${supabaseUrl}/rest/v1/currency_exchange_rates?select=rate_to_egp&currency_code=eq.AED&is_active=eq.true&limit=1`;
+          const response = await fetch(url, {
+            headers: {
+              'apikey': supabaseKey,
+              'Authorization': `Bearer ${supabaseKey}`,
+              'Content-Type': 'application/json',
+            },
+          });
+          
+          if (response.ok) {
+            const data = await response.json();
+            if (data && data.length > 0 && data[0].rate_to_egp) {
+              exchangeRate = typeof data[0].rate_to_egp === 'string' 
+                ? parseFloat(data[0].rate_to_egp) 
+                : data[0].rate_to_egp;
+            }
+          }
+        } catch (fetchError) {
+          console.warn('⚠️ فشل جلب سعر الصرف، استخدام القيمة الافتراضية:', fetchError);
+        }
+      }
+      
+      const sellingPrice = purchasePrice * multiplier * exchangeRate;
+      
+      console.log('💰 حساب سعر المتغير:', {
+        purchasePrice,
+        multiplier,
+        exchangeRate,
+        sellingPrice: sellingPrice.toFixed(2)
+      });
+      
+      setNewVariant(prev => ({ 
+        ...prev, 
+        price: sellingPrice.toFixed(2)
+      }));
+    } catch (error) {
+      console.error('❌ خطأ في حساب سعر المتغير:', error);
+    }
+  };
 
   useEffect(() => {
     checkUserRole();
@@ -1204,6 +1335,26 @@ export default function AdminScreen() {
         } else {
           console.error('❌ Admin: Error loading inventory:', await response.text());
         }
+      } else if (activeTab === 'limited_discounts') {
+        // Load products with limited time discounts
+        const response = await fetch(
+          `${supabaseUrl}/rest/v1/products?select=*,category_data:categories(*,section_data:sections(*))&limited_time_discount_percentage=not.is.null&order=limited_time_discount_end_date.asc`,
+          {
+            headers: {
+              'apikey': supabaseKey || '',
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json',
+            }
+          }
+        );
+        
+        if (response.ok) {
+          const data = await response.json();
+          setLimitedDiscountProducts(data || []);
+          console.log('✅ Admin: Limited discount products loaded:', data?.length || 0);
+        } else {
+          console.error('❌ Admin: Error loading limited discount products:', await response.text());
+        }
       } else if (activeTab === 'products') {
         // Get access token once for all product-related requests
         const productsAccessToken = accessToken;
@@ -1523,6 +1674,7 @@ export default function AdminScreen() {
       color: variant.color || '',
       size: variant.size || '',
       size_unit: variant.size_unit || '',
+      purchase_price_aed: '', // سيتم إدخاله يدوياً إذا كان مختلفاً
       price: variant.price?.toString() || '',
       stock_quantity: variant.stock_quantity?.toString() || '',
       sku: variant.sku || '',
@@ -1541,6 +1693,7 @@ export default function AdminScreen() {
       color: '',
       size: '',
       size_unit: '',
+      purchase_price_aed: '',
       price: '',
       stock_quantity: '',
       sku: '',
@@ -2181,9 +2334,16 @@ export default function AdminScreen() {
         body: JSON.stringify({
           name: newProduct.name,
           description: newProduct.description || null,
-          price: parseFloat(newProduct.price),
-          original_price: newProduct.original_price ? parseFloat(newProduct.original_price) : null,
+          price: newProduct.selling_price_egp ? parseFloat(newProduct.selling_price_egp) : parseFloat(newProduct.price),
+          purchase_price_aed: newProduct.purchase_price_aed ? parseFloat(newProduct.purchase_price_aed) : null,
+          cost_multiplier: newProduct.cost_multiplier ? parseFloat(newProduct.cost_multiplier) : 1.0,
+          selling_price_egp: newProduct.selling_price_egp ? parseFloat(newProduct.selling_price_egp) : null,
+          // استخدام selling_price_egp كـ original_price تلقائياً (إذا كان موجوداً)
+          original_price: newProduct.selling_price_egp ? parseFloat(newProduct.selling_price_egp) : (newProduct.original_price ? parseFloat(newProduct.original_price) : null),
           discount_percentage: newProduct.discount_percentage ? parseInt(newProduct.discount_percentage) : null,
+          limited_time_discount_percentage: newProduct.limited_time_discount_percentage ? parseInt(newProduct.limited_time_discount_percentage) : null,
+          limited_time_discount_start_date: newProduct.limited_time_discount_start_date ? new Date(newProduct.limited_time_discount_start_date).toISOString() : null,
+          limited_time_discount_end_date: newProduct.limited_time_discount_end_date ? new Date(newProduct.limited_time_discount_end_date).toISOString() : null,
           category: newProduct.category || null, // Keep for backward compatibility
           category_id: newProduct.category_id || null,
           stock_quantity: newProduct.source_type === 'warehouse' ? (parseInt(newProduct.stock_quantity) || 0) : 0,
@@ -2687,8 +2847,14 @@ export default function AdminScreen() {
           name: '',
           description: '',
           price: '',
+          purchase_price_aed: '',
+          cost_multiplier: '1.0',
+          selling_price_egp: '',
           original_price: '',
           discount_percentage: '',
+          limited_time_discount_percentage: '',
+          limited_time_discount_start_date: '',
+          limited_time_discount_end_date: '',
           section_id: '',
           category: '',
           category_id: '',
@@ -3033,9 +3199,16 @@ export default function AdminScreen() {
         body: JSON.stringify({
           name: newProduct.name,
           description: newProduct.description || null,
-          price: parseFloat(newProduct.price),
-          original_price: newProduct.original_price ? parseFloat(newProduct.original_price) : null,
+          price: newProduct.selling_price_egp ? parseFloat(newProduct.selling_price_egp) : parseFloat(newProduct.price),
+          purchase_price_aed: newProduct.purchase_price_aed ? parseFloat(newProduct.purchase_price_aed) : null,
+          cost_multiplier: newProduct.cost_multiplier ? parseFloat(newProduct.cost_multiplier) : 1.0,
+          selling_price_egp: newProduct.selling_price_egp ? parseFloat(newProduct.selling_price_egp) : null,
+          // استخدام selling_price_egp كـ original_price تلقائياً (إذا كان موجوداً)
+          original_price: newProduct.selling_price_egp ? parseFloat(newProduct.selling_price_egp) : (newProduct.original_price ? parseFloat(newProduct.original_price) : null),
           discount_percentage: newProduct.discount_percentage ? parseInt(newProduct.discount_percentage) : null,
+          limited_time_discount_percentage: newProduct.limited_time_discount_percentage ? parseInt(newProduct.limited_time_discount_percentage) : null,
+          limited_time_discount_start_date: newProduct.limited_time_discount_start_date ? new Date(newProduct.limited_time_discount_start_date).toISOString() : null,
+          limited_time_discount_end_date: newProduct.limited_time_discount_end_date ? new Date(newProduct.limited_time_discount_end_date).toISOString() : null,
           category: newProduct.category || null, // Keep for backward compatibility
           category_id: newProduct.category_id || null,
           stock_quantity: newProduct.source_type === 'warehouse' ? (parseInt(newProduct.stock_quantity) || 0) : 0,
@@ -4045,6 +4218,19 @@ export default function AdminScreen() {
             الأقسام
           </Text>
         </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.tab, activeTab === 'limited_discounts' && styles.activeTab]}
+          onPress={() => setActiveTab('limited_discounts')}
+        >
+          <Text style={[
+            styles.tabText, 
+            isDarkMode && styles.tabTextDark,
+            activeTab === 'limited_discounts' && styles.activeTabText,
+            activeTab === 'limited_discounts' && isDarkMode && styles.activeTabTextDark
+          ]}>
+            الخصومات المحدودة
+          </Text>
+        </TouchableOpacity>
       </View>
 
       <ScrollView style={styles.content} contentContainerStyle={styles.scrollContent}>
@@ -4651,20 +4837,63 @@ export default function AdminScreen() {
                 onChangeText={(text) => setNewProduct({ ...newProduct, description: text })}
                 multiline
               />
+              {/* Pricing Section - قسم التسعير */}
+              <View style={styles.sectionDivider}>
+                <Text style={styles.sectionTitle}>التسعير</Text>
+              </View>
+              
+              {/* السعر الأصلي (سعر الشراء بالدرهم) */}
               <TextInput
                 style={styles.input}
-                placeholder="السعر (السعر الحالي بعد الخصم)"
-                value={newProduct.price}
-                onChangeText={(text) => setNewProduct({ ...newProduct, price: text })}
-                keyboardType="numeric"
+                placeholder="السعر الأصلي (سعر الشراء بالدرهم الإماراتي) *"
+                value={newProduct.purchase_price_aed}
+                onChangeText={(text) => {
+                  setNewProduct({ ...newProduct, purchase_price_aed: text });
+                  // حساب سعر البيع تلقائياً (سيستخدم 1.0 كمعامل تكلفة افتراضي إذا كان فارغاً)
+                  if (text) {
+                    const multiplier = newProduct.cost_multiplier || '1.0';
+                    calculateSellingPrice(text, multiplier);
+                  } else {
+                    // إذا تم حذف سعر الشراء، امسح سعر البيع
+                    setNewProduct(prev => ({ ...prev, selling_price_egp: '' }));
+                  }
+                }}
+                keyboardType="decimal-pad"
               />
+              
+              {/* معامل التكلفة */}
               <TextInput
                 style={styles.input}
-                placeholder="السعر الأصلي (قبل الخصم) - اختياري"
-                value={newProduct.original_price}
-                onChangeText={(text) => setNewProduct({ ...newProduct, original_price: text })}
-                keyboardType="numeric"
+                placeholder="معامل التكلفة (افتراضي: 1.0) *"
+                value={newProduct.cost_multiplier}
+                onChangeText={(text) => {
+                  setNewProduct({ ...newProduct, cost_multiplier: text });
+                  // حساب سعر البيع تلقائياً إذا كان هناك سعر شراء
+                  if (newProduct.purchase_price_aed && text) {
+                    calculateSellingPrice(newProduct.purchase_price_aed, text);
+                  }
+                }}
+                keyboardType="decimal-pad"
               />
+              
+              {/* سعر البيع بالجنيه المصري (يتم حسابه تلقائياً) */}
+              <TextInput
+                style={[styles.input, { backgroundColor: '#f0f0f0' }]}
+                placeholder="سعر البيع بالجنيه المصري (يتم حسابه تلقائياً)"
+                value={newProduct.selling_price_egp}
+                editable={false}
+              />
+              <Text style={styles.helpText}>
+                💡 يتم حساب سعر البيع تلقائياً: (سعر الشراء بالدرهم × معامل التكلفة × سعر الصرف)
+              </Text>
+              
+              {/* الخصم العادي */}
+              <View style={styles.sectionDivider}>
+                <Text style={styles.sectionTitle}>الخصم العادي</Text>
+              </View>
+              <Text style={styles.helpText}>
+                💡 السعر الأصلي هو سعر البيع بالجنيه المصري المحسوب أعلاه
+              </Text>
               <TextInput
                 style={styles.input}
                 placeholder="نسبة الخصم (%) - اختياري (0-100)"
@@ -4672,8 +4901,62 @@ export default function AdminScreen() {
                 onChangeText={(text) => setNewProduct({ ...newProduct, discount_percentage: text })}
                 keyboardType="numeric"
               />
+              {/* السعر بعد الخصم العادي (يتم حسابه تلقائياً) */}
+              <TextInput
+                style={[styles.input, { backgroundColor: '#f0f0f0' }]}
+                placeholder="السعر بعد الخصم العادي (يتم حسابه تلقائياً)"
+                value={(() => {
+                  const sellingPrice = parseFloat(newProduct.selling_price_egp || '0');
+                  const discount = parseFloat(newProduct.discount_percentage || '0');
+                  if (sellingPrice > 0 && discount > 0 && discount <= 100) {
+                    const finalPrice = sellingPrice * (1 - discount / 100);
+                    return finalPrice.toFixed(2);
+                  }
+                  return '';
+                })()}
+                editable={false}
+              />
+              
+              {/* الخصم لفترة محدودة */}
+              <View style={styles.sectionDivider}>
+                <Text style={styles.sectionTitle}>خصم لفترة محدودة</Text>
+              </View>
+              <TextInput
+                style={styles.input}
+                placeholder="نسبة الخصم لفترة محدودة (%) - اختياري (0-100)"
+                value={newProduct.limited_time_discount_percentage}
+                onChangeText={(text) => setNewProduct({ ...newProduct, limited_time_discount_percentage: text })}
+                keyboardType="numeric"
+              />
+              {/* السعر بعد الخصم لفترة محدودة (يتم حسابه تلقائياً) */}
+              <TextInput
+                style={[styles.input, { backgroundColor: '#f0f0f0' }]}
+                placeholder="السعر بعد الخصم لفترة محدودة (يتم حسابه تلقائياً)"
+                value={(() => {
+                  const sellingPrice = parseFloat(newProduct.selling_price_egp || '0');
+                  const discount = parseFloat(newProduct.limited_time_discount_percentage || '0');
+                  if (sellingPrice > 0 && discount > 0 && discount <= 100) {
+                    const finalPrice = sellingPrice * (1 - discount / 100);
+                    return finalPrice.toFixed(2);
+                  }
+                  return '';
+                })()}
+                editable={false}
+              />
+              <DateTimePickerButton
+                label="تاريخ بداية الخصم (اختياري)"
+                placeholder="اختر تاريخ بداية الخصم"
+                value={newProduct.limited_time_discount_start_date}
+                onValueChange={(value) => setNewProduct({ ...newProduct, limited_time_discount_start_date: value })}
+              />
+              <DateTimePickerButton
+                label="تاريخ انتهاء الخصم (اختياري)"
+                placeholder="اختر تاريخ انتهاء الخصم"
+                value={newProduct.limited_time_discount_end_date}
+                onValueChange={(value) => setNewProduct({ ...newProduct, limited_time_discount_end_date: value })}
+              />
               <Text style={styles.helpText}>
-                💡 ملاحظة: يمكنك إدخال إما السعر الأصلي أو نسبة الخصم، وسيتم حساب الآخر تلقائياً
+                💡 إذا انتهى الخصم لفترة محدودة، سيتم تطبيق الخصم العادي تلقائياً
               </Text>
               
               {/* Source Type Selection */}
@@ -5253,13 +5536,67 @@ export default function AdminScreen() {
                       </TouchableOpacity>
                     )}
                   </View>
+                  <Text style={styles.helpText}>
+                    💡 إذا كان السعر مختلف عن سعر المنتج الأساسي، أدخل سعر الشراء بالدرهم الإماراتي
+                  </Text>
                   <TextInput
                     style={styles.input}
-                    placeholder="السعر (اختياري - إذا كان مختلف عن سعر المنتج)"
-                    value={newVariant.price}
-                    onChangeText={(text) => setNewVariant({ ...newVariant, price: text })}
+                    placeholder="سعر الشراء بالدرهم الإماراتي (اختياري - إذا كان مختلف عن سعر المنتج)"
+                    value={newVariant.purchase_price_aed}
+                    onChangeText={async (text) => {
+                      setNewVariant({ ...newVariant, purchase_price_aed: text });
+                      // حساب السعر بالجنيه المصري تلقائياً
+                      if (text) {
+                        await calculateVariantPrice(text);
+                      } else {
+                        setNewVariant(prev => ({ ...prev, price: '' }));
+                      }
+                    }}
                     keyboardType="numeric"
                   />
+                  {newVariant.price ? (
+                    <>
+                      <View style={[styles.input, { backgroundColor: '#f0f0f0', paddingVertical: 12 }]}>
+                        <Text style={styles.helpText}>
+                          السعر بالجنيه المصري (محسوب تلقائياً): {newVariant.price} جنيه
+                        </Text>
+                      </View>
+                      
+                      {/* السعر بعد الخصم العادي */}
+                      {(() => {
+                        const variantPrice = parseFloat(newVariant.price || '0');
+                        const discount = parseFloat(newProduct.discount_percentage || '0');
+                        if (variantPrice > 0 && discount > 0 && discount <= 100) {
+                          const priceAfterDiscount = variantPrice * (1 - discount / 100);
+                          return (
+                            <View style={[styles.input, { backgroundColor: '#f0f0f0', paddingVertical: 12 }]}>
+                              <Text style={styles.helpText}>
+                                السعر بعد الخصم العادي ({discount}%): {priceAfterDiscount.toFixed(2)} جنيه
+                              </Text>
+                            </View>
+                          );
+                        }
+                        return null;
+                      })()}
+                      
+                      {/* السعر بعد الخصم لفترة محدودة */}
+                      {(() => {
+                        const variantPrice = parseFloat(newVariant.price || '0');
+                        const limitedDiscount = parseFloat(newProduct.limited_time_discount_percentage || '0');
+                        if (variantPrice > 0 && limitedDiscount > 0 && limitedDiscount <= 100) {
+                          const priceAfterLimitedDiscount = variantPrice * (1 - limitedDiscount / 100);
+                          return (
+                            <View style={[styles.input, { backgroundColor: '#f0f0f0', paddingVertical: 12 }]}>
+                              <Text style={styles.helpText}>
+                                السعر بعد الخصم لفترة محدودة ({limitedDiscount}%): {priceAfterLimitedDiscount.toFixed(2)} جنيه
+                              </Text>
+                            </View>
+                          );
+                        }
+                        return null;
+                      })()}
+                    </>
+                  ) : null}
                   {newProduct.source_type === 'warehouse' && (
                     <TextInput
                       style={styles.input}
@@ -5832,6 +6169,177 @@ export default function AdminScreen() {
                 >
                   <Ionicons name="chevron-forward" size={20} color={productCurrentPage === paginatedProductsData.totalPages ? '#999' : '#EE1C47'} />
                 </TouchableOpacity>
+              </View>
+            )}
+          </View>
+        )}
+
+        {activeTab === 'limited_discounts' && (
+          <View>
+            <View style={styles.sectionHeader}>
+              <Ionicons name="time-outline" size={20} color="#EE1C47" />
+              <Text style={styles.sectionHeaderText}>المنتجات ذات الخصم المحدود</Text>
+              <View style={styles.sectionHeaderBadge}>
+                <Text style={styles.sectionHeaderBadgeText}>
+                  {limitedDiscountProducts.length}
+                </Text>
+              </View>
+            </View>
+
+            {limitedDiscountProducts.length > 0 ? (
+              <View style={styles.gridContainer}>
+                {limitedDiscountProducts.map((product) => {
+                  const endDate = product.limited_time_discount_end_date 
+                    ? new Date(product.limited_time_discount_end_date) 
+                    : null;
+                  const now = new Date();
+                  const isActive = endDate ? endDate > now : false;
+                  const daysRemaining = endDate && isActive 
+                    ? Math.ceil((endDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
+                    : 0;
+                  
+                  return (
+                    <View key={product.id} style={styles.gridCard}>
+                      <View style={styles.cardHeader}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.gridCardTitle} numberOfLines={2}>
+                            {product.name}
+                          </Text>
+                          <Text style={styles.gridCardMetaText}>
+                            {product.category_data?.name || 'بدون فئة'}
+                          </Text>
+                        </View>
+                      </View>
+
+                      <View style={styles.gridProductPrice}>
+                        <Text style={styles.gridPrice}>
+                          {formatPrice(product.price)} ج.م
+                        </Text>
+                        {product.original_price && product.original_price > product.price && (
+                          <Text style={styles.gridOriginalPrice}>
+                            {formatPrice(product.original_price)} ج.م
+                          </Text>
+                        )}
+                        {product.limited_time_discount_percentage && (
+                          <View style={[styles.discountBadge, { backgroundColor: isActive ? '#EE1C47' : '#999' }]}>
+                            <Text style={styles.discountBadgeText}>
+                              -{product.limited_time_discount_percentage}%
+                            </Text>
+                          </View>
+                        )}
+                      </View>
+
+                      <View style={styles.gridCardMeta}>
+                        <View style={[
+                          styles.statusBadgeSmall,
+                          { backgroundColor: isActive ? '#10B981' : '#EF4444' }
+                        ]}>
+                          <Text style={styles.statusBadgeTextSmall}>
+                            {isActive ? 'نشط' : 'منتهي'}
+                          </Text>
+                        </View>
+                        {isActive && daysRemaining > 0 && (
+                          <Text style={styles.daysRemainingText}>
+                            متبقي {daysRemaining} {daysRemaining === 1 ? 'يوم' : 'أيام'}
+                          </Text>
+                        )}
+                        {endDate && (
+                          <Text style={styles.dateText}>
+                            ينتهي: {endDate.toLocaleDateString('ar-EG')}
+                          </Text>
+                        )}
+                      </View>
+
+                      <View style={styles.quickEditActions}>
+                        <TouchableOpacity
+                          style={[styles.quickEditButton, styles.saveButton]}
+                          onPress={() => {
+                            // Navigate to edit product
+                            setEditingProduct(product);
+                            setActiveTab('products');
+                            setNewProduct({
+                              ...newProduct,
+                              name: product.name,
+                              description: product.description || '',
+                              price: product.price.toString(),
+                              purchase_price_aed: product.purchase_price_aed?.toString() || '',
+                              cost_multiplier: product.cost_multiplier?.toString() || '1.0',
+                              selling_price_egp: product.selling_price_egp?.toString() || '',
+                              original_price: product.original_price?.toString() || '',
+                              discount_percentage: product.discount_percentage?.toString() || '',
+                              limited_time_discount_percentage: product.limited_time_discount_percentage?.toString() || '',
+                              limited_time_discount_start_date: product.limited_time_discount_start_date 
+                                ? new Date(product.limited_time_discount_start_date).toISOString().split('T')[0]
+                                : '',
+                              limited_time_discount_end_date: product.limited_time_discount_end_date
+                                ? new Date(product.limited_time_discount_end_date).toISOString().split('T')[0]
+                                : '',
+                              category_id: product.category_id || '',
+                              category: product.category || '',
+                              stock_quantity: product.stock_quantity.toString(),
+                              source_type: product.source_type,
+                              sku: product.sku || '',
+                              sold_count: product.sold_count.toString(),
+                              is_limited_time_offer: product.is_limited_time_offer,
+                              offer_duration_days: product.offer_duration_days?.toString() || '',
+                            });
+                          }}
+                        >
+                          <Ionicons name="create-outline" size={14} color="#fff" />
+                          <Text style={styles.quickEditButtonText}>تعديل</Text>
+                        </TouchableOpacity>
+                        {isActive && (
+                          <TouchableOpacity
+                            style={[styles.quickEditButton, { backgroundColor: '#3B82F6' }]}
+                            onPress={async () => {
+                              // Extend discount by 7 days
+                              const newEndDate = endDate 
+                                ? new Date(endDate.getTime() + 7 * 24 * 60 * 60 * 1000)
+                                : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+                              
+                              setLoading(true);
+                              try {
+                                const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+                                const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+                                const accessToken = await getAccessToken();
+
+                                await fetch(`${supabaseUrl}/rest/v1/products?id=eq.${product.id}`, {
+                                  method: 'PATCH',
+                                  headers: {
+                                    'apikey': supabaseKey || '',
+                                    'Authorization': `Bearer ${accessToken}`,
+                                    'Content-Type': 'application/json',
+                                  },
+                                  body: JSON.stringify({
+                                    limited_time_discount_end_date: newEndDate.toISOString(),
+                                  })
+                                });
+
+                                sweetAlert.showSuccess('نجح', 'تم تمديد الخصم 7 أيام إضافية', () => {
+                                  loadData();
+                                });
+                              } catch (error: any) {
+                                sweetAlert.showError('خطأ', error.message || 'فشل التحديث');
+                              } finally {
+                                setLoading(false);
+                              }
+                            }}
+                          >
+                            <Ionicons name="time-outline" size={14} color="#fff" />
+                            <Text style={styles.quickEditButtonText}>إطالة 7 أيام</Text>
+                          </TouchableOpacity>
+                        )}
+                      </View>
+                    </View>
+                  );
+                })}
+              </View>
+            ) : (
+              <View style={{ padding: 20, alignItems: 'center', width: '100%' }}>
+                <Ionicons name="time-outline" size={48} color="#ccc" />
+                <Text style={{ color: '#666', fontSize: 16, marginTop: 10 }}>
+                  لا توجد منتجات ذات خصم محدود
+                </Text>
               </View>
             )}
           </View>
@@ -6641,6 +7149,19 @@ export default function AdminScreen() {
         </View>
       </ScrollView>
 
+      {/* Currency Calculator - حاسبة العملات (زر عائم) */}
+      {activeTab === 'products' && (
+        <CurrencyCalculator
+          onPriceCalculated={(priceInEgp) => {
+            setNewProduct(prev => ({
+              ...prev,
+              selling_price_egp: priceInEgp.toFixed(2),
+              price: priceInEgp.toFixed(2)
+            }));
+          }}
+        />
+      )}
+
       {/* SweetAlert */}
       {sweetAlert.alert.options && (
         <SweetAlert
@@ -6990,6 +7511,29 @@ const styles = StyleSheet.create({
     color: '#10B981',
     fontWeight: '600',
     marginTop: 2,
+  },
+  discountBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    marginTop: 5,
+    alignSelf: 'flex-start',
+  },
+  discountBadgeText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  daysRemainingText: {
+    fontSize: 12,
+    color: '#10B981',
+    fontWeight: '600',
+    marginTop: 5,
+  },
+  dateText: {
+    fontSize: 11,
+    color: '#666',
+    marginTop: 3,
   },
   fullEditButton: {
     flexDirection: 'row',
@@ -7553,6 +8097,19 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  sectionDivider: {
+    marginTop: 20,
+    marginBottom: 10,
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#374151',
+    marginBottom: 5,
   },
   helpText: {
     fontSize: 12,

@@ -76,8 +76,14 @@ export interface Product {
   name: string;
   description: string | null;
   price: number;
+  purchase_price_aed: number | null; // سعر الشراء بالدرهم الإماراتي
+  cost_multiplier: number; // معامل التكلفة
+  selling_price_egp: number | null; // سعر البيع بالجنيه المصري (يتم حسابه تلقائياً)
   original_price: number | null; // Original price before discount
   discount_percentage: number | null; // Discount percentage (0-100)
+  limited_time_discount_percentage: number | null; // خصم لفترة محدودة
+  limited_time_discount_start_date: string | null; // تاريخ بداية الخصم المحدود
+  limited_time_discount_end_date: string | null; // تاريخ انتهاء الخصم المحدود
   image_url: string;
   category: string | null; // Keep for backward compatibility
   category_id: string | null; // Reference to categories table
