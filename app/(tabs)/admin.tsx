@@ -65,9 +65,11 @@ export default function AdminScreen() {
     purchase_price_aed: '', // سعر الشراء بالدرهم الإماراتي
     cost_multiplier: '1.0', // معامل التكلفة
     selling_price_egp: '', // سعر البيع بالجنيه المصري (يتم حسابه تلقائياً)
+    strikethrough_price: '', // الرقم المشطوب عليه (يدوي بالجنيه المصري)
     original_price: '', // Original price before discount
     discount_percentage: '', // Discount percentage (0-100)
-    limited_time_discount_percentage: '', // خصم لفترة محدودة
+    limited_time_discount_price: '', // سعر الخصم لفترة محدودة (يدوي بالجنيه المصري)
+    limited_time_discount_percentage: '', // خصم لفترة محدودة (يُحسب تلقائياً)
     limited_time_discount_start_date: '', // تاريخ بداية الخصم المحدود
     limited_time_discount_end_date: '', // تاريخ انتهاء الخصم المحدود
     section_id: '', // Section ID - للفلترة
@@ -219,11 +221,24 @@ export default function AdminScreen() {
         sellingPrice: sellingPrice.toFixed(2)
       });
       
-      setNewProduct(prev => ({ 
-        ...prev, 
-        selling_price_egp: sellingPrice.toFixed(2),
-        price: sellingPrice.toFixed(2) // Also update the main price field
-      }));
+      setNewProduct(prev => {
+        const newSellingPrice = sellingPrice.toFixed(2);
+        const strikethroughPrice = parseFloat(prev.strikethrough_price || '0');
+        
+        // إذا كان هناك رقم مشطوب عليه، احسب نسبة الخصم تلقائياً
+        let newDiscountPercentage = prev.discount_percentage;
+        if (strikethroughPrice > 0 && sellingPrice > 0 && strikethroughPrice > sellingPrice) {
+          const discountPercentage = ((strikethroughPrice - sellingPrice) / strikethroughPrice) * 100;
+          newDiscountPercentage = discountPercentage.toFixed(2);
+        }
+        
+        return {
+          ...prev,
+          selling_price_egp: newSellingPrice,
+          price: newSellingPrice, // Also update the main price field
+          discount_percentage: newDiscountPercentage
+        };
+      });
     } catch (error) {
       console.error('❌ خطأ في حساب سعر البيع:', error);
     }
@@ -2338,6 +2353,7 @@ export default function AdminScreen() {
           purchase_price_aed: newProduct.purchase_price_aed ? parseFloat(newProduct.purchase_price_aed) : null,
           cost_multiplier: newProduct.cost_multiplier ? parseFloat(newProduct.cost_multiplier) : 1.0,
           selling_price_egp: newProduct.selling_price_egp ? parseFloat(newProduct.selling_price_egp) : null,
+          strikethrough_price: newProduct.strikethrough_price ? parseFloat(newProduct.strikethrough_price) : null,
           // استخدام selling_price_egp كـ original_price تلقائياً (إذا كان موجوداً)
           original_price: newProduct.selling_price_egp ? parseFloat(newProduct.selling_price_egp) : (newProduct.original_price ? parseFloat(newProduct.original_price) : null),
           discount_percentage: newProduct.discount_percentage ? parseInt(newProduct.discount_percentage) : null,
@@ -2850,8 +2866,10 @@ export default function AdminScreen() {
           purchase_price_aed: '',
           cost_multiplier: '1.0',
           selling_price_egp: '',
+          strikethrough_price: '',
           original_price: '',
           discount_percentage: '',
+          limited_time_discount_price: '',
           limited_time_discount_percentage: '',
           limited_time_discount_start_date: '',
           limited_time_discount_end_date: '',
@@ -2901,8 +2919,25 @@ export default function AdminScreen() {
       name: product.name || '',
       description: product.description || '',
       price: (product.price || 0).toString(),
+      purchase_price_aed: (product.purchase_price_aed || '').toString(),
+      cost_multiplier: (product.cost_multiplier || '1.0').toString(),
+      selling_price_egp: (product.selling_price_egp || '').toString(),
+      strikethrough_price: (product.strikethrough_price || '').toString(),
       original_price: (product.original_price || '').toString(),
       discount_percentage: (product.discount_percentage || '').toString(),
+      limited_time_discount_price: (() => {
+        // حساب سعر الخصم لفترة محدودة من النسبة المئوية والرقم المشطوب عليه
+        const strikethroughPrice = product.strikethrough_price || 0;
+        const discountPercentage = product.limited_time_discount_percentage || 0;
+        if (strikethroughPrice > 0 && discountPercentage > 0) {
+          const discountPrice = strikethroughPrice * (1 - discountPercentage / 100);
+          return discountPrice.toFixed(2);
+        }
+        return '';
+      })(),
+      limited_time_discount_percentage: (product.limited_time_discount_percentage || '').toString(),
+      limited_time_discount_start_date: product.limited_time_discount_start_date || '',
+      limited_time_discount_end_date: product.limited_time_discount_end_date || '',
       section_id: sectionId,
       category: product.category || '',
       category_id: product.category_id || '',
@@ -2921,8 +2956,16 @@ export default function AdminScreen() {
       name: String(newProductData.name || ''),
       description: String(newProductData.description || ''),
       price: String(newProductData.price || '0'),
+      purchase_price_aed: String(newProductData.purchase_price_aed || ''),
+      cost_multiplier: String(newProductData.cost_multiplier || '1.0'),
+      selling_price_egp: String(newProductData.selling_price_egp || ''),
+      strikethrough_price: String(newProductData.strikethrough_price || ''),
       original_price: String(newProductData.original_price || ''),
       discount_percentage: String(newProductData.discount_percentage || ''),
+      limited_time_discount_price: String(newProductData.limited_time_discount_price || ''),
+      limited_time_discount_percentage: String(newProductData.limited_time_discount_percentage || ''),
+      limited_time_discount_start_date: String(newProductData.limited_time_discount_start_date || ''),
+      limited_time_discount_end_date: String(newProductData.limited_time_discount_end_date || ''),
       section_id: String(newProductData.section_id || ''),
       category: String(newProductData.category || ''),
       category_id: String(newProductData.category_id || ''),
@@ -3203,6 +3246,7 @@ export default function AdminScreen() {
           purchase_price_aed: newProduct.purchase_price_aed ? parseFloat(newProduct.purchase_price_aed) : null,
           cost_multiplier: newProduct.cost_multiplier ? parseFloat(newProduct.cost_multiplier) : 1.0,
           selling_price_egp: newProduct.selling_price_egp ? parseFloat(newProduct.selling_price_egp) : null,
+          strikethrough_price: newProduct.strikethrough_price ? parseFloat(newProduct.strikethrough_price) : null,
           // استخدام selling_price_egp كـ original_price تلقائياً (إذا كان موجوداً)
           original_price: newProduct.selling_price_egp ? parseFloat(newProduct.selling_price_egp) : (newProduct.original_price ? parseFloat(newProduct.original_price) : null),
           discount_percentage: newProduct.discount_percentage ? parseInt(newProduct.discount_percentage) : null,
@@ -4887,62 +4931,154 @@ export default function AdminScreen() {
                 💡 يتم حساب سعر البيع تلقائياً: (سعر الشراء بالدرهم × معامل التكلفة × سعر الصرف)
               </Text>
               
-              {/* الخصم العادي */}
-              <View style={styles.sectionDivider}>
-                <Text style={styles.sectionTitle}>الخصم العادي</Text>
-              </View>
-              <Text style={styles.helpText}>
-                💡 السعر الأصلي هو سعر البيع بالجنيه المصري المحسوب أعلاه
-              </Text>
+              {/* الرقم المشطوب عليه */}
               <TextInput
-                style={styles.input}
-                placeholder="نسبة الخصم (%) - اختياري (0-100)"
-                value={newProduct.discount_percentage}
-                onChangeText={(text) => setNewProduct({ ...newProduct, discount_percentage: text })}
+                style={[styles.input, (() => {
+                  const strikethroughPrice = parseFloat(newProduct.strikethrough_price || '0');
+                  const sellingPrice = parseFloat(newProduct.selling_price_egp || '0');
+                  if (strikethroughPrice > 0 && sellingPrice > 0 && strikethroughPrice <= sellingPrice) {
+                    return { borderColor: '#EF4444', borderWidth: 2 };
+                  }
+                  return {};
+                })()]}
+                placeholder="الرقم المشطوب عليه (يدوي بالجنيه المصري) - يجب أن يكون أعلى من سعر البيع"
+                value={newProduct.strikethrough_price}
+                onChangeText={(text) => {
+                  setNewProduct({ ...newProduct, strikethrough_price: text });
+                  
+                  // حساب نسبة الخصم تلقائياً
+                  const strikethroughPrice = parseFloat(text);
+                  const sellingPrice = parseFloat(newProduct.selling_price_egp || '0');
+                  
+                  if (strikethroughPrice > 0 && sellingPrice > 0 && strikethroughPrice > sellingPrice) {
+                    // حساب نسبة الخصم: ((السعر المشطوب - سعر البيع) / السعر المشطوب) × 100
+                    const discountPercentage = ((strikethroughPrice - sellingPrice) / strikethroughPrice) * 100;
+                    setNewProduct(prev => {
+                      // إذا كان هناك سعر خصم لفترة محدودة، أعد حساب نسبة الخصم لفترة محدودة
+                      const limitedDiscountPrice = parseFloat(prev.limited_time_discount_price || '0');
+                      let newLimitedDiscountPercentage = prev.limited_time_discount_percentage;
+                      if (limitedDiscountPrice > 0 && strikethroughPrice > limitedDiscountPrice) {
+                        const limitedDiscountPercentage = ((strikethroughPrice - limitedDiscountPrice) / strikethroughPrice) * 100;
+                        newLimitedDiscountPercentage = limitedDiscountPercentage.toFixed(2);
+                      }
+                      return {
+                        ...prev,
+                        strikethrough_price: text,
+                        discount_percentage: discountPercentage.toFixed(2),
+                        limited_time_discount_percentage: newLimitedDiscountPercentage
+                      };
+                    });
+                  } else if (!text || text === '') {
+                    // إذا تم حذف الرقم المشطوب، امسح نسبة الخصم
+                    setNewProduct(prev => ({
+                      ...prev,
+                      strikethrough_price: '',
+                      discount_percentage: '',
+                      limited_time_discount_price: '',
+                      limited_time_discount_percentage: ''
+                    }));
+                  } else if (strikethroughPrice > 0 && sellingPrice > 0 && strikethroughPrice <= sellingPrice) {
+                    // إذا كان الرقم المشطوب أقل من أو يساوي سعر البيع، امسح نسبة الخصم
+                    setNewProduct(prev => ({
+                      ...prev,
+                      strikethrough_price: text,
+                      discount_percentage: '',
+                      limited_time_discount_price: '',
+                      limited_time_discount_percentage: ''
+                    }));
+                  }
+                }}
                 keyboardType="numeric"
               />
-              {/* السعر بعد الخصم العادي (يتم حسابه تلقائياً) */}
-              <TextInput
-                style={[styles.input, { backgroundColor: '#f0f0f0' }]}
-                placeholder="السعر بعد الخصم العادي (يتم حسابه تلقائياً)"
-                value={(() => {
+              {newProduct.strikethrough_price && newProduct.selling_price_egp ? (
+                (() => {
+                  const strikethroughPrice = parseFloat(newProduct.strikethrough_price || '0');
                   const sellingPrice = parseFloat(newProduct.selling_price_egp || '0');
-                  const discount = parseFloat(newProduct.discount_percentage || '0');
-                  if (sellingPrice > 0 && discount > 0 && discount <= 100) {
-                    const finalPrice = sellingPrice * (1 - discount / 100);
-                    return finalPrice.toFixed(2);
+                  if (strikethroughPrice > sellingPrice) {
+                    return (
+                      <Text style={styles.helpText}>
+                        💡 تم حساب نسبة الخصم تلقائياً: {newProduct.discount_percentage}%
+                      </Text>
+                    );
+                  } else if (strikethroughPrice > 0 && sellingPrice > 0) {
+                    return (
+                      <Text style={[styles.helpText, { color: '#EF4444' }]}>
+                        ⚠️ الرقم المشطوب عليه يجب أن يكون أعلى من سعر البيع ({sellingPrice} جنيه)
+                      </Text>
+                    );
                   }
-                  return '';
-                })()}
-                editable={false}
-              />
+                  return null;
+                })()
+              ) : null}
               
               {/* الخصم لفترة محدودة */}
               <View style={styles.sectionDivider}>
                 <Text style={styles.sectionTitle}>خصم لفترة محدودة</Text>
               </View>
               <TextInput
-                style={styles.input}
-                placeholder="نسبة الخصم لفترة محدودة (%) - اختياري (0-100)"
-                value={newProduct.limited_time_discount_percentage}
-                onChangeText={(text) => setNewProduct({ ...newProduct, limited_time_discount_percentage: text })}
+                style={[styles.input, (() => {
+                  const limitedDiscountPrice = parseFloat(newProduct.limited_time_discount_price || '0');
+                  const strikethroughPrice = parseFloat(newProduct.strikethrough_price || '0');
+                  if (limitedDiscountPrice > 0 && strikethroughPrice > 0 && limitedDiscountPrice >= strikethroughPrice) {
+                    return { borderColor: '#EF4444', borderWidth: 2 };
+                  }
+                  return {};
+                })()]}
+                placeholder="سعر الخصم لفترة محدودة (يدوي بالجنيه المصري) - يجب أن يكون أقل من الرقم المشطوب عليه"
+                value={newProduct.limited_time_discount_price}
+                onChangeText={(text) => {
+                  setNewProduct({ ...newProduct, limited_time_discount_price: text });
+                  
+                  // حساب نسبة الخصم لفترة محدودة تلقائياً
+                  const limitedDiscountPrice = parseFloat(text);
+                  const strikethroughPrice = parseFloat(newProduct.strikethrough_price || '0');
+                  
+                  if (limitedDiscountPrice > 0 && strikethroughPrice > 0 && limitedDiscountPrice < strikethroughPrice) {
+                    // حساب نسبة الخصم: ((السعر المشطوب - سعر الخصم لفترة محدودة) / السعر المشطوب) × 100
+                    const discountPercentage = ((strikethroughPrice - limitedDiscountPrice) / strikethroughPrice) * 100;
+                    setNewProduct(prev => ({
+                      ...prev,
+                      limited_time_discount_price: text,
+                      limited_time_discount_percentage: discountPercentage.toFixed(2)
+                    }));
+                  } else if (!text || text === '') {
+                    // إذا تم حذف السعر، امسح نسبة الخصم
+                    setNewProduct(prev => ({
+                      ...prev,
+                      limited_time_discount_price: '',
+                      limited_time_discount_percentage: ''
+                    }));
+                  } else if (limitedDiscountPrice > 0 && strikethroughPrice > 0 && limitedDiscountPrice >= strikethroughPrice) {
+                    // إذا كان السعر أكبر من أو يساوي الرقم المشطوب، امسح نسبة الخصم
+                    setNewProduct(prev => ({
+                      ...prev,
+                      limited_time_discount_price: text,
+                      limited_time_discount_percentage: ''
+                    }));
+                  }
+                }}
                 keyboardType="numeric"
               />
-              {/* السعر بعد الخصم لفترة محدودة (يتم حسابه تلقائياً) */}
-              <TextInput
-                style={[styles.input, { backgroundColor: '#f0f0f0' }]}
-                placeholder="السعر بعد الخصم لفترة محدودة (يتم حسابه تلقائياً)"
-                value={(() => {
-                  const sellingPrice = parseFloat(newProduct.selling_price_egp || '0');
-                  const discount = parseFloat(newProduct.limited_time_discount_percentage || '0');
-                  if (sellingPrice > 0 && discount > 0 && discount <= 100) {
-                    const finalPrice = sellingPrice * (1 - discount / 100);
-                    return finalPrice.toFixed(2);
+              {newProduct.limited_time_discount_price && newProduct.strikethrough_price ? (
+                (() => {
+                  const limitedDiscountPrice = parseFloat(newProduct.limited_time_discount_price || '0');
+                  const strikethroughPrice = parseFloat(newProduct.strikethrough_price || '0');
+                  if (limitedDiscountPrice < strikethroughPrice && limitedDiscountPrice > 0) {
+                    return (
+                      <Text style={styles.helpText}>
+                        💡 تم حساب نسبة الخصم لفترة محدودة تلقائياً: {newProduct.limited_time_discount_percentage}%
+                      </Text>
+                    );
+                  } else if (limitedDiscountPrice > 0 && strikethroughPrice > 0) {
+                    return (
+                      <Text style={[styles.helpText, { color: '#EF4444' }]}>
+                        ⚠️ سعر الخصم لفترة محدودة يجب أن يكون أقل من الرقم المشطوب عليه ({strikethroughPrice} جنيه)
+                      </Text>
+                    );
                   }
-                  return '';
-                })()}
-                editable={false}
-              />
+                  return null;
+                })()
+              ) : null}
               <DateTimePickerButton
                 label="تاريخ بداية الخصم (اختياري)"
                 placeholder="اختر تاريخ بداية الخصم"

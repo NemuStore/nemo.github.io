@@ -79,6 +79,7 @@ export interface Product {
   purchase_price_aed: number | null; // سعر الشراء بالدرهم الإماراتي
   cost_multiplier: number; // معامل التكلفة
   selling_price_egp: number | null; // سعر البيع بالجنيه المصري (يتم حسابه تلقائياً)
+  strikethrough_price: number | null; // الرقم المشطوب عليه (يدوي بالجنيه المصري)
   original_price: number | null; // Original price before discount
   discount_percentage: number | null; // Discount percentage (0-100)
   limited_time_discount_percentage: number | null; // خصم لفترة محدودة
