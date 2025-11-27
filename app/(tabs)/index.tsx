@@ -254,7 +254,18 @@ export default function HomeScreen() {
 
   // Get discount from database fields
   const getDiscount = (product: Product): number => {
-    // Use discount_percentage from database if available
+    // Check if limited time discount is active
+    if (product.limited_time_discount_percentage && 
+        product.limited_time_discount_end_date) {
+      const endDate = new Date(product.limited_time_discount_end_date);
+      const now = new Date();
+      if (endDate > now) {
+        // Limited time discount is active
+        return product.limited_time_discount_percentage;
+      }
+    }
+    
+    // Use regular discount_percentage from database if available
     if (product.discount_percentage && product.discount_percentage > 0) {
       return product.discount_percentage;
     }
@@ -262,10 +273,30 @@ export default function HomeScreen() {
   };
 
   const hasDiscount = (product: Product): boolean => {
-    // Check if product has discount from database
+    // Check if limited time discount is active
+    if (product.limited_time_discount_percentage && 
+        product.limited_time_discount_end_date) {
+      const endDate = new Date(product.limited_time_discount_end_date);
+      const now = new Date();
+      if (endDate > now && product.stock_quantity > 0) {
+        return true;
+      }
+    }
+    
+    // Check if product has regular discount from database
     return product.discount_percentage !== null && 
            product.discount_percentage > 0 && 
            product.stock_quantity > 0;
+  };
+  
+  const isLimitedDiscountActive = (product: Product): boolean => {
+    if (product.limited_time_discount_percentage && 
+        product.limited_time_discount_end_date) {
+      const endDate = new Date(product.limited_time_discount_end_date);
+      const now = new Date();
+      return endDate > now;
+    }
+    return false;
   };
 
   return (
@@ -433,10 +464,14 @@ export default function HomeScreen() {
             filteredProducts.map((product) => {
               const discount = getDiscount(product);
               const hasDiscountValue = hasDiscount(product);
+              const isLimitedActive = isLimitedDiscountActive(product);
               
               // Calculate original price: use from DB if available, otherwise calculate from discount
               let originalPrice: number | null = null;
-              if (product.original_price && product.original_price > product.price) {
+              // استخدام strikethrough_price إذا كان موجوداً، وإلا استخدم original_price
+              if (product.strikethrough_price && product.strikethrough_price > product.price) {
+                originalPrice = product.strikethrough_price;
+              } else if (product.original_price && product.original_price > product.price) {
                 originalPrice = product.original_price;
               } else if (hasDiscountValue && discount > 0) {
                 // Calculate original price from discount percentage
@@ -499,8 +534,15 @@ export default function HomeScreen() {
                         </Text>
                       )}
                     </View>
-                    {/* Limited Time Offer Countdown */}
-                    {product.is_limited_time_offer && product.offer_end_date && new Date(product.offer_end_date) > new Date() && (
+                    {/* Limited Time Discount Countdown */}
+                    {isLimitedDiscountActive(product) && product.limited_time_discount_end_date && (
+                      <CountdownTimer 
+                        endDate={product.limited_time_discount_end_date}
+                        compact={true}
+                      />
+                    )}
+                    {/* Limited Time Offer Countdown (legacy) */}
+                    {!isLimitedDiscountActive(product) && product.is_limited_time_offer && product.offer_end_date && new Date(product.offer_end_date) > new Date() && (
                       <CountdownTimer 
                         endDate={product.offer_end_date}
                         compact={true}

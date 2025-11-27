@@ -33,7 +33,7 @@ export default function AdminScreen() {
   };
 
   const [user, setUser] = useState<any>(null);
-  const [activeTab, setActiveTab] = useState<'orders' | 'shipments' | 'inventory' | 'products' | 'users' | 'categories' | 'sections' | 'limited_discounts'>('orders');
+  const [activeTab, setActiveTab] = useState<'orders' | 'shipments' | 'inventory' | 'products' | 'users' | 'categories' | 'sections'>('orders');
   const [orders, setOrders] = useState<Order[]>([]);
   const [shipments, setShipments] = useState<Shipment[]>([]);
   const [inventory, setInventory] = useState<Inventory[]>([]);
@@ -68,7 +68,8 @@ export default function AdminScreen() {
     strikethrough_price: '', // الرقم المشطوب عليه (يدوي بالجنيه المصري)
     original_price: '', // Original price before discount
     discount_percentage: '', // Discount percentage (0-100)
-    limited_time_discount_price: '', // سعر الخصم لفترة محدودة (يدوي بالجنيه المصري)
+    limited_time_discount_price_aed: '', // سعر الخصم لفترة محدودة بالدرهم الإماراتي
+    limited_time_discount_price_egp: '', // السعر لفترة محدودة بالجنيه المصري (محسوب تلقائياً)
     limited_time_discount_percentage: '', // خصم لفترة محدودة (يُحسب تلقائياً)
     limited_time_discount_start_date: '', // تاريخ بداية الخصم المحدود
     limited_time_discount_end_date: '', // تاريخ انتهاء الخصم المحدود
@@ -127,6 +128,8 @@ export default function AdminScreen() {
   const [variantsUpdateKey, setVariantsUpdateKey] = useState(0); // Key to force re-render when variants change
   const [variantsRenderTimestamp, setVariantsRenderTimestamp] = useState(Date.now()); // Timestamp to force re-render
   const [editingVariant, setEditingVariant] = useState<ProductVariant | null>(null);
+  // SKU validation state
+  const [skuStatus, setSkuStatus] = useState<'checking' | 'exists' | 'new' | null>(null);
   const [newVariant, setNewVariant] = useState({
     color: '',
     size: '',
@@ -244,6 +247,80 @@ export default function AdminScreen() {
     }
   };
 
+  // Function to calculate limited time discount price in EGP
+  const calculateLimitedTimeDiscountPrice = async (discountPriceAed: string) => {
+    try {
+      const discountPrice = parseFloat(discountPriceAed);
+      
+      if (isNaN(discountPrice) || discountPrice <= 0) {
+        setNewProduct(prev => ({ ...prev, limited_time_discount_price_egp: '' }));
+        return;
+      }
+      
+      // استخدام نفس cost_multiplier من المنتج الأساسي
+      const multiplier = parseFloat(newProduct.cost_multiplier) || 1.0;
+      
+      // استخدام fetch مباشرة لضمان العمل على web
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || '';
+      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || '';
+      
+      let exchangeRate = 12.99; // القيمة الافتراضية
+      
+      if (supabaseUrl && supabaseKey) {
+        try {
+          const url = `${supabaseUrl}/rest/v1/currency_exchange_rates?select=rate_to_egp&currency_code=eq.AED&is_active=eq.true&limit=1`;
+          const response = await fetch(url, {
+            headers: {
+              'apikey': supabaseKey,
+              'Authorization': `Bearer ${supabaseKey}`,
+              'Content-Type': 'application/json',
+            },
+          });
+          
+          if (response.ok) {
+            const data = await response.json();
+            if (data && data.length > 0 && data[0].rate_to_egp) {
+              exchangeRate = typeof data[0].rate_to_egp === 'string' 
+                ? parseFloat(data[0].rate_to_egp) 
+                : data[0].rate_to_egp;
+            }
+          }
+        } catch (fetchError) {
+          console.warn('⚠️ فشل جلب سعر الصرف، استخدام القيمة الافتراضية:', fetchError);
+        }
+      }
+      
+      const discountPriceEgp = discountPrice * multiplier * exchangeRate;
+      
+      console.log('💰 حساب سعر الخصم لفترة محدودة:', {
+        discountPrice,
+        multiplier,
+        exchangeRate,
+        discountPriceEgp: discountPriceEgp.toFixed(2)
+      });
+      
+      setNewProduct(prev => {
+        const newDiscountPriceEgp = discountPriceEgp.toFixed(2);
+        const strikethroughPrice = parseFloat(prev.strikethrough_price || '0');
+        
+        // إذا كان هناك رقم مشطوب عليه، احسب نسبة الخصم تلقائياً
+        let newLimitedDiscountPercentage = prev.limited_time_discount_percentage;
+        if (strikethroughPrice > 0 && discountPriceEgp > 0 && strikethroughPrice > discountPriceEgp) {
+          const discountPercentage = ((strikethroughPrice - discountPriceEgp) / strikethroughPrice) * 100;
+          newLimitedDiscountPercentage = discountPercentage.toFixed(2);
+        }
+        
+        return {
+          ...prev,
+          limited_time_discount_price_egp: newDiscountPriceEgp,
+          limited_time_discount_percentage: newLimitedDiscountPercentage
+        };
+      });
+    } catch (error) {
+      console.error('❌ خطأ في حساب سعر الخصم لفترة محدودة:', error);
+    }
+  };
+
   // Function to calculate variant price in EGP
   const calculateVariantPrice = async (purchasePriceAed: string) => {
     try {
@@ -330,8 +407,28 @@ export default function AdminScreen() {
     }
   }, [newProduct.category_id]);
 
+  // Check SKU uniqueness while typing (with debounce)
+  useEffect(() => {
+    if (!newProduct.sku || newProduct.sku.trim() === '') {
+      setSkuStatus(null);
+      return;
+    }
+
+    // Debounce: wait 500ms after user stops typing
+    const timeoutId = setTimeout(async () => {
+      setSkuStatus('checking');
+      // Use editingProduct?.id if available, otherwise use editingProductId
+      const excludeId = editingProduct?.id || editingProductId || undefined;
+      const isUnique = await checkSKUUnique(newProduct.sku, excludeId);
+      setSkuStatus(isUnique ? 'new' : 'exists');
+    }, 500);
+
+    return () => clearTimeout(timeoutId);
+  }, [newProduct.sku, editingProductId, editingProduct?.id]);
+
   // Memoize filtered and sorted products
   const filteredAndSortedProducts = useMemo(() => {
+    console.log('🔄 filteredAndSortedProducts: Starting with', products.length, 'products');
     let filtered = [...products];
     
     // Search filter
@@ -385,6 +482,7 @@ export default function AdminScreen() {
       return productSortOrder === 'asc' ? comparison : -comparison;
     });
     
+    console.log('🔄 filteredAndSortedProducts: After filtering,', filtered.length, 'products remain');
     return filtered;
   }, [products, productSearchQuery, productFilterSection, productFilterCategory, productFilterSource, productSortBy, productSortOrder]);
 
@@ -392,11 +490,19 @@ export default function AdminScreen() {
   const paginatedProductsData = useMemo(() => {
     const startIndex = (productCurrentPage - 1) * productsPerPage;
     const endIndex = startIndex + productsPerPage;
-    return {
+    const paginated = {
       products: filteredAndSortedProducts.slice(startIndex, endIndex),
       totalPages: Math.ceil(filteredAndSortedProducts.length / productsPerPage),
       totalProducts: filteredAndSortedProducts.length,
     };
+    console.log('📄 paginatedProductsData:', {
+      totalProducts: paginated.totalProducts,
+      currentPage: productCurrentPage,
+      productsOnPage: paginated.products.length,
+      startIndex,
+      endIndex
+    });
+    return paginated;
   }, [filteredAndSortedProducts, productCurrentPage, productsPerPage]);
 
   // Memoize grouped variants by color
@@ -1350,38 +1456,14 @@ export default function AdminScreen() {
         } else {
           console.error('❌ Admin: Error loading inventory:', await response.text());
         }
-      } else if (activeTab === 'limited_discounts') {
-        // Load products with limited time discounts
-        const response = await fetch(
-          `${supabaseUrl}/rest/v1/products?select=*,category_data:categories(*,section_data:sections(*))&limited_time_discount_percentage=not.is.null&order=limited_time_discount_end_date.asc`,
-          {
-            headers: {
-              'apikey': supabaseKey || '',
-              'Authorization': `Bearer ${accessToken}`,
-              'Content-Type': 'application/json',
-            }
-          }
-        );
-        
-        if (response.ok) {
-          const data = await response.json();
-          setLimitedDiscountProducts(data || []);
-          console.log('✅ Admin: Limited discount products loaded:', data?.length || 0);
-        } else {
-          console.error('❌ Admin: Error loading limited discount products:', await response.text());
-        }
       } else if (activeTab === 'products') {
         // Get access token once for all product-related requests
         const productsAccessToken = accessToken;
         
-        // Load sections and categories first (needed for product form) - in parallel
-        const [sectionsResult, categoriesResult] = await Promise.all([
-          loadSections(),
-          loadCategories()
-        ]);
+        // Load products first (most important), then load sections/categories in background
+        const startTime = Date.now();
         
         // Load products with category and section data in one query using nested select
-        // Also load primary image and variants count in parallel
         const productsResponse = await fetch(
           `${supabaseUrl}/rest/v1/products?select=*,category_data:categories(*,section_data:sections(*))&order=created_at.desc`,
           {
@@ -1395,9 +1477,12 @@ export default function AdminScreen() {
         
         if (productsResponse.ok) {
           const productsData = await productsResponse.json();
+          const productsLoadTime = Date.now() - startTime;
+          console.log(`📦 Admin: Raw products data received: ${productsData?.length || 0} products (${productsLoadTime}ms)`);
           
           // Get all product IDs for parallel loading
           const productIds = productsData.map((p: any) => p.id);
+          console.log('📦 Admin: Product IDs:', productIds.length);
           
           // Initialize maps
           const variantsCountMap: { [key: string]: number } = {};
@@ -1405,6 +1490,7 @@ export default function AdminScreen() {
           
           // Only load variants and images if we have products
           if (productIds.length > 0) {
+            const variantsStartTime = Date.now();
             // Load variants count and primary images in parallel
             const [variantsCountData, primaryImagesData] = await Promise.all([
               // Load variants count
@@ -1430,6 +1516,9 @@ export default function AdminScreen() {
                 }
               ).then(res => res.ok ? res.json() : []).catch(() => [])
             ]);
+            
+            const variantsLoadTime = Date.now() - variantsStartTime;
+            console.log(`📦 Admin: Variants and images loaded (${variantsLoadTime}ms)`);
             
             // Create maps for fast lookup
             variantsCountData.forEach((variant: any) => {
@@ -1457,11 +1546,41 @@ export default function AdminScreen() {
             primary_image_url: primaryImagesMap[product.id] || null,
           }));
           
+          const totalTime = Date.now() - startTime;
+          console.log(`📦 Admin: Setting products state with ${processedData?.length || 0} products (total: ${totalTime}ms)`);
           setProducts(processedData);
           setProductVariantsCount(variantsCountMap);
-          console.log('✅ Admin: Products loaded:', processedData?.length || 0);
+          console.log(`✅ Admin: Products loaded: ${processedData?.length || 0} products`);
+          if (processedData && processedData.length > 0) {
+            console.log('📦 Admin: First product sample:', {
+              id: processedData[0].id,
+              name: processedData[0].name,
+              category_id: processedData[0].category_id,
+              has_category_data: !!processedData[0].category_data,
+              price: processedData[0].price,
+              purchase_price_aed: processedData[0].purchase_price_aed,
+              selling_price_egp: processedData[0].selling_price_egp,
+              sku: processedData[0].sku
+            });
+          } else {
+            console.log('⚠️ Admin: No products in processedData');
+          }
+          
+          // Load sections and categories in background (for product form) - don't wait for them
+          Promise.all([
+            loadSections(),
+            loadCategories()
+          ]).catch(err => console.warn('⚠️ Admin: Error loading sections/categories in background:', err));
         } else {
-          console.error('❌ Admin: Error loading products:', await productsResponse.text());
+          const errorText = await productsResponse.text();
+          console.error('❌ Admin: Error loading products:', productsResponse.status, errorText);
+          setProducts([]); // Clear products on error
+          
+          // Still try to load sections/categories for the form
+          Promise.all([
+            loadSections(),
+            loadCategories()
+          ]).catch(err => console.warn('⚠️ Admin: Error loading sections/categories:', err));
         }
       } else if (activeTab === 'users') {
         await loadUsers();
@@ -2859,6 +2978,7 @@ export default function AdminScreen() {
 
       sweetAlert.showSuccess('نجح', 'تم إضافة المنتج بنجاح', () => {
         // Reset form
+        setSkuStatus(null); // Reset SKU status
         setNewProduct({
           name: '',
           description: '',
@@ -2869,7 +2989,8 @@ export default function AdminScreen() {
           strikethrough_price: '',
           original_price: '',
           discount_percentage: '',
-          limited_time_discount_price: '',
+          limited_time_discount_price_aed: '',
+          limited_time_discount_price_egp: '',
           limited_time_discount_percentage: '',
           limited_time_discount_start_date: '',
           limited_time_discount_end_date: '',
@@ -2911,6 +3032,7 @@ export default function AdminScreen() {
     console.log('📦 Product data:', JSON.stringify(product, null, 2));
     
     setEditingProduct(product);
+    setSkuStatus(null); // Reset SKU status when starting to edit
     // الحصول على section_id من الفئة المرتبطة بالمنتج
     const productCategory = categories.find(c => c.id === product.category_id);
     const sectionId = productCategory?.section_id || product.section_data?.id || '';
@@ -2925,7 +3047,8 @@ export default function AdminScreen() {
       strikethrough_price: (product.strikethrough_price || '').toString(),
       original_price: (product.original_price || '').toString(),
       discount_percentage: (product.discount_percentage || '').toString(),
-      limited_time_discount_price: (() => {
+      limited_time_discount_price_aed: '', // سيتم إدخاله يدوياً عند التعديل
+      limited_time_discount_price_egp: (() => {
         // حساب سعر الخصم لفترة محدودة من النسبة المئوية والرقم المشطوب عليه
         const strikethroughPrice = product.strikethrough_price || 0;
         const discountPercentage = product.limited_time_discount_percentage || 0;
@@ -2962,7 +3085,8 @@ export default function AdminScreen() {
       strikethrough_price: String(newProductData.strikethrough_price || ''),
       original_price: String(newProductData.original_price || ''),
       discount_percentage: String(newProductData.discount_percentage || ''),
-      limited_time_discount_price: String(newProductData.limited_time_discount_price || ''),
+      limited_time_discount_price_aed: String(newProductData.limited_time_discount_price_aed || ''),
+      limited_time_discount_price_egp: String(newProductData.limited_time_discount_price_egp || ''),
       limited_time_discount_percentage: String(newProductData.limited_time_discount_percentage || ''),
       limited_time_discount_start_date: String(newProductData.limited_time_discount_start_date || ''),
       limited_time_discount_end_date: String(newProductData.limited_time_discount_end_date || ''),
@@ -3217,20 +3341,21 @@ export default function AdminScreen() {
     }
 
     setLoading(true);
+    const updateStartTime = performance.now();
     console.log('🔄 Starting product update...');
     console.log('📦 productVariants at start of update:', productVariants.length, 'variants');
-    console.log('📦 productVariants details at start:', JSON.stringify(productVariants, null, 2));
     try {
       const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
       const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
       
       // Get access_token (with auto-refresh if expired)
+      const tokenStartTime = performance.now();
       const accessToken = await getAccessToken();
-      // Define updateAccessToken at function scope for use throughout
       const updateAccessToken = accessToken || await getAccessToken();
-      console.log('🔑 Access token obtained, length:', accessToken?.length || 0);
+      console.log(`🔑 Access token obtained (${Math.round(performance.now() - tokenStartTime)}ms)`);
 
       // Update product
+      const productUpdateStartTime = performance.now();
       const productResponse = await fetch(`${supabaseUrl}/rest/v1/products?id=eq.${editingProduct.id}`, {
         method: 'PATCH',
         headers: {
@@ -3270,6 +3395,7 @@ export default function AdminScreen() {
         const errorText = await productResponse.text();
         throw new Error(errorText);
       }
+      console.log(`⏱️ Product update completed (${Math.round(performance.now() - productUpdateStartTime)}ms)`);
 
       // Update product images if new images were added
       // Only update general images (variant_id is null), not variant-specific images
@@ -3326,109 +3452,48 @@ export default function AdminScreen() {
 
 
           // Insert new general images (variant_id is null) using fetch directly
-          console.log('📤 Starting to insert', validImages.length, 'images one by one...');
-          console.log('🔑 Using access token for update, length:', updateAccessToken?.length || 0);
+          // OPTIMIZED: Insert all images in parallel instead of sequentially
+          const imageInsertStartTime = performance.now();
+          console.log('📤 Starting to insert', validImages.length, 'images in parallel...');
           
-          // Verify token is valid by checking user info
-          try {
-            console.log('🔍 Verifying access token before insert...');
-            const userCheckResponse = await fetch(`${supabaseUrl}/auth/v1/user`, {
+          // Insert all images in parallel using Promise.all
+          const imagePromises = validImages.map((img, index) => 
+            fetch(`${supabaseUrl}/rest/v1/product_images?select=*`, {
+              method: 'POST',
               headers: {
+                'Content-Type': 'application/json',
                 'apikey': supabaseKey,
                 'Authorization': `Bearer ${updateAccessToken}`,
+                'Prefer': 'return=representation',
               },
-            });
-            
-            if (userCheckResponse.ok) {
-              const userData = await userCheckResponse.json();
-              console.log('✅ Token verified, user ID:', userData.id);
-              console.log('✅ User email:', userData.email);
-              
-              // Check user role in users table
-              const userRoleResponse = await fetch(`${supabaseUrl}/rest/v1/users?id=eq.${userData.id}&select=id,role`, {
-                headers: {
-                  'apikey': supabaseKey,
-                  'Authorization': `Bearer ${updateAccessToken}`,
-                },
-              });
-              
-              if (userRoleResponse.ok) {
-                const userRoleData = await userRoleResponse.json();
-                console.log('✅ User role data:', userRoleData);
-                if (userRoleData && userRoleData.length > 0) {
-                  console.log('✅ User role:', userRoleData[0].role);
-                  if (userRoleData[0].role !== 'admin' && userRoleData[0].role !== 'manager') {
-                    console.error('❌ User does not have admin or manager role!');
-                    sweetAlert.showError('خطأ', 'ليس لديك صلاحية لإضافة الصور. يجب أن تكون admin أو manager.');
-                    return;
-                  }
-                } else {
-                  console.error('❌ User not found in users table!');
-                  sweetAlert.showError('خطأ', 'المستخدم غير موجود في جدول users.');
-                  return;
-                }
-              } else {
-                console.error('❌ Failed to check user role:', userRoleResponse.status);
-              }
-            } else {
-              const errorText = await userCheckResponse.text();
-              console.error('❌ Token verification failed:', userCheckResponse.status, errorText);
-              sweetAlert.showError('خطأ', 'فشل التحقق من المصادقة. يرجى تسجيل الدخول مرة أخرى.');
-              return;
-            }
-          } catch (verifyError: any) {
-            console.error('❌ Error verifying token:', verifyError);
-            sweetAlert.showError('خطأ', 'فشل التحقق من المصادقة.');
-            return;
-          }
-          
-          // Insert images one by one using fetch directly with Authorization header
-          // This ensures RLS policies work correctly because Supabase REST API recognizes the Authorization header
-          const insertedImages: any[] = [];
-          const failedImages: Array<{ index: number; error: string }> = [];
-          
-          for (let index = 0; index < validImages.length; index++) {
-            const img = validImages[index];
-            try {
-              console.log(`📤 Inserting image ${index + 1}/${validImages.length}:`, img.url);
-              
-              // Use fetch directly with Authorization header (ensures RLS works correctly)
-              const response = await fetch(`${supabaseUrl}/rest/v1/product_images?select=*`, {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  'apikey': supabaseKey,
-                  'Authorization': `Bearer ${updateAccessToken}`,
-                  'Prefer': 'return=representation',
-                },
-                body: JSON.stringify({
-                  product_id: editingProduct.id,
-                  image_url: img.url!,
-                  variant_id: null, // General images, not variant-specific
-                  display_order: index,
-                  is_primary: index === 0,
-                }),
-              });
-              
+              body: JSON.stringify({
+                product_id: editingProduct.id,
+                image_url: img.url!,
+                variant_id: null, // General images, not variant-specific
+                display_order: index,
+                is_primary: index === 0,
+              }),
+            }).then(async (response) => {
               if (!response.ok) {
                 const errorData = await response.json().catch(() => ({ message: response.statusText }));
-                console.error(`❌ Failed to insert image ${index + 1}:`, errorData);
-                console.error(`❌ Response status:`, response.status);
-                console.error(`❌ Response headers:`, Object.fromEntries(response.headers.entries()));
-                failedImages.push({ index, error: errorData.message || `HTTP ${response.status}` });
-              } else {
-                const insertedImage = await response.json();
-                // Supabase returns array when using select=*, so get first element
-                const imageData = Array.isArray(insertedImage) ? insertedImage[0] : insertedImage;
-                console.log(`✅ Successfully inserted image ${index + 1}:`, imageData);
-                insertedImages.push(imageData);
+                throw new Error(errorData.message || `HTTP ${response.status}`);
               }
-            } catch (error: any) {
-              console.error(`❌ Exception inserting image ${index + 1}:`, error);
-              console.error(`❌ Exception details:`, JSON.stringify(error, null, 2));
-              failedImages.push({ index, error: error?.message || 'خطأ غير معروف' });
-            }
-          }
+              const insertedImage = await response.json();
+              return Array.isArray(insertedImage) ? insertedImage[0] : insertedImage;
+            }).catch((error: any) => {
+              console.error(`❌ Failed to insert image ${index + 1}:`, error);
+              return { error: error?.message || 'خطأ غير معروف', index };
+            })
+          );
+          
+          const imageResults = await Promise.all(imagePromises);
+          const insertedImages = imageResults.filter((result: any) => !result.error);
+          const failedImages = imageResults.filter((result: any) => result.error).map((result: any) => ({
+            index: result.index,
+            error: result.error
+          }));
+          
+          console.log(`⏱️ Image insertion completed (${Math.round(performance.now() - imageInsertStartTime)}ms)`);
           
           // Report results
           if (failedImages.length > 0) {
@@ -3438,42 +3503,6 @@ export default function AdminScreen() {
           } else {
             console.log(`✅ Successfully inserted all ${insertedImages.length} images!`);
           }
-          
-          // Verify images were saved in database (using fetch instead of supabase client to avoid hanging)
-          try {
-            console.log('🔍 DEBUG: About to verify images with fetch...');
-            const verifyUrl = `${supabaseUrl}/rest/v1/product_images?product_id=eq.${editingProduct.id}&variant_id=is.null&select=id,image_url,display_order`;
-            const verifyResponse = await fetch(verifyUrl, {
-              method: 'GET',
-              headers: {
-                'apikey': supabaseKey || '',
-                'Authorization': `Bearer ${updateAccessToken}`,
-                'Content-Type': 'application/json',
-              },
-            });
-            
-            console.log('🔍 DEBUG: Fetch verification response status:', verifyResponse.status);
-            
-            if (!verifyResponse.ok) {
-              const errorText = await verifyResponse.text();
-              console.error('❌ Failed to verify images:', verifyResponse.status, errorText);
-            } else {
-              const savedImages = await verifyResponse.json();
-              console.log(`🔍 Verification: Found ${savedImages?.length || 0} images in database for product ${editingProduct.id}`);
-              console.log('🔍 Saved images:', savedImages?.map((img: any) => ({ id: img.id, url: img.image_url, order: img.display_order })));
-              
-              if (savedImages && savedImages.length !== validImages.length) {
-                console.warn(`⚠️ Mismatch: Expected ${validImages.length} images, but found ${savedImages.length} in database`);
-              } else if (savedImages && savedImages.length === validImages.length) {
-                console.log(`✅ Verification passed: All ${validImages.length} images are in database`);
-              }
-            }
-            console.log('🔍 DEBUG: Finished verification try block');
-          } catch (verifyError) {
-            console.error('❌ Error verifying images:', verifyError);
-            console.error('❌ Error details:', JSON.stringify(verifyError, null, 2));
-          }
-          console.log('🔍 DEBUG: After verification catch block');
         }
       }
 
@@ -3487,11 +3516,12 @@ export default function AdminScreen() {
       console.log('🔍 DEBUG: productVariants state:', JSON.stringify(productVariants, null, 2));
 
       // Update product variants
+      const variantUpdateStartTime = performance.now();
       console.log('🔄 Starting to update product variants...');
       console.log('📦 Current productVariants state:', productVariants.length, 'variants');
-      console.log('📦 productVariants details:', JSON.stringify(productVariants, null, 2));
       
       // Delete old variants
+      const deleteVariantsStartTime = performance.now();
       console.log('🗑️ Deleting old variants for product:', editingProduct.id);
       const deleteVariantsResponse = await fetch(`${supabaseUrl}/rest/v1/product_variants?product_id=eq.${editingProduct.id}`, {
         method: 'DELETE',
@@ -3501,9 +3531,10 @@ export default function AdminScreen() {
           'Content-Type': 'application/json',
         }
       });
-      console.log('🗑️ Delete variants response status:', deleteVariantsResponse.status);
+      console.log(`⏱️ Variant deletion completed (${Math.round(performance.now() - deleteVariantsStartTime)}ms)`);
 
       // Insert new variants
+      const insertVariantsStartTime = performance.now();
       console.log('📦 Updating productVariants:', productVariants.length);
       console.log('📦 productVariants data:', JSON.stringify(productVariants, null, 2));
       
@@ -3561,106 +3592,206 @@ export default function AdminScreen() {
         }
 
           const variantsData = await variantsResponse.json();
+          console.log(`⏱️ Variant insertion completed (${Math.round(performance.now() - insertVariantsStartTime)}ms)`);
           console.log('✅ Variants updated successfully:', variantsData.length);
-        console.log('📦 Variants data from database:', JSON.stringify(variantsData, null, 2));
           
           // Link variant images to product_images
         // Match variants from database with variants from state that have image_url
+          const variantImageStartTime = performance.now();
           console.log('🔗 Starting to link variant images to product_images (update)...');
         const variantsWithImages = productVariants.filter(v => (v as any).image_url);
         console.log('🔗 Variants with images in state:', variantsWithImages.length, 'out of', productVariants.length);
         
         if (variantsWithImages.length > 0) {
-          for (const stateVariant of variantsWithImages) {
+          // OPTIMIZED: Process variant images in parallel
+          const variantImagePromises = variantsWithImages.map(async (stateVariant) => {
             // Find matching variant from database by color and size
             const matchingVariant = variantsData.find((v: any) => 
               v.color === stateVariant.color && 
               v.size === stateVariant.size
             );
             
-            if (matchingVariant) {
-              const variantImageUrl = (stateVariant as any).image_url;
-              console.log('🖼️ Linking variant image for update:', matchingVariant.id, matchingVariant.color, matchingVariant.size, variantImageUrl);
-              
-              try {
-                // Verify that we have a real access_token, not just anon key
-                if (accessToken === supabaseKey) {
-                  console.error('❌ CRITICAL: No valid access_token found for variant image (update)! Using anon key will fail RLS policies.');
-                  continue; // Skip this variant image
-                }
-                
-                // Delete old variant images for this specific variant using direct fetch
-                console.log('🗑️ Deleting old variant images for variant:', matchingVariant.id);
-                const deleteUrl = `${supabaseUrl}/rest/v1/product_images?product_id=eq.${editingProduct.id}&variant_id=eq.${matchingVariant.id}`;
-                const deleteResponse = await fetch(deleteUrl, {
-                  method: 'DELETE',
-                  headers: {
-                    'apikey': supabaseKey || '',
-                    'Authorization': `Bearer ${accessToken}`,
-                    'Content-Type': 'application/json',
-                    'Prefer': 'return=minimal'
-                  }
-                });
-                
-                if (!deleteResponse.ok) {
-                  const errorText = await deleteResponse.text();
-                  console.error('❌ Failed to delete old variant images:', matchingVariant.id, deleteResponse.status, errorText);
-                } else {
-                  console.log('✅ Old variant images deleted for variant:', matchingVariant.id);
-                }
-                
-                // Add variant image to product_images with variant_id using fetch directly
-                console.log('⏳ Starting variant image insert with fetch (update)...');
-                
-                // Use fetch directly with Authorization header (ensures RLS works correctly)
-                const response = await fetch(`${supabaseUrl}/rest/v1/product_images?select=*`, {
-                  method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/json',
-                    'apikey': supabaseKey,
-                    'Authorization': `Bearer ${updateAccessToken}`,
-                    'Prefer': 'return=representation',
-                  },
-                  body: JSON.stringify({
-                    product_id: editingProduct.id,
-                    image_url: variantImageUrl,
-                    variant_id: matchingVariant.id,
-                    display_order: 0,
-                    is_primary: false,
-                  }),
-                });
-                
-                if (!response.ok) {
-                  const errorData = await response.json().catch(() => ({ message: response.statusText }));
-                  console.error('❌ Failed to link variant image (update):', matchingVariant.id, errorData);
-                  console.error('❌ Response status:', response.status);
-                } else {
-                  const imageData = await response.json();
-                  const imageResult = Array.isArray(imageData) ? imageData[0] : imageData;
-                  console.log('✅ Variant image linked successfully (update):', matchingVariant.id, variantImageUrl, imageResult);
-                }
-              } catch (error: any) {
-                console.error('❌ Exception during variant image insert (update):', matchingVariant.id, error);
-                console.error('❌ Error message:', error?.message);
-                console.error('❌ Error stack:', error?.stack);
-              }
-            } else {
+            if (!matchingVariant) {
               console.warn('⚠️ Could not find matching variant in database for (update):', stateVariant.color, stateVariant.size);
+              return { success: false, variantId: null };
             }
-          }
+            
+            // Verify that we have a real access_token, not just anon key
+            if (accessToken === supabaseKey) {
+              console.error('❌ CRITICAL: No valid access_token found for variant image (update)! Using anon key will fail RLS policies.');
+              return { success: false, variantId: matchingVariant.id };
+            }
+            
+            const variantImageUrl = (stateVariant as any).image_url;
+            console.log('🖼️ Linking variant image for update:', matchingVariant.id, matchingVariant.color, matchingVariant.size, variantImageUrl);
+            
+            try {
+              // Delete old variant images for this specific variant using direct fetch
+              const deleteUrl = `${supabaseUrl}/rest/v1/product_images?product_id=eq.${editingProduct.id}&variant_id=eq.${matchingVariant.id}`;
+              const deleteResponse = await fetch(deleteUrl, {
+                method: 'DELETE',
+                headers: {
+                  'apikey': supabaseKey || '',
+                  'Authorization': `Bearer ${accessToken}`,
+                  'Content-Type': 'application/json',
+                  'Prefer': 'return=minimal'
+                }
+              });
+              
+              if (!deleteResponse.ok) {
+                const errorText = await deleteResponse.text();
+                console.error('❌ Failed to delete old variant images:', matchingVariant.id, deleteResponse.status, errorText);
+              }
+              
+              // Add variant image to product_images with variant_id using fetch directly
+              const response = await fetch(`${supabaseUrl}/rest/v1/product_images?select=*`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'apikey': supabaseKey,
+                  'Authorization': `Bearer ${updateAccessToken}`,
+                  'Prefer': 'return=representation',
+                },
+                body: JSON.stringify({
+                  product_id: editingProduct.id,
+                  image_url: variantImageUrl,
+                  variant_id: matchingVariant.id,
+                  display_order: 0,
+                  is_primary: false,
+                }),
+              });
+              
+              if (!response.ok) {
+                const errorData = await response.json().catch(() => ({ message: response.statusText }));
+                console.error('❌ Failed to link variant image (update):', matchingVariant.id, errorData);
+                return { success: false, variantId: matchingVariant.id };
+              } else {
+                const imageData = await response.json();
+                const imageResult = Array.isArray(imageData) ? imageData[0] : imageData;
+                console.log('✅ Variant image linked successfully (update):', matchingVariant.id, variantImageUrl);
+                return { success: true, variantId: matchingVariant.id };
+              }
+            } catch (error: any) {
+              console.error('❌ Exception during variant image insert (update):', matchingVariant.id, error);
+              return { success: false, variantId: matchingVariant.id };
+            }
+          });
           
+          const variantImageResults = await Promise.all(variantImagePromises);
+          const successfulVariants = variantImageResults.filter(r => r.success).length;
+          console.log(`⏱️ Variant images processed (${Math.round(performance.now() - variantImageStartTime)}ms): ${successfulVariants}/${variantsWithImages.length} successful`);
           console.log('🔗 Finished linking variant images (update)');
         } else {
           console.log('⚠️ No variants with images to link');
         }
+        console.log(`⏱️ Total variant update time: ${Math.round(performance.now() - variantUpdateStartTime)}ms`);
       } else {
         console.log('⚠️ No variants to insert (productVariants.length === 0)');
         console.log('⚠️ productVariants state is empty, skipping variant insertion');
       }
 
+      const totalUpdateTime = Math.round(performance.now() - updateStartTime);
+      console.log(`⏱️ Total update time: ${totalUpdateTime}ms`);
+      
       sweetAlert.showSuccess('نجح', 'تم تحديث المنتج بنجاح', () => {
         cancelEdit();
-        loadData();
+        // OPTIMIZED: Only reload products instead of all data
+        const reloadStartTime = performance.now();
+        if (activeTab === 'products') {
+          // Reload products with images and variants for better performance
+          const reloadProducts = async () => {
+            try {
+              const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+              const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+              const accessToken = await getAccessToken();
+              
+              // Load products with category and section data
+              const productsResponse = await fetch(
+                `${supabaseUrl}/rest/v1/products?select=*,category_data:categories(*,section_data:sections(*))&order=created_at.desc`,
+                {
+                  headers: {
+                    'apikey': supabaseKey || '',
+                    'Authorization': `Bearer ${accessToken}`,
+                    'Content-Type': 'application/json',
+                  }
+                }
+              );
+              
+              if (productsResponse.ok) {
+                const productsData = await productsResponse.json();
+                const productIds = productsData.map((p: any) => p.id);
+                
+                // Initialize maps
+                const variantsCountMap: { [key: string]: number } = {};
+                const primaryImagesMap: { [key: string]: string } = {};
+                
+                // Load variants count and primary images in parallel
+                if (productIds.length > 0) {
+                  const [variantsCountData, primaryImagesData] = await Promise.all([
+                    // Load variants count
+                    fetch(
+                      `${supabaseUrl}/rest/v1/product_variants?select=product_id&product_id=in.(${productIds.map((id: string) => `"${id}"`).join(',')})`,
+                      {
+                        headers: {
+                          'apikey': supabaseKey || '',
+                          'Authorization': `Bearer ${accessToken}`,
+                          'Content-Type': 'application/json',
+                        }
+                      }
+                    ).then(res => res.ok ? res.json() : []).catch(() => []),
+                    // Load primary images (one per product)
+                    fetch(
+                      `${supabaseUrl}/rest/v1/product_images?select=product_id,image_url&is_primary=eq.true&variant_id=is.null&product_id=in.(${productIds.map((id: string) => `"${id}"`).join(',')})`,
+                      {
+                        headers: {
+                          'apikey': supabaseKey || '',
+                          'Authorization': `Bearer ${accessToken}`,
+                          'Content-Type': 'application/json',
+                        }
+                      }
+                    ).then(res => res.ok ? res.json() : []).catch(() => [])
+                  ]);
+                  
+                  // Create maps for fast lookup
+                  variantsCountData.forEach((variant: any) => {
+                    variantsCountMap[variant.product_id] = (variantsCountMap[variant.product_id] || 0) + 1;
+                  });
+                  
+                  primaryImagesData.forEach((img: any) => {
+                    if (!primaryImagesMap[img.product_id]) {
+                      primaryImagesMap[img.product_id] = img.image_url;
+                    }
+                  });
+                }
+                
+                // Initialize all products with 0 variants if they have no variants
+                productIds.forEach(id => {
+                  if (!variantsCountMap[id]) {
+                    variantsCountMap[id] = 0;
+                  }
+                });
+                
+                // Process products with variants count and primary image
+                const processedData = productsData.map((product: any) => ({
+                  ...product,
+                  variants_count: variantsCountMap[product.id] || 0,
+                  primary_image_url: primaryImagesMap[product.id] || null,
+                }));
+                
+                setProducts(processedData);
+                setProductVariantsCount(variantsCountMap);
+                console.log(`⏱️ Products reloaded with images (${Math.round(performance.now() - reloadStartTime)}ms)`);
+              }
+            } catch (error) {
+              console.error('❌ Error reloading products:', error);
+              // Fallback to full loadData if reload fails
+              loadData();
+            }
+          };
+          reloadProducts();
+        } else {
+          loadData();
+        }
       });
     } catch (error: any) {
       console.error('❌ Error updating product:', error);
@@ -4262,19 +4393,6 @@ export default function AdminScreen() {
             الأقسام
           </Text>
         </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.tab, activeTab === 'limited_discounts' && styles.activeTab]}
-          onPress={() => setActiveTab('limited_discounts')}
-        >
-          <Text style={[
-            styles.tabText, 
-            isDarkMode && styles.tabTextDark,
-            activeTab === 'limited_discounts' && styles.activeTabText,
-            activeTab === 'limited_discounts' && isDarkMode && styles.activeTabTextDark
-          ]}>
-            الخصومات المحدودة
-          </Text>
-        </TouchableOpacity>
       </View>
 
       <ScrollView style={styles.content} contentContainerStyle={styles.scrollContent}>
@@ -4868,231 +4986,299 @@ export default function AdminScreen() {
                   <Text style={styles.cancelButtonText}>إلغاء التعديل</Text>
                 </TouchableOpacity>
               )}
+              {/* اسم المنتج وكود المنتج جنباً إلى جنب */}
+              <View style={{ flexDirection: 'row', gap: 10, marginBottom: 10 }}>
+                <View style={{ flex: 2 }}>
+                  <Text style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>اسم المنتج *</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="أدخل اسم المنتج"
+                    value={newProduct.name || ''}
+                    onChangeText={(text) => setNewProduct({ ...newProduct, name: text })}
+                  />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>كود المنتج (SKU) *</Text>
+                  <TextInput
+                    style={[
+                      styles.input,
+                      skuStatus === 'exists' ? { borderColor: '#EF4444', borderWidth: 2 } : {},
+                      skuStatus === 'new' ? { borderColor: '#10B981', borderWidth: 2 } : {}
+                    ]}
+                    placeholder="أدخل كود المنتج"
+                    value={newProduct.sku || ''}
+                    onChangeText={(text) => {
+                      setNewProduct({ ...newProduct, sku: text });
+                      setSkuStatus(null); // Reset status when typing
+                    }}
+                  />
+                </View>
+              </View>
+              {skuStatus === 'checking' && (
+                <Text style={styles.helpText}>
+                  🔍 جاري التحقق من الكود...
+                </Text>
+              )}
+              {skuStatus === 'exists' && (
+                <Text style={[styles.helpText, { color: '#EF4444' }]}>
+                  ⚠️ هذا الكود موجود بالفعل! يرجى استخدام كود آخر
+                </Text>
+              )}
+              {skuStatus === 'new' && (
+                <Text style={[styles.helpText, { color: '#10B981' }]}>
+                  ✅ هذا الكود جديد ومتاح للاستخدام
+                </Text>
+              )}
+              {!skuStatus && newProduct.sku && (
+                <Text style={styles.helpText}>
+                  ⚠️ الكود يجب أن يكون فريداً ولا يتكرر
+                </Text>
+              )}
+              <Text style={{ fontSize: 11, color: '#6B7280', marginBottom: 4, marginTop: 8 }}>الوصف</Text>
               <TextInput
                 style={styles.input}
-                placeholder="اسم المنتج"
-                value={newProduct.name}
-                onChangeText={(text) => setNewProduct({ ...newProduct, name: text })}
-              />
-              <TextInput
-                style={styles.input}
-                placeholder="الوصف"
-                value={newProduct.description}
+                placeholder="أدخل وصف المنتج"
+                value={newProduct.description || ''}
                 onChangeText={(text) => setNewProduct({ ...newProduct, description: text })}
                 multiline
               />
-              {/* Pricing Section - قسم التسعير */}
-              <View style={styles.sectionDivider}>
-                <Text style={styles.sectionTitle}>التسعير</Text>
-              </View>
-              
-              {/* السعر الأصلي (سعر الشراء بالدرهم) */}
-              <TextInput
-                style={styles.input}
-                placeholder="السعر الأصلي (سعر الشراء بالدرهم الإماراتي) *"
-                value={newProduct.purchase_price_aed}
-                onChangeText={(text) => {
-                  setNewProduct({ ...newProduct, purchase_price_aed: text });
-                  // حساب سعر البيع تلقائياً (سيستخدم 1.0 كمعامل تكلفة افتراضي إذا كان فارغاً)
-                  if (text) {
-                    const multiplier = newProduct.cost_multiplier || '1.0';
-                    calculateSellingPrice(text, multiplier);
-                  } else {
-                    // إذا تم حذف سعر الشراء، امسح سعر البيع
-                    setNewProduct(prev => ({ ...prev, selling_price_egp: '' }));
-                  }
-                }}
-                keyboardType="decimal-pad"
-              />
-              
-              {/* معامل التكلفة */}
-              <TextInput
-                style={styles.input}
-                placeholder="معامل التكلفة (افتراضي: 1.0) *"
-                value={newProduct.cost_multiplier}
-                onChangeText={(text) => {
-                  setNewProduct({ ...newProduct, cost_multiplier: text });
-                  // حساب سعر البيع تلقائياً إذا كان هناك سعر شراء
-                  if (newProduct.purchase_price_aed && text) {
-                    calculateSellingPrice(newProduct.purchase_price_aed, text);
-                  }
-                }}
-                keyboardType="decimal-pad"
-              />
-              
-              {/* سعر البيع بالجنيه المصري (يتم حسابه تلقائياً) */}
-              <TextInput
-                style={[styles.input, { backgroundColor: '#f0f0f0' }]}
-                placeholder="سعر البيع بالجنيه المصري (يتم حسابه تلقائياً)"
-                value={newProduct.selling_price_egp}
-                editable={false}
-              />
-              <Text style={styles.helpText}>
-                💡 يتم حساب سعر البيع تلقائياً: (سعر الشراء بالدرهم × معامل التكلفة × سعر الصرف)
-              </Text>
-              
-              {/* الرقم المشطوب عليه */}
-              <TextInput
-                style={[styles.input, (() => {
-                  const strikethroughPrice = parseFloat(newProduct.strikethrough_price || '0');
-                  const sellingPrice = parseFloat(newProduct.selling_price_egp || '0');
-                  if (strikethroughPrice > 0 && sellingPrice > 0 && strikethroughPrice <= sellingPrice) {
-                    return { borderColor: '#EF4444', borderWidth: 2 };
-                  }
-                  return {};
-                })()]}
-                placeholder="الرقم المشطوب عليه (يدوي بالجنيه المصري) - يجب أن يكون أعلى من سعر البيع"
-                value={newProduct.strikethrough_price}
-                onChangeText={(text) => {
-                  setNewProduct({ ...newProduct, strikethrough_price: text });
+              {/* Pricing and Limited Discount Sections - جنباً إلى جنب */}
+              <View style={{ flexDirection: 'row', gap: 10, marginBottom: 10 }}>
+                {/* قسم التسعير */}
+                <View style={{ flex: 1 }}>
+                  <View style={styles.sectionDivider}>
+                    <Text style={styles.sectionTitle}>التسعير</Text>
+                  </View>
                   
-                  // حساب نسبة الخصم تلقائياً
-                  const strikethroughPrice = parseFloat(text);
-                  const sellingPrice = parseFloat(newProduct.selling_price_egp || '0');
-                  
-                  if (strikethroughPrice > 0 && sellingPrice > 0 && strikethroughPrice > sellingPrice) {
-                    // حساب نسبة الخصم: ((السعر المشطوب - سعر البيع) / السعر المشطوب) × 100
-                    const discountPercentage = ((strikethroughPrice - sellingPrice) / strikethroughPrice) * 100;
-                    setNewProduct(prev => {
-                      // إذا كان هناك سعر خصم لفترة محدودة، أعد حساب نسبة الخصم لفترة محدودة
-                      const limitedDiscountPrice = parseFloat(prev.limited_time_discount_price || '0');
-                      let newLimitedDiscountPercentage = prev.limited_time_discount_percentage;
-                      if (limitedDiscountPrice > 0 && strikethroughPrice > limitedDiscountPrice) {
-                        const limitedDiscountPercentage = ((strikethroughPrice - limitedDiscountPrice) / strikethroughPrice) * 100;
-                        newLimitedDiscountPercentage = limitedDiscountPercentage.toFixed(2);
+                  {/* السعر الأصلي (سعر الشراء بالدرهم) */}
+                  <Text style={{ fontSize: 11, color: '#6B7280', marginBottom: 4, marginTop: 4 }}>سعر الشراء بالدرهم الإماراتي *</Text>
+                  <TextInput
+                    style={[styles.input, { backgroundColor: '#DBEAFE', borderColor: '#3B82F6', borderWidth: 1, fontSize: 14, paddingVertical: 10 }]}
+                    placeholder="أدخل السعر"
+                    value={newProduct.purchase_price_aed || ''}
+                    onChangeText={(text) => {
+                      setNewProduct({ ...newProduct, purchase_price_aed: text });
+                      // حساب سعر البيع تلقائياً (سيستخدم 1.0 كمعامل تكلفة افتراضي إذا كان فارغاً)
+                      if (text) {
+                        const multiplier = newProduct.cost_multiplier || '1.0';
+                        calculateSellingPrice(text, multiplier);
+                      } else {
+                        // إذا تم حذف سعر الشراء، امسح سعر البيع
+                        setNewProduct(prev => ({ ...prev, selling_price_egp: '' }));
                       }
-                      return {
-                        ...prev,
-                        strikethrough_price: text,
-                        discount_percentage: discountPercentage.toFixed(2),
-                        limited_time_discount_percentage: newLimitedDiscountPercentage
-                      };
-                    });
-                  } else if (!text || text === '') {
-                    // إذا تم حذف الرقم المشطوب، امسح نسبة الخصم
-                    setNewProduct(prev => ({
-                      ...prev,
-                      strikethrough_price: '',
-                      discount_percentage: '',
-                      limited_time_discount_price: '',
-                      limited_time_discount_percentage: ''
-                    }));
-                  } else if (strikethroughPrice > 0 && sellingPrice > 0 && strikethroughPrice <= sellingPrice) {
-                    // إذا كان الرقم المشطوب أقل من أو يساوي سعر البيع، امسح نسبة الخصم
-                    setNewProduct(prev => ({
-                      ...prev,
-                      strikethrough_price: text,
-                      discount_percentage: '',
-                      limited_time_discount_price: '',
-                      limited_time_discount_percentage: ''
-                    }));
-                  }
-                }}
-                keyboardType="numeric"
-              />
-              {newProduct.strikethrough_price && newProduct.selling_price_egp ? (
-                (() => {
-                  const strikethroughPrice = parseFloat(newProduct.strikethrough_price || '0');
-                  const sellingPrice = parseFloat(newProduct.selling_price_egp || '0');
-                  if (strikethroughPrice > sellingPrice) {
-                    return (
-                      <Text style={styles.helpText}>
-                        💡 تم حساب نسبة الخصم تلقائياً: {newProduct.discount_percentage}%
-                      </Text>
-                    );
-                  } else if (strikethroughPrice > 0 && sellingPrice > 0) {
-                    return (
-                      <Text style={[styles.helpText, { color: '#EF4444' }]}>
-                        ⚠️ الرقم المشطوب عليه يجب أن يكون أعلى من سعر البيع ({sellingPrice} جنيه)
-                      </Text>
-                    );
-                  }
-                  return null;
-                })()
-              ) : null}
-              
-              {/* الخصم لفترة محدودة */}
-              <View style={styles.sectionDivider}>
-                <Text style={styles.sectionTitle}>خصم لفترة محدودة</Text>
+                    }}
+                    keyboardType="decimal-pad"
+                  />
+                  
+                  {/* معامل التكلفة */}
+                  <Text style={{ fontSize: 11, color: '#6B7280', marginBottom: 4, marginTop: 4 }}>معامل التكلفة *</Text>
+                  <TextInput
+                    style={[styles.input, { backgroundColor: '#F3F4F6', borderColor: '#9CA3AF', borderWidth: 1, fontSize: 14, paddingVertical: 10 }]}
+                    placeholder="افتراضي: 1.0"
+                    value={newProduct.cost_multiplier || ''}
+                    onChangeText={(text) => {
+                      setNewProduct({ ...newProduct, cost_multiplier: text });
+                      // حساب سعر البيع تلقائياً إذا كان هناك سعر شراء
+                      if (newProduct.purchase_price_aed && text) {
+                        calculateSellingPrice(newProduct.purchase_price_aed, text);
+                      }
+                    }}
+                    keyboardType="decimal-pad"
+                  />
+                  
+                  {/* سعر البيع بالجنيه المصري (يتم حسابه تلقائياً) */}
+                  <Text style={{ fontSize: 11, color: '#6B7280', marginBottom: 4, marginTop: 4 }}>سعر البيع بالجنيه المصري (محسوب تلقائياً)</Text>
+                  <TextInput
+                    style={[styles.input, { backgroundColor: '#D1FAE5', borderColor: '#10B981', borderWidth: 1, fontSize: 14, paddingVertical: 10 }]}
+                    placeholder="سيتم الحساب تلقائياً"
+                    value={newProduct.selling_price_egp || ''}
+                    editable={false}
+                  />
+                  
+                  {/* الرقم المشطوب عليه */}
+                  <Text style={{ fontSize: 11, color: '#6B7280', marginBottom: 4, marginTop: 4 }}>الرقم المشطوب عليه (يدوي بالجنيه المصري)</Text>
+                  <View style={{ position: 'relative' }}>
+                    {newProduct.strikethrough_price ? (
+                      <View style={{ 
+                        position: 'absolute', 
+                        left: 12, 
+                        top: 12, 
+                        zIndex: 1,
+                        pointerEvents: 'none'
+                      }}>
+                        <Text style={{ 
+                          fontSize: 14, 
+                          color: '#6B7280',
+                          textDecorationLine: 'line-through',
+                        }}>
+                          {newProduct.strikethrough_price}
+                        </Text>
+                      </View>
+                    ) : null}
+                    <TextInput
+                      style={[
+                        styles.input, 
+                        { 
+                          backgroundColor: '#F9FAFB', 
+                          borderColor: '#6B7280', 
+                          borderWidth: 1,
+                          fontSize: 14,
+                          paddingVertical: 10,
+                          color: newProduct.strikethrough_price ? 'transparent' : '#000'
+                        }, 
+                        (() => {
+                          const strikethroughPrice = parseFloat(newProduct.strikethrough_price || '0');
+                          const sellingPrice = parseFloat(newProduct.selling_price_egp || '0');
+                          if (strikethroughPrice > 0 && sellingPrice > 0 && strikethroughPrice <= sellingPrice) {
+                            return { borderColor: '#EF4444', borderWidth: 2 };
+                          }
+                          return {};
+                        })()
+                      ]}
+                      placeholder="يجب أن يكون أعلى من سعر البيع"
+                      value={newProduct.strikethrough_price || ''}
+                      onChangeText={(text) => {
+                      setNewProduct({ ...newProduct, strikethrough_price: text });
+                      
+                      // حساب نسبة الخصم تلقائياً
+                      const strikethroughPrice = parseFloat(text);
+                      const sellingPrice = parseFloat(newProduct.selling_price_egp || '0');
+                      
+                      if (strikethroughPrice > 0 && sellingPrice > 0 && strikethroughPrice > sellingPrice) {
+                        // حساب نسبة الخصم: ((السعر المشطوب - سعر البيع) / السعر المشطوب) × 100
+                        const discountPercentage = ((strikethroughPrice - sellingPrice) / strikethroughPrice) * 100;
+                        setNewProduct(prev => {
+                          // إذا كان هناك سعر خصم لفترة محدودة، أعد حساب نسبة الخصم لفترة محدودة
+                          const limitedDiscountPriceEgp = parseFloat(prev.limited_time_discount_price_egp || '0');
+                          let newLimitedDiscountPercentage = prev.limited_time_discount_percentage;
+                          if (limitedDiscountPriceEgp > 0 && strikethroughPrice > limitedDiscountPriceEgp) {
+                            const limitedDiscountPercentage = ((strikethroughPrice - limitedDiscountPriceEgp) / strikethroughPrice) * 100;
+                            newLimitedDiscountPercentage = limitedDiscountPercentage.toFixed(2);
+                          }
+                          return {
+                            ...prev,
+                            strikethrough_price: text,
+                            discount_percentage: discountPercentage.toFixed(2),
+                            limited_time_discount_percentage: newLimitedDiscountPercentage
+                          };
+                        });
+                      } else if (!text || text === '') {
+                        // إذا تم حذف الرقم المشطوب، امسح نسبة الخصم
+                        setNewProduct(prev => ({
+                          ...prev,
+                          strikethrough_price: '',
+                          discount_percentage: '',
+                          limited_time_discount_price_aed: '',
+                          limited_time_discount_price_egp: '',
+                          limited_time_discount_percentage: ''
+                        }));
+                      } else if (strikethroughPrice > 0 && sellingPrice > 0 && strikethroughPrice <= sellingPrice) {
+                        // إذا كان الرقم المشطوب أقل من أو يساوي سعر البيع، امسح نسبة الخصم
+                        setNewProduct(prev => ({
+                          ...prev,
+                          strikethrough_price: text,
+                          discount_percentage: '',
+                          limited_time_discount_price: '',
+                          limited_time_discount_percentage: ''
+                        }));
+                      }
+                    }}
+                    keyboardType="numeric"
+                  />
+                  </View>
+                  {newProduct.strikethrough_price && newProduct.selling_price_egp ? (
+                    (() => {
+                      const strikethroughPrice = parseFloat(newProduct.strikethrough_price || '0');
+                      const sellingPrice = parseFloat(newProduct.selling_price_egp || '0');
+                      if (strikethroughPrice > sellingPrice) {
+                        return (
+                          <Text style={[styles.helpText, { fontSize: 11 }]}>
+                            💡 نسبة الخصم: {newProduct.discount_percentage}%
+                          </Text>
+                        );
+                      } else if (strikethroughPrice > 0 && sellingPrice > 0) {
+                        return (
+                          <Text style={[styles.helpText, { color: '#EF4444', fontSize: 11 }]}>
+                            ⚠️ يجب أن يكون أعلى من {sellingPrice}
+                          </Text>
+                        );
+                      }
+                      return null;
+                    })()
+                  ) : null}
+                </View>
+                
+                {/* قسم خصم لفترة محدودة */}
+                <View style={{ flex: 1 }}>
+                  <View style={styles.sectionDivider}>
+                    <Text style={styles.sectionTitle}>خصم لفترة محدودة</Text>
+                  </View>
+                  <Text style={{ fontSize: 11, color: '#6B7280', marginBottom: 4, marginTop: 4 }}>سعر الخصم بالدرهم الإماراتي (اختياري)</Text>
+                  <TextInput
+                    style={[styles.input, { backgroundColor: '#FCE7F3', borderColor: '#EC4899', borderWidth: 1, fontSize: 14, paddingVertical: 10 }]}
+                    placeholder="أدخل السعر"
+                    value={newProduct.limited_time_discount_price_aed || ''}
+                    onChangeText={async (text) => {
+                      setNewProduct({ ...newProduct, limited_time_discount_price_aed: text });
+                      // حساب السعر بالجنيه المصري تلقائياً
+                      if (text) {
+                        await calculateLimitedTimeDiscountPrice(text);
+                      } else {
+                        setNewProduct(prev => ({ 
+                          ...prev, 
+                          limited_time_discount_price_egp: '',
+                          limited_time_discount_percentage: ''
+                        }));
+                      }
+                    }}
+                    keyboardType="numeric"
+                  />
+                  {newProduct.limited_time_discount_price_egp ? (
+                    <>
+                      <Text style={{ fontSize: 11, color: '#6B7280', marginBottom: 4, marginTop: 4 }}>السعر بالجنيه المصري (محسوب تلقائياً)</Text>
+                      <View style={[styles.input, { backgroundColor: '#FDF2F8', borderColor: '#F472B6', borderWidth: 1, paddingVertical: 10 }]}>
+                        <Text style={[styles.helpText, { fontSize: 12 }]}>
+                          {newProduct.limited_time_discount_price_egp} ج.م
+                        </Text>
+                      </View>
+                    </>
+                  ) : null}
+                  {newProduct.limited_time_discount_price_egp && newProduct.strikethrough_price ? (
+                    (() => {
+                      const limitedDiscountPriceEgp = parseFloat(newProduct.limited_time_discount_price_egp || '0');
+                      const strikethroughPrice = parseFloat(newProduct.strikethrough_price || '0');
+                      if (limitedDiscountPriceEgp < strikethroughPrice && limitedDiscountPriceEgp > 0) {
+                        return (
+                          <Text style={[styles.helpText, { fontSize: 11 }]}>
+                            💡 نسبة الخصم: {newProduct.limited_time_discount_percentage}%
+                          </Text>
+                        );
+                      } else if (limitedDiscountPriceEgp > 0 && strikethroughPrice > 0) {
+                        return (
+                          <Text style={[styles.helpText, { color: '#EF4444', fontSize: 11 }]}>
+                            ⚠️ يجب أن يكون أقل من {strikethroughPrice}
+                          </Text>
+                        );
+                      }
+                      return null;
+                    })()
+                  ) : null}
+                  <DateTimePickerButton
+                    label="تاريخ بداية الخصم"
+                    placeholder="اختر تاريخ البداية"
+                    value={newProduct.limited_time_discount_start_date}
+                    onValueChange={(value) => setNewProduct({ ...newProduct, limited_time_discount_start_date: value })}
+                  />
+                  <DateTimePickerButton
+                    label="تاريخ انتهاء الخصم"
+                    placeholder="اختر تاريخ النهاية"
+                    value={newProduct.limited_time_discount_end_date}
+                    onValueChange={(value) => setNewProduct({ ...newProduct, limited_time_discount_end_date: value })}
+                  />
+                </View>
               </View>
-              <TextInput
-                style={[styles.input, (() => {
-                  const limitedDiscountPrice = parseFloat(newProduct.limited_time_discount_price || '0');
-                  const strikethroughPrice = parseFloat(newProduct.strikethrough_price || '0');
-                  if (limitedDiscountPrice > 0 && strikethroughPrice > 0 && limitedDiscountPrice >= strikethroughPrice) {
-                    return { borderColor: '#EF4444', borderWidth: 2 };
-                  }
-                  return {};
-                })()]}
-                placeholder="سعر الخصم لفترة محدودة (يدوي بالجنيه المصري) - يجب أن يكون أقل من الرقم المشطوب عليه"
-                value={newProduct.limited_time_discount_price}
-                onChangeText={(text) => {
-                  setNewProduct({ ...newProduct, limited_time_discount_price: text });
-                  
-                  // حساب نسبة الخصم لفترة محدودة تلقائياً
-                  const limitedDiscountPrice = parseFloat(text);
-                  const strikethroughPrice = parseFloat(newProduct.strikethrough_price || '0');
-                  
-                  if (limitedDiscountPrice > 0 && strikethroughPrice > 0 && limitedDiscountPrice < strikethroughPrice) {
-                    // حساب نسبة الخصم: ((السعر المشطوب - سعر الخصم لفترة محدودة) / السعر المشطوب) × 100
-                    const discountPercentage = ((strikethroughPrice - limitedDiscountPrice) / strikethroughPrice) * 100;
-                    setNewProduct(prev => ({
-                      ...prev,
-                      limited_time_discount_price: text,
-                      limited_time_discount_percentage: discountPercentage.toFixed(2)
-                    }));
-                  } else if (!text || text === '') {
-                    // إذا تم حذف السعر، امسح نسبة الخصم
-                    setNewProduct(prev => ({
-                      ...prev,
-                      limited_time_discount_price: '',
-                      limited_time_discount_percentage: ''
-                    }));
-                  } else if (limitedDiscountPrice > 0 && strikethroughPrice > 0 && limitedDiscountPrice >= strikethroughPrice) {
-                    // إذا كان السعر أكبر من أو يساوي الرقم المشطوب، امسح نسبة الخصم
-                    setNewProduct(prev => ({
-                      ...prev,
-                      limited_time_discount_price: text,
-                      limited_time_discount_percentage: ''
-                    }));
-                  }
-                }}
-                keyboardType="numeric"
-              />
-              {newProduct.limited_time_discount_price && newProduct.strikethrough_price ? (
-                (() => {
-                  const limitedDiscountPrice = parseFloat(newProduct.limited_time_discount_price || '0');
-                  const strikethroughPrice = parseFloat(newProduct.strikethrough_price || '0');
-                  if (limitedDiscountPrice < strikethroughPrice && limitedDiscountPrice > 0) {
-                    return (
-                      <Text style={styles.helpText}>
-                        💡 تم حساب نسبة الخصم لفترة محدودة تلقائياً: {newProduct.limited_time_discount_percentage}%
-                      </Text>
-                    );
-                  } else if (limitedDiscountPrice > 0 && strikethroughPrice > 0) {
-                    return (
-                      <Text style={[styles.helpText, { color: '#EF4444' }]}>
-                        ⚠️ سعر الخصم لفترة محدودة يجب أن يكون أقل من الرقم المشطوب عليه ({strikethroughPrice} جنيه)
-                      </Text>
-                    );
-                  }
-                  return null;
-                })()
-              ) : null}
-              <DateTimePickerButton
-                label="تاريخ بداية الخصم (اختياري)"
-                placeholder="اختر تاريخ بداية الخصم"
-                value={newProduct.limited_time_discount_start_date}
-                onValueChange={(value) => setNewProduct({ ...newProduct, limited_time_discount_start_date: value })}
-              />
-              <DateTimePickerButton
-                label="تاريخ انتهاء الخصم (اختياري)"
-                placeholder="اختر تاريخ انتهاء الخصم"
-                value={newProduct.limited_time_discount_end_date}
-                onValueChange={(value) => setNewProduct({ ...newProduct, limited_time_discount_end_date: value })}
-              />
-              <Text style={styles.helpText}>
-                💡 إذا انتهى الخصم لفترة محدودة، سيتم تطبيق الخصم العادي تلقائياً
+              <Text style={[styles.helpText, { fontSize: 11, marginTop: 5 }]}>
+                💡 يتم حساب الأسعار تلقائياً: (سعر الشراء × معامل التكلفة × سعر الصرف)
               </Text>
               
               {/* Source Type Selection */}
@@ -5129,18 +5315,37 @@ export default function AdminScreen() {
                 </View>
               </View>
 
-              {/* SKU */}
-              <TextInput
-                style={styles.input}
-                placeholder="كود المنتج (SKU) *"
-                value={newProduct.sku}
-                onChangeText={(text) => setNewProduct({ ...newProduct, sku: text })}
-              />
-              <Text style={styles.helpText}>
-                ⚠️ الكود يجب أن يكون فريداً ولا يتكرر
-              </Text>
+              {/* Stock Quantity and Sold Count - جنباً إلى جنب */}
+              <View style={{ flexDirection: 'row', gap: 10, marginTop: 10 }}>
+                {/* Stock Quantity - يظهر فقط للمنتجات الداخلية */}
+                {newProduct.source_type === 'warehouse' && (
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>الكمية في المخزن</Text>
+                    <TextInput
+                      style={styles.input}
+                      placeholder="أدخل الكمية"
+                      value={newProduct.stock_quantity || ''}
+                      onChangeText={(text) => setNewProduct({ ...newProduct, stock_quantity: text })}
+                      keyboardType="numeric"
+                    />
+                  </View>
+                )}
+                
+                {/* Sold Count - عدد القطع المباعة */}
+                <View style={{ flex: 1 }}>
+                  <Text style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>عدد القطع المباعة (يتم تحديثه تلقائياً)</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="يتم التحديث تلقائياً عند الطلب"
+                    value={newProduct.sold_count || ''}
+                    onChangeText={(text) => setNewProduct({ ...newProduct, sold_count: text })}
+                    keyboardType="numeric"
+                  />
+                </View>
+              </View>
 
               {/* Section Selection - اختيار القسم أولاً */}
+              <Text style={{ fontSize: 11, color: '#6B7280', marginBottom: 4, marginTop: 8 }}>القسم</Text>
               <View style={styles.selectContainer}>
                 <Text style={styles.selectLabel}>القسم:</Text>
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.categorySelect}>
@@ -5173,6 +5378,7 @@ export default function AdminScreen() {
               </View>
 
               {/* Category Selection - عرض الفئات المرتبطة بالقسم المختار فقط */}
+              <Text style={{ fontSize: 11, color: '#6B7280', marginBottom: 4, marginTop: 8 }}>الفئة</Text>
               <View style={styles.selectContainer}>
                 <Text style={styles.selectLabel}>الفئة:</Text>
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.categorySelect}>
@@ -5219,59 +5425,10 @@ export default function AdminScreen() {
                 )}
               </View>
               
-              {/* Stock Quantity - يظهر فقط للمنتجات الداخلية */}
-              {newProduct.source_type === 'warehouse' && (
-                <TextInput
-                  style={styles.input}
-                  placeholder="الكمية في المخزن"
-                  value={newProduct.stock_quantity}
-                  onChangeText={(text) => setNewProduct({ ...newProduct, stock_quantity: text })}
-                  keyboardType="numeric"
-                />
-              )}
-
-              {/* Sold Count - عدد القطع المباعة */}
-              <TextInput
-                style={styles.input}
-                placeholder="عدد القطع المباعة (يتم تحديثه تلقائياً عند الطلب)"
-                value={newProduct.sold_count}
-                onChangeText={(text) => setNewProduct({ ...newProduct, sold_count: text })}
-                keyboardType="numeric"
-              />
               <Text style={styles.helpText}>
                 💡 هذا الرقم يتم تحديثه تلقائياً عند إتمام الطلبات، ولكن يمكنك تعديله يدوياً
               </Text>
 
-              {/* Limited Time Offer - عرض محدود الوقت */}
-              <View style={styles.selectContainer}>
-                <Text style={styles.selectLabel}>عرض محدود الوقت:</Text>
-                <View style={styles.switchContainer}>
-                  <Text style={styles.switchLabel}>تفعيل عرض محدود الوقت</Text>
-                  <TouchableOpacity
-                    style={[styles.switch, newProduct.is_limited_time_offer && styles.switchActive]}
-                    onPress={() => setNewProduct({ ...newProduct, is_limited_time_offer: !newProduct.is_limited_time_offer })}
-                  >
-                    <View style={[styles.switchThumb, newProduct.is_limited_time_offer && styles.switchThumbActive]} />
-                  </TouchableOpacity>
-                </View>
-                {newProduct.is_limited_time_offer && (
-                  <View style={{ marginTop: 10 }}>
-                    <TextInput
-                      style={styles.input}
-                      placeholder="مدة العرض بالأيام (مثل: 7 أيام)"
-                      value={newProduct.offer_duration_days}
-                      onChangeText={(text) => setNewProduct({ ...newProduct, offer_duration_days: text })}
-                      keyboardType="numeric"
-                    />
-                    <Text style={styles.helpText}>
-                      💡 سيتم حساب تاريخ انتهاء العرض تلقائياً من تاريخ بداية العرض (عند الحفظ)
-                    </Text>
-                    <Text style={styles.helpText}>
-                      ⚠️ عند انتهاء العرض، سيتم إزالة الخصم تلقائياً
-                    </Text>
-                  </View>
-                )}
-              </View>
 
               <TouchableOpacity 
                 style={[styles.imageButton, uploadProgress.isUploading && styles.imageButtonDisabled]} 
@@ -5475,210 +5632,226 @@ export default function AdminScreen() {
                     </TouchableOpacity>
                   )}
                   
-                  {/* Color Selection - اختيار اللون من الاقتراحات */}
-                  <View style={styles.selectContainer}>
-                    <Text style={styles.selectLabel}>اللون:</Text>
-                    {categoryColors.length > 0 ? (
-                      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.variantOptionsList}>
-                        {categoryColors.map((color) => (
-                          <TouchableOpacity
-                            key={color.id}
-                            style={[
-                              styles.variantOptionChip,
-                              newVariant.color === color.color_name && styles.variantOptionChipActive
-                            ]}
-                            onPress={() => setNewVariant({ ...newVariant, color: color.color_name })}
-                          >
-                            {color.color_hex && (
-                              <View style={[styles.colorCircle, { backgroundColor: color.color_hex }]} />
-                            )}
-                            <Text style={[
-                              styles.variantOptionChipText,
-                              newVariant.color === color.color_name && styles.variantOptionChipTextActive
-                            ]}>
-                              {String(color.color_name || '')}
-                            </Text>
-                          </TouchableOpacity>
-                        ))}
-                      </ScrollView>
-                    ) : (
-                      <Text style={styles.helpText}>
-                        ⚠️ لا توجد ألوان محددة لهذه الفئة. يمكنك إضافة لون جديد أدناه أو إدارتها من تبويب "الفئات"
-                      </Text>
-                    )}
-                    {showColorInput ? (
-                      <TextInput
-                        style={styles.input}
-                        placeholder="أضف لون جديد"
-                        value={newVariant.color}
-                        onChangeText={(text) => setNewVariant({ ...newVariant, color: text })}
-                      />
-                    ) : (
-                      <TouchableOpacity
-                        style={styles.addNewButton}
-                        onPress={() => setShowColorInput(true)}
-                      >
-                        <Ionicons name="add-circle-outline" size={18} color="#10B981" />
-                        <Text style={styles.addNewButtonText}>إضافة لون جديد</Text>
-                      </TouchableOpacity>
-                    )}
-                  </View>
-
-                  {/* Size Selection - اختيار المقاسات (متعددة) */}
-                  <View style={styles.selectContainer}>
-                    <Text style={styles.selectLabel}>
-                      المقاسات: {selectedSizes.length > 0 && `(${selectedSizes.length} مختار)`}
-                    </Text>
-                    <Text style={[styles.helpText, { marginBottom: 10, fontSize: 12 }]}>
-                      💡 اختر عدة مقاسات لنفس اللون لإضافتها دفعة واحدة
-                    </Text>
-                    
-                    {/* حقل المقاس في وضع التعديل */}
-                    {editingVariant && (
-                      <View style={{ marginBottom: 15 }}>
-                        <Text style={[styles.selectLabel, { fontSize: 14, marginBottom: 5 }]}>المقاس الحالي:</Text>
-                        <View style={styles.sizeInputRow}>
-                          <TextInput
-                            style={[styles.input, { flex: 2, marginRight: 10 }]}
-                            placeholder="المقاس (مثل: L, 42, 100x200)"
-                            value={newVariant.size}
-                            onChangeText={(text) => setNewVariant({ ...newVariant, size: text })}
-                          />
-                          <TextInput
-                            style={[styles.input, { flex: 1 }]}
-                            placeholder="وحدة القياس (مثل: مقاس، رقم، سم)"
-                            value={newVariant.size_unit}
-                            onChangeText={(text) => setNewVariant({ ...newVariant, size_unit: text })}
-                          />
-                        </View>
-                      </View>
-                    )}
-                    
-                    {/* عرض المقاسات المختارة */}
-                    {selectedSizes.length > 0 && (
-                      <View style={{ marginBottom: 10 }}>
-                        <Text style={[styles.selectLabel, { fontSize: 14, marginBottom: 5 }]}>المقاسات المختارة:</Text>
-                        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-                          {selectedSizes.map((sizeItem, index) => (
-                            <View key={index} style={[styles.variantOptionChip, styles.variantOptionChipActive, { flexDirection: 'row', alignItems: 'center' }]}>
-                              <Text style={[styles.variantOptionChipText, styles.variantOptionChipTextActive]}>
-                                {sizeItem.size} {sizeItem.size_unit ? `(${sizeItem.size_unit})` : ''}
-                              </Text>
+                  {/* Color and Size Selection - جنباً إلى جنب */}
+                  <View style={{ flexDirection: 'row', gap: 10, marginTop: 8 }}>
+                    {/* Color Selection - اختيار اللون من الاقتراحات */}
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>اللون</Text>
+                      <View style={styles.selectContainer}>
+                        <Text style={styles.selectLabel}>اللون:</Text>
+                        {categoryColors.length > 0 ? (
+                          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.variantOptionsList}>
+                            {categoryColors.map((color) => (
                               <TouchableOpacity
-                                onPress={() => {
-                                  setSelectedSizes(selectedSizes.filter((_, i) => i !== index));
-                                }}
-                                style={{ marginLeft: 5 }}
+                                key={color.id}
+                                style={[
+                                  styles.variantOptionChip,
+                                  newVariant.color === color.color_name && styles.variantOptionChipActive
+                                ]}
+                                onPress={() => setNewVariant({ ...newVariant, color: color.color_name })}
                               >
-                                <Ionicons name="close-circle" size={18} color="#fff" />
+                                {color.color_hex && (
+                                  <View style={[styles.colorCircle, { backgroundColor: color.color_hex }]} />
+                                )}
+                                <Text style={[
+                                  styles.variantOptionChipText,
+                                  newVariant.color === color.color_name && styles.variantOptionChipTextActive
+                                ]}>
+                                  {String(color.color_name || '')}
+                                </Text>
                               </TouchableOpacity>
-                            </View>
-                          ))}
-                        </View>
-                      </View>
-                    )}
-                    
-                    {categorySizes.length > 0 ? (
-                      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.variantOptionsList}>
-                        {categorySizes.map((size) => {
-                          const isSelected = selectedSizes.some(
-                            s => s.size === size.size_value && s.size_unit === (size.size_unit || '')
-                          );
-                          return (
+                            ))}
+                          </ScrollView>
+                        ) : (
+                          <Text style={styles.helpText}>
+                            ⚠️ لا توجد ألوان محددة لهذه الفئة. يمكنك إضافة لون جديد أدناه أو إدارتها من تبويب "الفئات"
+                          </Text>
+                        )}
+                        {showColorInput ? (
+                          <>
+                            <Text style={{ fontSize: 11, color: '#6B7280', marginBottom: 4, marginTop: 8 }}>أضف لون جديد</Text>
+                            <TextInput
+                              style={styles.input}
+                              placeholder="أدخل اسم اللون"
+                              value={newVariant.color || ''}
+                              onChangeText={(text) => setNewVariant({ ...newVariant, color: text })}
+                            />
+                          </>
+                        ) : (
                           <TouchableOpacity
-                            key={size.id}
-                            style={[
-                              styles.variantOptionChip,
-                                isSelected && styles.variantOptionChipActive
-                              ]}
+                            style={styles.addNewButton}
+                            onPress={() => setShowColorInput(true)}
+                          >
+                            <Ionicons name="add-circle-outline" size={18} color="#10B981" />
+                            <Text style={styles.addNewButtonText}>إضافة لون جديد</Text>
+                          </TouchableOpacity>
+                        )}
+                      </View>
+                    </View>
+
+                    {/* Size Selection - اختيار المقاسات (متعددة) */}
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>المقاسات {selectedSizes.length > 0 && `(${selectedSizes.length} مختار)`}</Text>
+                      <View style={styles.selectContainer}>
+                        <Text style={styles.selectLabel}>
+                          المقاسات: {selectedSizes.length > 0 && `(${selectedSizes.length} مختار)`}
+                        </Text>
+                        <Text style={[styles.helpText, { marginBottom: 10, fontSize: 12 }]}>
+                          💡 اختر عدة مقاسات لنفس اللون لإضافتها دفعة واحدة
+                        </Text>
+                        
+                        {/* حقل المقاس في وضع التعديل */}
+                        {editingVariant && (
+                          <View style={{ marginBottom: 15 }}>
+                            <Text style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>المقاس الحالي</Text>
+                            <View style={styles.sizeInputRow}>
+                              <View style={{ flex: 2, marginRight: 10 }}>
+                                <Text style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>المقاس</Text>
+                                <TextInput
+                                  style={styles.input}
+                                  placeholder="مثل: L, 42, 100x200"
+                                  value={newVariant.size || ''}
+                                  onChangeText={(text) => setNewVariant({ ...newVariant, size: text })}
+                                />
+                              </View>
+                              <View style={{ flex: 1 }}>
+                                <Text style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>وحدة القياس</Text>
+                                <TextInput
+                                  style={styles.input}
+                                  placeholder="مثل: مقاس، رقم، سم"
+                                  value={newVariant.size_unit || ''}
+                                  onChangeText={(text) => setNewVariant({ ...newVariant, size_unit: text })}
+                                />
+                              </View>
+                            </View>
+                          </View>
+                        )}
+                        
+                        {/* عرض المقاسات المختارة */}
+                        {selectedSizes.length > 0 && (
+                          <View style={{ marginBottom: 10 }}>
+                            <Text style={[styles.selectLabel, { fontSize: 14, marginBottom: 5 }]}>المقاسات المختارة:</Text>
+                            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                              {selectedSizes.map((sizeItem, index) => (
+                                <View key={index} style={[styles.variantOptionChip, styles.variantOptionChipActive, { flexDirection: 'row', alignItems: 'center' }]}>
+                                  <Text style={[styles.variantOptionChipText, styles.variantOptionChipTextActive]}>
+                                    {sizeItem.size} {sizeItem.size_unit ? `(${sizeItem.size_unit})` : ''}
+                                  </Text>
+                                  <TouchableOpacity
+                                    onPress={() => {
+                                      setSelectedSizes(selectedSizes.filter((_, i) => i !== index));
+                                    }}
+                                    style={{ marginLeft: 5 }}
+                                  >
+                                    <Ionicons name="close-circle" size={18} color="#fff" />
+                                  </TouchableOpacity>
+                                </View>
+                              ))}
+                            </View>
+                          </View>
+                        )}
+                        
+                        {categorySizes.length > 0 ? (
+                          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.variantOptionsList}>
+                            {categorySizes.map((size) => {
+                              const isSelected = selectedSizes.some(
+                                s => s.size === size.size_value && s.size_unit === (size.size_unit || '')
+                              );
+                              return (
+                                <TouchableOpacity
+                                  key={size.id}
+                                  style={[
+                                    styles.variantOptionChip,
+                                    isSelected && styles.variantOptionChipActive
+                                  ]}
+                                  onPress={() => {
+                                    if (isSelected) {
+                                      // إزالة المقاس من القائمة المختارة
+                                      setSelectedSizes(selectedSizes.filter(
+                                        s => !(s.size === size.size_value && s.size_unit === (size.size_unit || ''))
+                                      ));
+                                    } else {
+                                      // إضافة المقاس إلى القائمة المختارة
+                                      setSelectedSizes([...selectedSizes, {
+                                        size: size.size_value,
+                                        size_unit: size.size_unit || ''
+                                      }]);
+                                    }
+                                  }}
+                                >
+                                  {isSelected && (
+                                    <Ionicons name="checkmark-circle" size={16} color="#fff" style={{ marginRight: 5 }} />
+                                  )}
+                                  <Text style={[
+                                    styles.variantOptionChipText,
+                                    isSelected && styles.variantOptionChipTextActive
+                                  ]}>
+                                    {size.size_value} {size.size_unit ? `(${size.size_unit})` : ''}
+                                  </Text>
+                                </TouchableOpacity>
+                              );
+                            })}
+                          </ScrollView>
+                        ) : (
+                          <Text style={styles.helpText}>
+                            ⚠️ لا توجد مقاسات محددة لهذه الفئة. يمكنك إضافة مقاس جديد أدناه أو إدارتها من تبويب "الفئات"
+                          </Text>
+                        )}
+                        {showSizeInput ? (
+                          <View style={styles.sizeInputRow}>
+                            <TextInput
+                              style={[styles.input, { flex: 2, marginRight: 10 }]}
+                              placeholder="المقاس (مثل: L, 42, 100x200)"
+                              value={newVariant.size || ''}
+                              onChangeText={(text) => setNewVariant({ ...newVariant, size: text })}
+                            />
+                            <TextInput
+                              style={[styles.input, { flex: 1 }]}
+                              placeholder="وحدة القياس (مثل: مقاس، رقم، سم)"
+                              value={newVariant.size_unit || ''}
+                              onChangeText={(text) => setNewVariant({ ...newVariant, size_unit: text })}
+                            />
+                            <TouchableOpacity
+                              style={[styles.addNewButton, { marginLeft: 10, paddingHorizontal: 15 }]}
                               onPress={() => {
-                                if (isSelected) {
-                                  // إزالة المقاس من القائمة المختارة
-                                  setSelectedSizes(selectedSizes.filter(
-                                    s => !(s.size === size.size_value && s.size_unit === (size.size_unit || ''))
-                                  ));
-                                } else {
-                                  // إضافة المقاس إلى القائمة المختارة
-                                  setSelectedSizes([...selectedSizes, {
-                              size: size.size_value,
-                              size_unit: size.size_unit || ''
-                                  }]);
+                                if (newVariant.size) {
+                                  const newSize = {
+                                    size: newVariant.size,
+                                    size_unit: newVariant.size_unit || ''
+                                  };
+                                  // التحقق من عدم التكرار
+                                  const exists = selectedSizes.some(
+                                    s => s.size === newSize.size && s.size_unit === newSize.size_unit
+                                  );
+                                  if (!exists) {
+                                    setSelectedSizes([...selectedSizes, newSize]);
+                                    setNewVariant({ ...newVariant, size: '', size_unit: '' });
+                                  } else {
+                                    sweetAlert.showError('خطأ', 'هذا المقاس موجود بالفعل في القائمة المختارة');
+                                  }
                                 }
                               }}
+                            >
+                              <Ionicons name="add-circle" size={18} color="#10B981" />
+                            </TouchableOpacity>
+                          </View>
+                        ) : (
+                          <TouchableOpacity
+                            style={styles.addNewButton}
+                            onPress={() => setShowSizeInput(true)}
                           >
-                              {isSelected && (
-                                <Ionicons name="checkmark-circle" size={16} color="#fff" style={{ marginRight: 5 }} />
-                              )}
-                            <Text style={[
-                              styles.variantOptionChipText,
-                                isSelected && styles.variantOptionChipTextActive
-                            ]}>
-                              {size.size_value} {size.size_unit ? `(${size.size_unit})` : ''}
-                            </Text>
+                            <Ionicons name="add-circle-outline" size={18} color="#10B981" />
+                            <Text style={styles.addNewButtonText}>إضافة مقاس جديد</Text>
                           </TouchableOpacity>
-                          );
-                        })}
-                      </ScrollView>
-                    ) : (
-                      <Text style={styles.helpText}>
-                        ⚠️ لا توجد مقاسات محددة لهذه الفئة. يمكنك إضافة مقاس جديد أدناه أو إدارتها من تبويب "الفئات"
-                      </Text>
-                    )}
-                    {showSizeInput ? (
-                      <View style={styles.sizeInputRow}>
-                        <TextInput
-                          style={[styles.input, { flex: 2, marginRight: 10 }]}
-                          placeholder="المقاس (مثل: L, 42, 100x200)"
-                          value={newVariant.size}
-                          onChangeText={(text) => setNewVariant({ ...newVariant, size: text })}
-                        />
-                        <TextInput
-                          style={[styles.input, { flex: 1 }]}
-                          placeholder="وحدة القياس (مثل: مقاس، رقم، سم)"
-                          value={newVariant.size_unit}
-                          onChangeText={(text) => setNewVariant({ ...newVariant, size_unit: text })}
-                        />
-                        <TouchableOpacity
-                          style={[styles.addNewButton, { marginLeft: 10, paddingHorizontal: 15 }]}
-                          onPress={() => {
-                            if (newVariant.size) {
-                              const newSize = {
-                                size: newVariant.size,
-                                size_unit: newVariant.size_unit || ''
-                              };
-                              // التحقق من عدم التكرار
-                              const exists = selectedSizes.some(
-                                s => s.size === newSize.size && s.size_unit === newSize.size_unit
-                              );
-                              if (!exists) {
-                                setSelectedSizes([...selectedSizes, newSize]);
-                                setNewVariant({ ...newVariant, size: '', size_unit: '' });
-                              } else {
-                                sweetAlert.showError('خطأ', 'هذا المقاس موجود بالفعل في القائمة المختارة');
-                              }
-                            }
-                          }}
-                        >
-                          <Ionicons name="add-circle" size={18} color="#10B981" />
-                        </TouchableOpacity>
+                        )}
                       </View>
-                    ) : (
-                      <TouchableOpacity
-                        style={styles.addNewButton}
-                        onPress={() => setShowSizeInput(true)}
-                      >
-                        <Ionicons name="add-circle-outline" size={18} color="#10B981" />
-                        <Text style={styles.addNewButtonText}>إضافة مقاس جديد</Text>
-                      </TouchableOpacity>
-                    )}
+                    </View>
                   </View>
-                  <Text style={styles.helpText}>
-                    💡 إذا كان السعر مختلف عن سعر المنتج الأساسي، أدخل سعر الشراء بالدرهم الإماراتي
-                  </Text>
+                  <Text style={{ fontSize: 11, color: '#6B7280', marginBottom: 4, marginTop: 8 }}>سعر الشراء بالدرهم الإماراتي (اختياري - إذا كان مختلف عن سعر المنتج)</Text>
                   <TextInput
                     style={styles.input}
-                    placeholder="سعر الشراء بالدرهم الإماراتي (اختياري - إذا كان مختلف عن سعر المنتج)"
-                    value={newVariant.purchase_price_aed}
+                    placeholder="أدخل السعر إذا كان مختلف"
+                    value={newVariant.purchase_price_aed || ''}
                     onChangeText={async (text) => {
                       setNewVariant({ ...newVariant, purchase_price_aed: text });
                       // حساب السعر بالجنيه المصري تلقائياً
@@ -5734,18 +5907,22 @@ export default function AdminScreen() {
                     </>
                   ) : null}
                   {newProduct.source_type === 'warehouse' && (
-                    <TextInput
-                      style={styles.input}
-                      placeholder="الكمية في المخزن"
-                      value={newVariant.stock_quantity}
-                      onChangeText={(text) => setNewVariant({ ...newVariant, stock_quantity: text })}
-                      keyboardType="numeric"
-                    />
+                    <>
+                      <Text style={{ fontSize: 11, color: '#6B7280', marginBottom: 4, marginTop: 8 }}>الكمية في المخزن</Text>
+                      <TextInput
+                        style={styles.input}
+                        placeholder="أدخل الكمية"
+                        value={newVariant.stock_quantity || ''}
+                        onChangeText={(text) => setNewVariant({ ...newVariant, stock_quantity: text })}
+                        keyboardType="numeric"
+                      />
+                    </>
                   )}
+                  <Text style={{ fontSize: 11, color: '#6B7280', marginBottom: 4, marginTop: 8 }}>SKU (اختياري)</Text>
                   <TextInput
                     style={styles.input}
-                    placeholder="SKU (اختياري)"
-                    value={newVariant.sku}
+                    placeholder="أدخل كود المنتج"
+                    value={newVariant.sku || ''}
                     onChangeText={(text) => setNewVariant({ ...newVariant, sku: text })}
                   />
                   {/* Image Selection - اختيار الصورة */}
@@ -6036,6 +6213,16 @@ export default function AdminScreen() {
             </View>
 
             <View style={styles.gridContainer}>
+              {(() => {
+                console.log('🔍 Rendering products grid:', {
+                  hasProducts: !!paginatedProductsData.products,
+                  productsLength: paginatedProductsData.products?.length || 0,
+                  totalProducts: paginatedProductsData.totalProducts,
+                  productsState: products.length,
+                  filteredCount: filteredAndSortedProducts.length
+                });
+                return null;
+              })()}
               {paginatedProductsData.products && paginatedProductsData.products.length > 0 ? paginatedProductsData.products.map((product) => {
                 const isEditing = editingProductId === product.id;
                 const quickEdit = quickEditProduct[product.id] || {};
@@ -6099,13 +6286,51 @@ export default function AdminScreen() {
                           {product.original_price && product.original_price > product.price ? (
                             <View>
                               <Text style={styles.gridOriginalPrice}>{formatPrice(product.original_price)} ج.م</Text>
-                              <Text style={styles.gridDiscountPrice}>{formatPrice(product.price)} ج.م</Text>
+                              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                                <Text style={styles.gridDiscountPrice}>{formatPrice(product.price)} ج.م</Text>
+                                {(() => {
+                                  // حساب السعر بالدرهم: إما من purchase_price_aed أو حساب عكسي من السعر بالجنيه
+                                  let priceInAed = null;
+                                  if (product.purchase_price_aed && product.purchase_price_aed > 0) {
+                                    priceInAed = product.purchase_price_aed;
+                                  } else if (product.price && product.price > 0) {
+                                    // حساب عكسي: السعر بالجنيه / (معامل التكلفة × سعر الصرف)
+                                    const costMultiplier = product.cost_multiplier || 1.0;
+                                    const exchangeRate = 12.99; // سعر الصرف الافتراضي
+                                    priceInAed = product.price / (costMultiplier * exchangeRate);
+                                  }
+                                  return priceInAed && priceInAed > 0 ? (
+                                    <Text style={[styles.gridPrice, { color: '#3B82F6', fontSize: 14 }]}>
+                                      ({formatPrice(priceInAed)} درهم)
+                                    </Text>
+                                  ) : null;
+                                })()}
+                              </View>
                               {product.discount_percentage && (
                                 <Text style={styles.gridDiscountBadge}>-{String(product.discount_percentage || 0)}%</Text>
                               )}
                             </View>
                           ) : (
-                            <Text style={styles.gridPrice}>{formatPrice(product.price)} ج.م</Text>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                              <Text style={styles.gridPrice}>{formatPrice(product.price)} ج.م</Text>
+                              {(() => {
+                                // حساب السعر بالدرهم: إما من purchase_price_aed أو حساب عكسي من السعر بالجنيه
+                                let priceInAed = null;
+                                if (product.purchase_price_aed && product.purchase_price_aed > 0) {
+                                  priceInAed = product.purchase_price_aed;
+                                } else if (product.price && product.price > 0) {
+                                  // حساب عكسي: السعر بالجنيه / (معامل التكلفة × سعر الصرف)
+                                  const costMultiplier = product.cost_multiplier || 1.0;
+                                  const exchangeRate = 12.99; // سعر الصرف الافتراضي
+                                  priceInAed = product.price / (costMultiplier * exchangeRate);
+                                }
+                                return priceInAed && priceInAed > 0 ? (
+                                  <Text style={[styles.gridPrice, { color: '#3B82F6', fontSize: 14 }]}>
+                                    ({formatPrice(priceInAed)} درهم)
+                                  </Text>
+                                ) : null;
+                              })()}
+                            </View>
                           )}
                         </>
                       )}
@@ -6310,176 +6535,6 @@ export default function AdminScreen() {
           </View>
         )}
 
-        {activeTab === 'limited_discounts' && (
-          <View>
-            <View style={styles.sectionHeader}>
-              <Ionicons name="time-outline" size={20} color="#EE1C47" />
-              <Text style={styles.sectionHeaderText}>المنتجات ذات الخصم المحدود</Text>
-              <View style={styles.sectionHeaderBadge}>
-                <Text style={styles.sectionHeaderBadgeText}>
-                  {limitedDiscountProducts.length}
-                </Text>
-              </View>
-            </View>
-
-            {limitedDiscountProducts.length > 0 ? (
-              <View style={styles.gridContainer}>
-                {limitedDiscountProducts.map((product) => {
-                  const endDate = product.limited_time_discount_end_date 
-                    ? new Date(product.limited_time_discount_end_date) 
-                    : null;
-                  const now = new Date();
-                  const isActive = endDate ? endDate > now : false;
-                  const daysRemaining = endDate && isActive 
-                    ? Math.ceil((endDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
-                    : 0;
-                  
-                  return (
-                    <View key={product.id} style={styles.gridCard}>
-                      <View style={styles.cardHeader}>
-                        <View style={{ flex: 1 }}>
-                          <Text style={styles.gridCardTitle} numberOfLines={2}>
-                            {product.name}
-                          </Text>
-                          <Text style={styles.gridCardMetaText}>
-                            {product.category_data?.name || 'بدون فئة'}
-                          </Text>
-                        </View>
-                      </View>
-
-                      <View style={styles.gridProductPrice}>
-                        <Text style={styles.gridPrice}>
-                          {formatPrice(product.price)} ج.م
-                        </Text>
-                        {product.original_price && product.original_price > product.price && (
-                          <Text style={styles.gridOriginalPrice}>
-                            {formatPrice(product.original_price)} ج.م
-                          </Text>
-                        )}
-                        {product.limited_time_discount_percentage && (
-                          <View style={[styles.discountBadge, { backgroundColor: isActive ? '#EE1C47' : '#999' }]}>
-                            <Text style={styles.discountBadgeText}>
-                              -{product.limited_time_discount_percentage}%
-                            </Text>
-                          </View>
-                        )}
-                      </View>
-
-                      <View style={styles.gridCardMeta}>
-                        <View style={[
-                          styles.statusBadgeSmall,
-                          { backgroundColor: isActive ? '#10B981' : '#EF4444' }
-                        ]}>
-                          <Text style={styles.statusBadgeTextSmall}>
-                            {isActive ? 'نشط' : 'منتهي'}
-                          </Text>
-                        </View>
-                        {isActive && daysRemaining > 0 && (
-                          <Text style={styles.daysRemainingText}>
-                            متبقي {daysRemaining} {daysRemaining === 1 ? 'يوم' : 'أيام'}
-                          </Text>
-                        )}
-                        {endDate && (
-                          <Text style={styles.dateText}>
-                            ينتهي: {endDate.toLocaleDateString('ar-EG')}
-                          </Text>
-                        )}
-                      </View>
-
-                      <View style={styles.quickEditActions}>
-                        <TouchableOpacity
-                          style={[styles.quickEditButton, styles.saveButton]}
-                          onPress={() => {
-                            // Navigate to edit product
-                            setEditingProduct(product);
-                            setActiveTab('products');
-                            setNewProduct({
-                              ...newProduct,
-                              name: product.name,
-                              description: product.description || '',
-                              price: product.price.toString(),
-                              purchase_price_aed: product.purchase_price_aed?.toString() || '',
-                              cost_multiplier: product.cost_multiplier?.toString() || '1.0',
-                              selling_price_egp: product.selling_price_egp?.toString() || '',
-                              original_price: product.original_price?.toString() || '',
-                              discount_percentage: product.discount_percentage?.toString() || '',
-                              limited_time_discount_percentage: product.limited_time_discount_percentage?.toString() || '',
-                              limited_time_discount_start_date: product.limited_time_discount_start_date 
-                                ? new Date(product.limited_time_discount_start_date).toISOString().split('T')[0]
-                                : '',
-                              limited_time_discount_end_date: product.limited_time_discount_end_date
-                                ? new Date(product.limited_time_discount_end_date).toISOString().split('T')[0]
-                                : '',
-                              category_id: product.category_id || '',
-                              category: product.category || '',
-                              stock_quantity: product.stock_quantity.toString(),
-                              source_type: product.source_type,
-                              sku: product.sku || '',
-                              sold_count: product.sold_count.toString(),
-                              is_limited_time_offer: product.is_limited_time_offer,
-                              offer_duration_days: product.offer_duration_days?.toString() || '',
-                            });
-                          }}
-                        >
-                          <Ionicons name="create-outline" size={14} color="#fff" />
-                          <Text style={styles.quickEditButtonText}>تعديل</Text>
-                        </TouchableOpacity>
-                        {isActive && (
-                          <TouchableOpacity
-                            style={[styles.quickEditButton, { backgroundColor: '#3B82F6' }]}
-                            onPress={async () => {
-                              // Extend discount by 7 days
-                              const newEndDate = endDate 
-                                ? new Date(endDate.getTime() + 7 * 24 * 60 * 60 * 1000)
-                                : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-                              
-                              setLoading(true);
-                              try {
-                                const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
-                                const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-                                const accessToken = await getAccessToken();
-
-                                await fetch(`${supabaseUrl}/rest/v1/products?id=eq.${product.id}`, {
-                                  method: 'PATCH',
-                                  headers: {
-                                    'apikey': supabaseKey || '',
-                                    'Authorization': `Bearer ${accessToken}`,
-                                    'Content-Type': 'application/json',
-                                  },
-                                  body: JSON.stringify({
-                                    limited_time_discount_end_date: newEndDate.toISOString(),
-                                  })
-                                });
-
-                                sweetAlert.showSuccess('نجح', 'تم تمديد الخصم 7 أيام إضافية', () => {
-                                  loadData();
-                                });
-                              } catch (error: any) {
-                                sweetAlert.showError('خطأ', error.message || 'فشل التحديث');
-                              } finally {
-                                setLoading(false);
-                              }
-                            }}
-                          >
-                            <Ionicons name="time-outline" size={14} color="#fff" />
-                            <Text style={styles.quickEditButtonText}>إطالة 7 أيام</Text>
-                          </TouchableOpacity>
-                        )}
-                      </View>
-                    </View>
-                  );
-                })}
-              </View>
-            ) : (
-              <View style={{ padding: 20, alignItems: 'center', width: '100%' }}>
-                <Ionicons name="time-outline" size={48} color="#ccc" />
-                <Text style={{ color: '#666', fontSize: 16, marginTop: 10 }}>
-                  لا توجد منتجات ذات خصم محدود
-                </Text>
-              </View>
-            )}
-          </View>
-        )}
 
         {activeTab === 'users' && (
           <View>

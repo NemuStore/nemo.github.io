@@ -654,27 +654,57 @@ export default function ProductDetailScreen() {
             {/* Price Card - Temu Style */}
             <View style={styles.priceCard}>
               <View style={styles.priceRow}>
-                {product.original_price && product.original_price > product.price ? (
-                  <>
-                    <View style={styles.priceLeft}>
+                {(() => {
+                  // Check if limited time discount is active
+                  const isLimitedActive = product.limited_time_discount_percentage && 
+                    product.limited_time_discount_end_date &&
+                    new Date(product.limited_time_discount_end_date) > new Date();
+                  
+                  const activeDiscount = isLimitedActive 
+                    ? product.limited_time_discount_percentage 
+                    : product.discount_percentage;
+                  
+                  const hasDiscount = (product.strikethrough_price && product.strikethrough_price > product.price) || 
+                                      (product.original_price && product.original_price > product.price) || 
+                                      activeDiscount;
+                  
+                  // استخدام strikethrough_price إذا كان موجوداً، وإلا استخدم original_price
+                  let displayOriginalPrice = product.strikethrough_price || product.original_price;
+                  if (!displayOriginalPrice && activeDiscount && activeDiscount > 0) {
+                    displayOriginalPrice = product.price / (1 - activeDiscount / 100);
+                  }
+                  
+                  if (hasDiscount) {
+                    return (
+                      <>
+                        <View style={styles.priceLeft}>
+                          <Text style={styles.currentPrice}>
+                            {(selectedVariant?.price || product.price).toFixed(2)} ج.م
+                          </Text>
+                          {displayOriginalPrice && displayOriginalPrice > product.price && (
+                            <Text style={styles.originalPrice}>
+                              {displayOriginalPrice.toFixed(2)} ج.م
+                            </Text>
+                          )}
+                        </View>
+                        {activeDiscount && (
+                          <View style={[styles.discountBadge, isLimitedActive && { backgroundColor: '#DC2626' }]}>
+                            <Text style={styles.discountText}>-{activeDiscount}%</Text>
+                            {isLimitedActive && (
+                              <Text style={[styles.discountText, { fontSize: 10, marginTop: 2 }]}>محدود</Text>
+                            )}
+                          </View>
+                        )}
+                      </>
+                    );
+                  } else {
+                    return (
                       <Text style={styles.currentPrice}>
                         {(selectedVariant?.price || product.price).toFixed(2)} ج.م
                       </Text>
-                      <Text style={styles.originalPrice}>
-                        {product.original_price.toFixed(2)} ج.م
-                      </Text>
-                    </View>
-                    {product.discount_percentage && (
-                      <View style={styles.discountBadge}>
-                        <Text style={styles.discountText}>-{product.discount_percentage}%</Text>
-                      </View>
-                    )}
-                  </>
-                ) : (
-                  <Text style={styles.currentPrice}>
-                    {(selectedVariant?.price || product.price).toFixed(2)} ج.م
-                  </Text>
-                )}
+                    );
+                  }
+                })()}
               </View>
               {product.sold_count > 0 && (
                 <Text style={styles.soldCount}>
@@ -683,16 +713,29 @@ export default function ProductDetailScreen() {
               )}
             </View>
             
-            {/* Limited Time Offer Countdown */}
-        {product.is_limited_time_offer && product.offer_end_date && (
-          <CountdownTimer 
-            endDate={product.offer_end_date}
-            onExpire={() => {
-              // يمكن إضافة منطق لإزالة الخصم عند انتهاء العرض
-              console.log('Offer expired');
-            }}
-          />
-        )}
+            {/* Limited Time Discount Countdown */}
+            {product.limited_time_discount_percentage && 
+             product.limited_time_discount_end_date &&
+             new Date(product.limited_time_discount_end_date) > new Date() && (
+              <CountdownTimer 
+                endDate={product.limited_time_discount_end_date}
+                onExpire={() => {
+                  // الخصم المحدود انتهى، سيتم تطبيق الخصم العادي تلقائياً
+                  console.log('Limited discount expired');
+                }}
+              />
+            )}
+            {/* Limited Time Offer Countdown (legacy) */}
+            {!product.limited_time_discount_percentage && 
+             product.is_limited_time_offer && 
+             product.offer_end_date && (
+              <CountdownTimer 
+                endDate={product.offer_end_date}
+                onExpire={() => {
+                  console.log('Offer expired');
+                }}
+              />
+            )}
 
             {/* Color Selection - Temu Style */}
             {variants.length > 0 && variants.some(v => v.color) && (
