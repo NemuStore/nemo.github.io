@@ -19,10 +19,12 @@ import * as Location from 'expo-location';
 import { useCart } from '@/contexts/CartContext';
 import { useSweetAlert } from '@/hooks/useSweetAlert';
 import SweetAlert from '@/components/SweetAlert';
+import { SkeletonCard } from '@/components/SkeletonCard';
 
 export default function CartScreen() {
   const { cartItems, removeFromCart, updateQuantity, getTotal, clearCart } = useCart();
   const [loading, setLoading] = useState(false);
+  const [imagesLoading, setImagesLoading] = useState(true);
   const [user, setUser] = useState<any>(null);
   const [variantImages, setVariantImages] = useState<Record<string, string>>({}); // variant_id -> image_url
   const [productImages, setProductImages] = useState<Record<string, string>>({}); // product_id -> primary_image_url
@@ -31,8 +33,12 @@ export default function CartScreen() {
 
   useEffect(() => {
     loadUser();
-    loadVariantImages();
-    loadProductImages();
+    const loadAllImages = async () => {
+      setImagesLoading(true);
+      await Promise.all([loadVariantImages(), loadProductImages()]);
+      setImagesLoading(false);
+    };
+    loadAllImages();
   }, [cartItems]);
 
   const loadVariantImages = async () => {
@@ -45,7 +51,9 @@ export default function CartScreen() {
       .map(item => (item.product as any).variant_id)
       .filter((id): id is string => Boolean(id));
     
-    if (variantIds.length === 0) return;
+    if (variantIds.length === 0) {
+      return;
+    }
     
     try {
       // Load images for all variants at once
@@ -86,7 +94,9 @@ export default function CartScreen() {
       .map(item => item.product.id)
       .filter((id): id is string => Boolean(id));
     
-    if (productIds.length === 0) return;
+    if (productIds.length === 0) {
+      return;
+    }
     
     try {
       // Load primary images for all products at once
@@ -525,7 +535,9 @@ export default function CartScreen() {
                 onPress={() => router.push(`/product/${item.product.id}`)}
                 activeOpacity={0.7}
               >
-                {displayImage && displayImage !== 'https://via.placeholder.com/150' ? (
+                {imagesLoading ? (
+                  <SkeletonCard width={80} height={80} borderRadius={8} />
+                ) : displayImage && displayImage !== 'https://via.placeholder.com/150' ? (
                   <Image
                     source={{ uri: displayImage }}
                     style={styles.itemImage}

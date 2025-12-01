@@ -11,18 +11,39 @@ export default function TabsLayout() {
   const cartCount = getItemCount();
 
   if (isWeb) {
-    // Web: Top navigation bar
+    // Web: Top navigation bar (Temu style)
     return (
       <Tabs
         screenOptions={{
           tabBarPosition: 'top',
-          headerShown: true,
-          tabBarActiveTintColor: colors.primary,
-          tabBarInactiveTintColor: colors.textSecondary,
+          headerShown: false, // Clean header like Temu
+          tabBarActiveTintColor: '#EE1C47', // Temu red
+          tabBarInactiveTintColor: '#6B7280', // Gray for inactive
+          tabBarLabelStyle: {
+            fontSize: 14,
+            fontWeight: '600',
+            marginTop: -4,
+          },
+          tabBarIconStyle: {
+            marginTop: 4,
+          },
           tabBarStyle: {
-            backgroundColor: colors.surface,
+            backgroundColor: '#FFFFFF', // Clean white like Temu
             borderBottomWidth: 1,
-            borderBottomColor: colors.border,
+            borderBottomColor: '#E5E7EB', // Light gray border
+            height: 56,
+            paddingTop: 8,
+            paddingBottom: 8,
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 1 },
+            shadowOpacity: 0.05,
+            shadowRadius: 2,
+            elevation: 1,
+          },
+          tabBarIndicatorStyle: {
+            backgroundColor: '#EE1C47', // Temu red indicator
+            height: 3,
+            borderRadius: 2,
           },
         }}
       >
@@ -30,47 +51,96 @@ export default function TabsLayout() {
           name="index"
           options={{
             title: 'الرئيسية',
-            tabBarIcon: ({ color }) => <Ionicons name="home" size={24} color={color} />,
+            tabBarIcon: ({ color, focused }) => (
+              <Ionicons 
+                name={focused ? "home" : "home-outline"} 
+                size={22} 
+                color={color} 
+              />
+            ),
           }}
         />
         <Tabs.Screen
           name="cart"
           options={{
             title: 'السلة',
-            tabBarIcon: ({ color }) => <Ionicons name="cart" size={24} color={color} />,
+            tabBarIcon: ({ color, focused }) => (
+              <Ionicons 
+                name={focused ? "cart" : "cart-outline"} 
+                size={22} 
+                color={color} 
+              />
+            ),
             tabBarBadge: cartCount > 0 ? cartCount : undefined,
+            tabBarBadgeStyle: {
+              backgroundColor: '#EE1C47', // Temu red badge
+              color: '#FFFFFF',
+              fontSize: 11,
+              fontWeight: 'bold',
+              minWidth: 18,
+              height: 18,
+            },
           }}
         />
         <Tabs.Screen
           name="profile"
           options={{
             title: 'الملف الشخصي',
-            tabBarIcon: ({ color }) => <Ionicons name="person" size={24} color={color} />,
+            tabBarIcon: ({ color, focused }) => (
+              <Ionicons 
+                name={focused ? "person" : "person-outline"} 
+                size={22} 
+                color={color} 
+              />
+            ),
           }}
         />
         <Tabs.Screen
           name="admin"
           options={{
             title: 'الإدارة',
-            tabBarIcon: ({ color }) => <Ionicons name="settings" size={24} color={color} />,
+            tabBarIcon: ({ color, focused }) => (
+              <Ionicons 
+                name={focused ? "settings" : "settings-outline"} 
+                size={22} 
+                color={color} 
+              />
+            ),
           }}
         />
       </Tabs>
     );
   }
 
-  // Mobile: Bottom navigation bar
+  // Mobile: Bottom navigation bar (Temu style)
   return (
     <Tabs
       screenOptions={{
         tabBarPosition: 'bottom',
-        headerShown: true,
-        tabBarActiveTintColor: colors.primary,
-        tabBarInactiveTintColor: colors.textSecondary,
+        headerShown: false, // Clean header like Temu mobile
+        tabBarActiveTintColor: '#EE1C47', // Temu red
+        tabBarInactiveTintColor: '#9CA3AF', // Gray for inactive
+        tabBarLabelStyle: {
+          fontSize: 12,
+          fontWeight: '600',
+          marginTop: -4,
+          marginBottom: 4,
+        },
+        tabBarIconStyle: {
+          marginTop: 4,
+        },
         tabBarStyle: {
-          backgroundColor: colors.surface,
+          backgroundColor: '#FFFFFF', // Clean white like Temu
           borderTopWidth: 1,
-          borderTopColor: colors.border,
+          borderTopColor: '#E5E7EB', // Light gray border
+          height: 60,
+          paddingTop: 6,
+          paddingBottom: 4,
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: -2 },
+          shadowOpacity: 0.05,
+          shadowRadius: 4,
+          elevation: 8,
         },
       }}
     >
@@ -78,29 +148,61 @@ export default function TabsLayout() {
         name="index"
         options={{
           title: 'الرئيسية',
-          tabBarIcon: ({ color }) => <Ionicons name="home" size={24} color={color} />,
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons 
+              name={focused ? "home" : "home-outline"} 
+              size={24} 
+              color={color} 
+            />
+          ),
         }}
       />
       <Tabs.Screen
         name="cart"
         options={{
           title: 'السلة',
-          tabBarIcon: ({ color }) => <Ionicons name="cart" size={24} color={color} />,
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons 
+              name={focused ? "cart" : "cart-outline"} 
+              size={24} 
+              color={color} 
+            />
+          ),
           tabBarBadge: cartCount > 0 ? cartCount : undefined,
+          tabBarBadgeStyle: {
+            backgroundColor: '#EE1C47', // Temu red badge
+            color: '#FFFFFF',
+            fontSize: 11,
+            fontWeight: 'bold',
+            minWidth: 18,
+            height: 18,
+          },
         }}
       />
       <Tabs.Screen
         name="profile"
         options={{
           title: 'الملف الشخصي',
-          tabBarIcon: ({ color }) => <Ionicons name="person" size={24} color={color} />,
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons 
+              name={focused ? "person" : "person-outline"} 
+              size={24} 
+              color={color} 
+            />
+          ),
         }}
       />
       <Tabs.Screen
         name="admin"
         options={{
           title: 'الإدارة',
-          tabBarIcon: ({ color }) => <Ionicons name="settings" size={24} color={color} />,
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons 
+              name={focused ? "settings" : "settings-outline"} 
+              size={24} 
+              color={color} 
+            />
+          ),
         }}
       />
     </Tabs>

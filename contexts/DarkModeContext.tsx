@@ -14,6 +14,8 @@ interface DarkModeContextType {
     primary: string;
     card: string;
     input: string;
+    skeletonBackground?: string;
+    skeletonShimmer?: string;
   };
 }
 
@@ -64,6 +66,8 @@ export function DarkModeProvider({ children }: { children: React.ReactNode }) {
         primary: '#EE1C47',
         card: '#1E1E1E',
         input: '#2D2D2D',
+        skeletonBackground: '#2D2D2D',
+        skeletonShimmer: '#3D3D3D',
       }
     : {
         background: '#F5F5F5',
@@ -74,6 +78,8 @@ export function DarkModeProvider({ children }: { children: React.ReactNode }) {
         primary: '#EE1C47',
         card: '#FFFFFF',
         input: '#F5F5F5',
+        skeletonBackground: '#E0E0E0',
+        skeletonShimmer: '#F0F0F0',
       };
 
   return (

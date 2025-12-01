@@ -23,11 +23,11 @@ import { getCardImageUrl } from '@/utils/imageUtils';
 
 const { width } = Dimensions.get('window');
 const isWeb = Platform.OS === 'web';
-// Responsive item width: Web gets more columns, mobile gets 2 columns
+// Responsive item width: Web gets more columns (5-6 like Temu), mobile gets 2 columns
 const itemWidth = isWeb 
-  ? Math.min(250, Math.floor((Math.min(width, 1400) - 60) / 4)) // Max 4 columns on web, centered
-  : (width - 40) / 2; // 2 columns on mobile
-const maxContainerWidth = isWeb ? 1400 : width; // Max width for web container
+  ? Math.min(220, Math.floor((Math.min(width, 1600) - 80) / 6)) // Max 6 columns on web (like Temu)
+  : (width - 30) / 2; // 2 columns on mobile with better spacing
+const maxContainerWidth = isWeb ? 1600 : width; // Max width for web container (wider like Temu)
 
 export default function HomeScreen() {
   const { colors, isDarkMode } = useDarkMode();
@@ -565,24 +565,26 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F5F5F5',
+    backgroundColor: '#FFFFFF', // Clean white background like Temu
   },
   searchContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#fff',
-    margin: isWeb ? 20 : 10,
-    marginHorizontal: isWeb ? 'auto' : 10,
-    paddingHorizontal: 15,
-    borderRadius: 25,
-    height: isWeb ? 50 : 45,
-    maxWidth: isWeb ? 600 : undefined,
+    margin: isWeb ? 16 : 8,
+    marginHorizontal: isWeb ? 'auto' : 8,
+    paddingHorizontal: isWeb ? 20 : 12,
+    borderRadius: isWeb ? 30 : 24,
+    height: isWeb ? 48 : 44,
+    maxWidth: isWeb ? 800 : undefined,
     width: isWeb ? '100%' : undefined,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1,
   },
   searchIcon: {
     marginRight: 10,
@@ -596,46 +598,49 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   productsGridContainer: {
-    padding: isWeb ? 20 : 10,
+    padding: isWeb ? 16 : 8,
+    paddingBottom: isWeb ? 40 : 20,
   },
   productsGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: isWeb ? 'flex-start' : 'space-between',
-    gap: isWeb ? 20 : 0,
-    padding: isWeb ? 0 : 0,
+    gap: isWeb ? 12 : 8,
+    padding: 0,
   },
   productCard: {
     width: isWeb ? itemWidth : itemWidth,
     backgroundColor: '#fff',
-    borderRadius: 12,
-    marginBottom: 15,
+    borderRadius: isWeb ? 8 : 10,
+    marginBottom: isWeb ? 20 : 12,
     overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#F3F4F6',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1,
     position: 'relative',
     ...(isWeb && {
-      transition: 'transform 0.2s, box-shadow 0.2s',
+      transition: 'all 0.2s ease',
       cursor: 'pointer',
     }),
   },
   discountBadge: {
     position: 'absolute',
-    top: 8,
-    right: 8,
-    backgroundColor: '#FF6B00',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
+    top: isWeb ? 6 : 6,
+    right: isWeb ? 6 : 6,
+    backgroundColor: '#EE1C47', // Temu red
+    paddingHorizontal: isWeb ? 10 : 8,
+    paddingVertical: isWeb ? 5 : 4,
+    borderRadius: isWeb ? 4 : 6,
     zIndex: 10,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 3,
-    elevation: 5,
+    shadowColor: '#EE1C47',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 2,
+    elevation: 3,
   },
   discountBadgeText: {
     color: '#fff',
@@ -663,16 +668,16 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
   },
   dealsBanner: {
-    backgroundColor: '#FFF3E0',
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    marginHorizontal: isWeb ? 'auto' : 10,
-    marginTop: 10,
-    marginBottom: 10,
-    borderRadius: 8,
-    maxWidth: isWeb ? 1400 : undefined,
-    borderLeftWidth: 4,
-    borderLeftColor: '#FF6B00',
+    backgroundColor: '#FEF2F2', // Light red background like Temu
+    paddingVertical: isWeb ? 14 : 12,
+    paddingHorizontal: isWeb ? 24 : 16,
+    marginHorizontal: isWeb ? 'auto' : 8,
+    marginTop: isWeb ? 12 : 8,
+    marginBottom: isWeb ? 16 : 12,
+    borderRadius: isWeb ? 6 : 8,
+    maxWidth: isWeb ? 1600 : undefined,
+    borderLeftWidth: 3,
+    borderLeftColor: '#EE1C47', // Temu red
   },
   dealsBannerContent: {
     flexDirection: 'row',
@@ -681,9 +686,9 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   dealsBannerText: {
-    color: '#FF6B00',
-    fontSize: 16,
-    fontWeight: 'bold',
+    color: '#EE1C47', // Temu red
+    fontSize: isWeb ? 15 : 14,
+    fontWeight: '600',
   },
   categoriesContainer: {
     marginVertical: 10,
@@ -691,31 +696,31 @@ const styles = StyleSheet.create({
     maxWidth: isWeb ? 1400 : undefined,
   },
   sectionTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 8,
-    paddingHorizontal: isWeb ? 20 : 10,
+    fontSize: isWeb ? 18 : 16,
+    fontWeight: '700',
+    color: '#1F2937',
+    marginBottom: isWeb ? 12 : 10,
+    paddingHorizontal: isWeb ? 16 : 8,
   },
   categoriesScroll: {
     paddingHorizontal: isWeb ? 20 : 10,
     gap: 10,
   },
   categoryChip: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
+    paddingHorizontal: isWeb ? 18 : 14,
+    paddingVertical: isWeb ? 9 : 7,
+    borderRadius: isWeb ? 20 : 18,
     backgroundColor: '#fff',
     borderWidth: 1,
-    borderColor: '#ddd',
-    marginRight: 8,
+    borderColor: '#E5E7EB',
+    marginRight: isWeb ? 10 : 8,
     ...(isWeb && {
-      transition: 'all 0.2s',
+      transition: 'all 0.2s ease',
       cursor: 'pointer',
     }),
   },
   categoryChipActive: {
-    backgroundColor: '#EE1C47',
+    backgroundColor: '#EE1C47', // Temu red
     borderColor: '#EE1C47',
   },
   categoryChipText: {
@@ -729,19 +734,21 @@ const styles = StyleSheet.create({
   },
   productImage: {
     width: '100%',
-    height: itemWidth * 1.2,
-    backgroundColor: '#f0f0f0',
+    height: isWeb ? itemWidth * 1.15 : itemWidth * 1.1,
+    backgroundColor: '#FAFAFA',
     objectFit: 'contain', // For web compatibility - shows full image
   },
   productInfo: {
-    padding: 10,
+    padding: isWeb ? 12 : 10,
+    paddingTop: isWeb ? 10 : 8,
   },
   productName: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#333',
-    marginBottom: 5,
-    minHeight: 40,
+    fontSize: isWeb ? 13 : 13,
+    fontWeight: '500',
+    color: '#1F2937',
+    marginBottom: isWeb ? 8 : 6,
+    minHeight: isWeb ? 36 : 38,
+    lineHeight: isWeb ? 18 : 18,
   },
   priceContainer: {
     marginBottom: 4,
@@ -759,20 +766,21 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
   },
   productPrice: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#EE1C47',
+    fontSize: isWeb ? 16 : 17,
+    fontWeight: '700',
+    color: '#EE1C47', // Temu red
   },
   originalPrice: {
-    fontSize: 13,
+    fontSize: isWeb ? 12 : 12,
     color: '#9CA3AF',
     textDecorationLine: 'line-through',
+    marginLeft: 4,
   },
   discountBadgeSmall: {
-    backgroundColor: '#DC2626',
-    paddingHorizontal: 6,
-    paddingVertical: 3,
-    borderRadius: 4,
+    backgroundColor: '#EE1C47', // Temu red
+    paddingHorizontal: isWeb ? 7 : 6,
+    paddingVertical: isWeb ? 4 : 3,
+    borderRadius: isWeb ? 3 : 4,
   },
   discountBadgeSmallText: {
     color: '#fff',
