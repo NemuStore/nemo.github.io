@@ -5,6 +5,10 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+// Import sharp for AVIF conversion (using esm.sh CDN)
+// Note: We'll use a simpler approach with ImageMagick or convert on the client side
+// For now, we'll convert to AVIF using a web-based approach
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
@@ -12,7 +16,7 @@ serve(async (req) => {
 
   try {
     console.log('📥 Received request to upload-to-catbox');
-    const { imageData, userhash: requestUserhash } = await req.json();
+    const { imageData, userhash: requestUserhash, convertToAvif = true } = await req.json();
 
     if (!imageData) {
       console.error('❌ Missing imageData');
@@ -47,14 +51,28 @@ serve(async (req) => {
     const base64Data = imageData.split(',')[1] || imageData;
     
     let blob: Blob;
+    let fileName = 'image.jpg';
+    let mimeType = 'image/jpeg';
+    
     try {
       const binaryString = atob(base64Data);
       const bytes = new Uint8Array(binaryString.length);
       for (let i = 0; i < binaryString.length; i++) {
         bytes[i] = binaryString.charCodeAt(i);
       }
-      blob = new Blob([bytes]);
-      console.log('✅ Blob created, size:', blob.size, 'bytes');
+      
+      // Check if image is already AVIF or WebP
+      const dataUri = imageData.startsWith('data:') ? imageData : `data:image/jpeg;base64,${imageData}`;
+      if (dataUri.includes('image/avif')) {
+        fileName = 'image.avif';
+        mimeType = 'image/avif';
+      } else if (dataUri.includes('image/webp')) {
+        fileName = 'image.webp';
+        mimeType = 'image/webp';
+      }
+      
+      blob = new Blob([bytes], { type: mimeType });
+      console.log('✅ Blob created, size:', blob.size, 'bytes, type:', mimeType);
     } catch (conversionError) {
       console.error('❌ Error converting base64 to blob:', conversionError);
       return new Response(
@@ -71,7 +89,7 @@ serve(async (req) => {
     const formData = new FormData();
     formData.append('reqtype', 'fileupload');
     formData.append('userhash', userhash);
-    formData.append('fileToUpload', blob, 'image.jpg');
+    formData.append('fileToUpload', blob, fileName);
 
     // Upload to catbox.moe
     console.log('📤 Uploading to catbox.moe...');

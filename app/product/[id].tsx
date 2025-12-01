@@ -10,6 +10,7 @@ import {
   Platform,
   Dimensions,
   ActivityIndicator,
+  Animated,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { supabase } from '@/lib/supabase';
@@ -19,6 +20,57 @@ import { useCart } from '@/contexts/CartContext';
 import CountdownTimer from '@/components/CountdownTimer';
 import { useSweetAlert } from '@/hooks/useSweetAlert';
 import SweetAlert from '@/components/SweetAlert';
+import { SkeletonCard } from '@/components/SkeletonCard';
+import { getThumbnailUrl, getMainImageUrl, getCardImageUrl, preloadImages } from '@/utils/imageUtils';
+
+// Thumbnail component with fade-in animation
+const ThumbnailImage = ({ 
+  imageUrl, 
+  isActive, 
+  onPress 
+}: { 
+  imageUrl: string; 
+  isActive: boolean; 
+  onPress: () => void;
+}) => {
+  const [loaded, setLoaded] = useState(false);
+  const opacity = useState(new Animated.Value(0))[0];
+
+  const handleLoad = () => {
+    setLoaded(true);
+    // Show thumbnail immediately without animation to avoid flickering
+    opacity.setValue(1);
+  };
+
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      style={[
+        styles.thumbnail,
+        isActive && styles.thumbnailActive,
+      ]}
+    >
+      {!loaded && (
+        <SkeletonCard width={70} height={70} borderRadius={8} />
+      )}
+      <Animated.View
+        style={[
+          styles.thumbnailImageWrapper,
+          {
+            opacity,
+          },
+        ]}
+      >
+        <Image
+          source={{ uri: getThumbnailUrl(imageUrl, 150, 30) }} // Lower quality (30) for faster loading
+          style={styles.thumbnailImage}
+          onLoad={handleLoad}
+          resizeMode="cover"
+        />
+      </Animated.View>
+    </TouchableOpacity>
+  );
+};
 
 export default function ProductDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -34,6 +86,9 @@ export default function ProductDetailScreen() {
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [quantity, setQuantity] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [imagesLoading, setImagesLoading] = useState(true);
+  const [imageLoaded, setImageLoaded] = useState(false);
+  const imageOpacity = useState(new Animated.Value(0))[0];
   const router = useRouter();
   const { addToCart } = useCart();
   const sweetAlert = useSweetAlert();
@@ -51,6 +106,7 @@ export default function ProductDetailScreen() {
     
     const loadVariantImages = async () => {
       try {
+        setImagesLoading(true);
         // Load images for selected variant (specific color + size)
         const response = await fetch(`${supabaseUrl}/rest/v1/product_images?product_id=eq.${product.id}&or=(variant_id.eq.${selectedVariant.id},variant_id.is.null)&order=display_order.asc,is_primary.desc`, {
           headers: {
@@ -94,6 +150,8 @@ export default function ProductDetailScreen() {
         }
       } catch (error) {
         console.warn('⚠️ Error loading variant images:', error);
+      } finally {
+        setImagesLoading(false);
       }
     };
     
@@ -152,6 +210,7 @@ export default function ProductDetailScreen() {
         
         // Load product images (if table exists)
         console.log('📸 Fetching product images...');
+        setImagesLoading(true);
         try {
           const imagesResponse = await fetch(`${supabaseUrl}/rest/v1/product_images?product_id=eq.${id}&select=*&order=display_order.asc,is_primary.desc`, {
             headers: {
@@ -177,6 +236,21 @@ export default function ProductDetailScreen() {
               });
               console.log('✅ Unique product images:', uniqueImages.length, 'out of', imagesData.length);
               setProductImages(uniqueImages);
+              
+              // Preload first image immediately for faster display (main image, quality 75)
+              if (uniqueImages.length > 0 && uniqueImages[0]?.image_url) {
+                Image.prefetch(getMainImageUrl(uniqueImages[0].image_url, 75)).catch(() => {});
+              }
+              
+              // Preload thumbnail images in parallel (using smaller size and lower quality for thumbnails)
+              if (uniqueImages.length > 1) {
+                uniqueImages.slice(1, Math.min(10, uniqueImages.length)).forEach(img => {
+                  if (img.image_url) {
+                    // Preload thumbnail version (smaller, faster, quality 30)
+                    Image.prefetch(getThumbnailUrl(img.image_url, 150, 30)).catch(() => {});
+                  }
+                });
+              }
             } else {
               // Fallback to product.image_url if no images in product_images table
               if (productData.image_url) {
@@ -222,6 +296,8 @@ export default function ProductDetailScreen() {
               is_primary: true,
             }]);
           }
+        } finally {
+          setImagesLoading(false);
         }
         
         // Load variants (non-blocking)
@@ -545,10 +621,98 @@ export default function ProductDetailScreen() {
     }
   };
 
+  const currentImage = productImages[currentImageIndex]?.image_url || product?.image_url || '';
+  const hasMultipleImages = productImages.length > 1;
+
+  const isWeb = Platform.OS === 'web';
+  const { width } = Dimensions.get('window');
+  const maxContentWidth = isWeb ? 1200 : width;
+
+  // Preload next and previous images + nearby images for faster navigation
+  useEffect(() => {
+    if (product && productImages.length > 0) {
+      const preloadImages: string[] = [];
+      
+      // Preload previous image (main image, quality 75)
+      if (currentImageIndex > 0) {
+        const prevUrl = productImages[currentImageIndex - 1]?.image_url;
+        if (prevUrl) preloadImages.push(getMainImageUrl(prevUrl, 75));
+      }
+      
+      // Preload next image (main image, quality 75)
+      if (currentImageIndex < productImages.length - 1) {
+        const nextUrl = productImages[currentImageIndex + 1]?.image_url;
+        if (nextUrl) preloadImages.push(getMainImageUrl(nextUrl, 75));
+      }
+      
+      // Preload images 2-3 positions ahead/behind for smoother scrolling (main images, quality 75)
+      if (currentImageIndex > 1) {
+        const prev2Url = productImages[currentImageIndex - 2]?.image_url;
+        if (prev2Url) preloadImages.push(getMainImageUrl(prev2Url, 75));
+      }
+      if (currentImageIndex < productImages.length - 2) {
+        const next2Url = productImages[currentImageIndex + 2]?.image_url;
+        if (next2Url) preloadImages.push(getMainImageUrl(next2Url, 75));
+      }
+      
+      // Preload all images in parallel
+      preloadImages.forEach(url => {
+        if (url) {
+          Image.prefetch(url).catch(() => {
+            // Silently fail if preload fails
+          });
+        }
+      });
+    }
+  }, [currentImageIndex, productImages, product]);
+  
+  // Preload all thumbnail images when product images are loaded
+  useEffect(() => {
+    if (product && productImages.length > 0) {
+      // Preload all thumbnail images in parallel (using smaller size and lower quality for thumbnails)
+      productImages.forEach(img => {
+        if (img.image_url) {
+          // Preload thumbnail version (smaller, faster, quality 30)
+          Image.prefetch(getThumbnailUrl(img.image_url, 150, 30)).catch(() => {});
+        }
+      });
+    }
+  }, [productImages, product]);
+
+  // Reset image loaded state when image changes and preload new image
+  useEffect(() => {
+    if (product && currentImage) {
+      setImageLoaded(false);
+      imageOpacity.setValue(0);
+      
+      // Preload the new current image immediately (main image, quality 75)
+      Image.prefetch(getMainImageUrl(currentImage, 75)).catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentImageIndex, currentImage, product]);
+
   if (loading) {
+    const isWeb = Platform.OS === 'web';
+    const { width } = Dimensions.get('window');
+    const maxContentWidth = isWeb ? 1200 : width;
+    const imageHeight = isWeb ? 500 : width * 0.8;
+    
     return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="small" color="#EE1C47" />
+      <View style={styles.container}>
+        <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
+          <View style={[styles.contentWrapper, { maxWidth: maxContentWidth, alignSelf: 'center', width: '100%' }]}>
+            <View style={styles.imageSection}>
+              <SkeletonCard width="100%" height={imageHeight} borderRadius={8} />
+            </View>
+            <View style={styles.content}>
+              <SkeletonCard width="90%" height={24} borderRadius={4} />
+              <View style={{ marginTop: 16, gap: 8 }}>
+                <SkeletonCard width="60%" height={28} borderRadius={4} />
+                <SkeletonCard width="40%" height={20} borderRadius={4} />
+              </View>
+            </View>
+          </View>
+        </ScrollView>
       </View>
     );
   }
@@ -561,12 +725,12 @@ export default function ProductDetailScreen() {
     );
   }
 
-  const currentImage = productImages[currentImageIndex]?.image_url || product?.image_url || '';
-  const hasMultipleImages = productImages.length > 1;
-
-  const isWeb = Platform.OS === 'web';
-  const { width } = Dimensions.get('window');
-  const maxContentWidth = isWeb ? 1200 : width;
+  // Handle image load
+  const handleImageLoad = () => {
+    setImageLoaded(true);
+    // Show image immediately without animation to avoid flickering
+    imageOpacity.setValue(1);
+  };
 
   return (
     <View style={styles.container}>
@@ -575,41 +739,80 @@ export default function ProductDetailScreen() {
           {/* Product Images - Full width on top */}
           <View style={styles.imageSection}>
             <View style={styles.imageContainer}>
-              <Image source={{ uri: currentImage }} style={styles.image} />
-              
-              {/* Image Navigation */}
-              {hasMultipleImages && (
+              {imagesLoading ? (
+                <SkeletonCard width="100%" height={isWeb ? 500 : width * 0.8} borderRadius={8} />
+              ) : (
                 <>
-                  {currentImageIndex > 0 && (
-                    <TouchableOpacity
-                      style={[styles.imageNavButton, styles.imageNavButtonLeft]}
-                      onPress={() => setCurrentImageIndex(currentImageIndex - 1)}
-                    >
-                      <Ionicons name="chevron-back" size={20} color="#fff" />
-                    </TouchableOpacity>
+                  {!imageLoaded && (
+                    <View style={styles.skeletonOverlay}>
+                      <SkeletonCard width="100%" height={isWeb ? 500 : width * 0.8} borderRadius={8} />
+                    </View>
                   )}
+                  <Animated.View
+                    style={[
+                      styles.imageWrapper,
+                      {
+                        opacity: imageOpacity, // Use animated value for smooth transition
+                      },
+                    ]}
+                  >
+                    <Image
+                      key={`${currentImage}-${currentImageIndex}`} // Force re-render when image changes
+                      source={{ uri: getMainImageUrl(currentImage, 75) }} // Higher quality (75) for main image
+                      style={styles.image}
+                      onLoad={handleImageLoad}
+                      resizeMode="contain"
+                    />
+                  </Animated.View>
                   
-                  {currentImageIndex < productImages.length - 1 && (
-                    <TouchableOpacity
-                      style={[styles.imageNavButton, styles.imageNavButtonRight]}
-                      onPress={() => setCurrentImageIndex(currentImageIndex + 1)}
-                    >
-                      <Ionicons name="chevron-forward" size={20} color="#fff" />
-                    </TouchableOpacity>
+                  {/* Image Navigation */}
+                  {hasMultipleImages && (
+                    <>
+                      {currentImageIndex > 0 && (
+                        <TouchableOpacity
+                          style={[styles.imageNavButton, styles.imageNavButtonLeft]}
+                          onPress={() => setCurrentImageIndex(currentImageIndex - 1)}
+                        >
+                          <Ionicons name="chevron-back" size={20} color="#fff" />
+                        </TouchableOpacity>
+                      )}
+                      
+                      {currentImageIndex < productImages.length - 1 && (
+                        <TouchableOpacity
+                          style={[styles.imageNavButton, styles.imageNavButtonRight]}
+                          onPress={() => setCurrentImageIndex(currentImageIndex + 1)}
+                        >
+                          <Ionicons name="chevron-forward" size={20} color="#fff" />
+                        </TouchableOpacity>
+                      )}
+                      
+                      {/* Image Counter */}
+                      <View style={styles.imageCounter}>
+                        <Text style={styles.imageCounterText}>
+                          {currentImageIndex + 1} / {productImages.length}
+                        </Text>
+                      </View>
+                    </>
                   )}
-                  
-                  {/* Image Counter */}
-                  <View style={styles.imageCounter}>
-                    <Text style={styles.imageCounterText}>
-                      {currentImageIndex + 1} / {productImages.length}
-                    </Text>
-                  </View>
                 </>
               )}
             </View>
             
             {/* Thumbnail Images (if multiple) - Below main image */}
-            {hasMultipleImages && (
+            {imagesLoading ? (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                style={styles.thumbnailsContainer}
+                contentContainerStyle={styles.thumbnailsContent}
+              >
+                {Array.from({ length: 4 }).map((_, index) => (
+                  <View key={index} style={{ marginRight: 8 }}>
+                    <SkeletonCard width={70} height={70} borderRadius={8} />
+                  </View>
+                ))}
+              </ScrollView>
+            ) : hasMultipleImages && (
               <ScrollView
                 horizontal
                 showsHorizontalScrollIndicator={false}
@@ -617,16 +820,12 @@ export default function ProductDetailScreen() {
                 contentContainerStyle={styles.thumbnailsContent}
               >
                 {productImages.map((img, index) => (
-                  <TouchableOpacity
+                  <ThumbnailImage
                     key={img.id}
+                    imageUrl={img.image_url}
+                    isActive={index === currentImageIndex}
                     onPress={() => setCurrentImageIndex(index)}
-                    style={[
-                      styles.thumbnail,
-                      index === currentImageIndex && styles.thumbnailActive,
-                    ]}
-                  >
-                    <Image source={{ uri: img.image_url }} style={styles.thumbnailImage} />
-                  </TouchableOpacity>
+                  />
                 ))}
               </ScrollView>
             )}
@@ -972,11 +1171,33 @@ const styles = StyleSheet.create({
     height: 400,
     backgroundColor: '#fff',
   },
+  skeletonOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 1,
+  },
+  imageWrapper: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    width: '100%',
+    height: '100%',
+    zIndex: 2,
+  },
   image: {
     width: '100%',
     height: 400,
     backgroundColor: '#f0f0f0',
     resizeMode: 'contain',
+    // Optimize main image rendering
+    ...(Platform.OS === 'web' && {
+      imageRendering: 'auto', // Better quality for main images on web
+    }),
   },
   imageNavButton: {
     position: 'absolute',
@@ -1033,10 +1254,23 @@ const styles = StyleSheet.create({
   thumbnailActive: {
     borderColor: '#EE1C47',
   },
+  thumbnailImageWrapper: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    width: '100%',
+    height: '100%',
+  },
   thumbnailImage: {
     width: '100%',
     height: '100%',
     resizeMode: 'cover',
+    // Optimize thumbnail rendering
+    ...(Platform.OS === 'web' && {
+      imageRendering: 'crisp-edges', // Better quality for small images on web
+    }),
   },
   content: {
     padding: 16,

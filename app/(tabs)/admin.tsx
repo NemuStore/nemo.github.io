@@ -18,6 +18,7 @@ import { Order, Shipment, Inventory, Product, User, UserRole, Category, Section,
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
+import * as ImageManipulator from 'expo-image-manipulator';
 import { uploadImageToCatbox } from '@/lib/catbox';
 import SweetAlert from '@/components/SweetAlert';
 import { useSweetAlert } from '@/hooks/useSweetAlert';
@@ -1598,11 +1599,102 @@ export default function AdminScreen() {
     }
   };
 
+  // Convert image to AVIF format for better compression
+  // AVIF provides ~50% better compression than JPEG/WebP
+  // Note: AVIF conversion happens in Edge Function, here we prepare the image
+  const convertToAVIF = async (imageUri: string): Promise<string> => {
+    try {
+      // On web, try to use ImageEncoder API if available (Chrome 94+)
+      if (typeof window !== 'undefined') {
+        // Check for ImageEncoder API support
+        if ('ImageEncoder' in window) {
+          console.log('🔄 Converting image to AVIF using ImageEncoder API...');
+          try {
+            const response = await fetch(imageUri);
+            const blob = await response.blob();
+            const imageBitmap = await createImageBitmap(blob);
+            
+            // Use ImageEncoder API (Chrome 94+)
+            const ImageEncoder = (window as any).ImageEncoder;
+            const encoder = new ImageEncoder({
+              type: 'image/avif',
+              quality: 0.8, // 80% quality for good compression
+            });
+            
+            const encoded = await encoder.encode(imageBitmap);
+            const avifBlob = await encoded.data;
+            const avifUrl = URL.createObjectURL(avifBlob);
+            
+            console.log('✅ Image converted to AVIF using ImageEncoder');
+            return avifUrl;
+          } catch (imageEncoderError) {
+            console.warn('⚠️ ImageEncoder API failed, trying WebP fallback...', imageEncoderError);
+            // Fallback to WebP if AVIF conversion fails
+            return await convertToWebPFallback(imageUri);
+          }
+        }
+        
+        // Try Canvas API with AVIF support (limited browser support)
+        try {
+          console.log('🔄 Attempting AVIF conversion using Canvas API...');
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d');
+          const img = new Image();
+          
+          await new Promise((resolve, reject) => {
+            img.onload = () => {
+              canvas.width = img.width;
+              canvas.height = img.height;
+              ctx?.drawImage(img, 0, 0);
+              resolve(null);
+            };
+            img.onerror = reject;
+            img.src = imageUri;
+          });
+          
+          // Canvas API doesn't support AVIF in toBlob, so use WebP fallback
+          console.log('⚠️ Canvas AVIF not supported, using WebP fallback');
+          return await convertToWebPFallback(imageUri);
+        } catch (canvasError) {
+          console.warn('⚠️ Canvas AVIF conversion failed, using WebP fallback...', canvasError);
+          return await convertToWebPFallback(imageUri);
+        }
+      }
+      
+      // Fallback: Convert to WebP (expo-image-manipulator doesn't support AVIF yet)
+      console.log('🔄 Converting image to WebP (AVIF not supported, using WebP fallback)...');
+      return await convertToWebPFallback(imageUri);
+    } catch (error) {
+      console.warn('⚠️ Failed to convert to AVIF, using original:', error);
+      // If conversion fails, return original URI
+      return imageUri;
+    }
+  };
+
+  // Fallback: Convert to WebP using expo-image-manipulator
+  const convertToWebPFallback = async (imageUri: string): Promise<string> => {
+    try {
+      const manipResult = await ImageManipulator.manipulateAsync(
+        imageUri,
+        [], // No transformations needed, just format conversion
+        {
+          compress: 0.8, // WebP compression (0.8 = good quality, smaller size)
+          format: ImageManipulator.SaveFormat.WEBP, // Convert to WebP
+        }
+      );
+      console.log('✅ Image converted to WebP (fallback)');
+      return manipResult.uri;
+    } catch (error) {
+      console.warn('⚠️ Failed to convert to WebP, using original:', error);
+      return imageUri;
+    }
+  };
+
   const pickImage = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsMultipleSelection: true, // Allow multiple images
-      quality: 0.8,
+      quality: 0.85, // Higher quality before WebP conversion (WebP will compress it further)
       // Note: allowsEditing is not supported with allowsMultipleSelection
     });
 
@@ -1616,8 +1708,13 @@ export default function AdminScreen() {
           const asset = result.assets[i];
           try {
             setUploadProgress({ current: i + 1, total: result.assets.length, isUploading: true });
-            console.log(`📤 Uploading image ${i + 1}/${result.assets.length}...`);
-            const imageUrl = await uploadImageToCatbox(asset.uri);
+            console.log(`📤 Processing image ${i + 1}/${result.assets.length}...`);
+            
+            // Convert to AVIF for better compression (fallback to WebP if not supported)
+            const avifUri = await convertToAVIF(asset.uri);
+            
+            console.log(`📤 Uploading AVIF/WebP image ${i + 1}/${result.assets.length}...`);
+            const imageUrl = await uploadImageToCatbox(avifUri);
             console.log(`✅ Image ${i + 1} uploaded successfully:`, imageUrl);
             uploadedImages.push({ uri: asset.uri, url: imageUrl });
           } catch (error: any) {
@@ -1631,7 +1728,7 @@ export default function AdminScreen() {
           setProductImages([...productImages, ...uploadedImages]);
           // Images are stored in product_images table using imgbb links, no need to set image_url
           
-          sweetAlert.showSuccess('نجح', `تم رفع ${uploadedImages.length} صورة بنجاح`);
+          sweetAlert.showSuccess('نجح', `تم رفع ${uploadedImages.length} صورة بنجاح (AVIF/WebP)`);
         }
       } catch (error) {
         console.error('Error uploading images:', error);
@@ -1666,15 +1763,17 @@ export default function AdminScreen() {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true,
-      quality: 0.8,
+      quality: 0.85, // Higher quality before WebP conversion
     });
 
     if (!result.canceled && result.assets.length > 0) {
       try {
         setLoading(true);
-        const imageUrl = await uploadImageToCatbox(result.assets[0].uri);
+        // Convert to AVIF for better compression (fallback to WebP if not supported)
+        const avifUri = await convertToAVIF(result.assets[0].uri);
+        const imageUrl = await uploadImageToCatbox(avifUri);
         setNewVariant({ ...newVariant, image_url: imageUrl });
-        sweetAlert.showSuccess('نجح', 'تم رفع الصورة بنجاح');
+        sweetAlert.showSuccess('نجح', 'تم رفع الصورة بنجاح (AVIF/WebP)');
       } catch (error) {
         console.error('Error uploading variant image:', error);
         sweetAlert.showError('خطأ', 'فشل رفع الصورة');

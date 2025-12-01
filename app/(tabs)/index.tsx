@@ -18,6 +18,8 @@ import { useRouter } from 'expo-router';
 import { useCart } from '@/contexts/CartContext';
 import CountdownTimer from '@/components/CountdownTimer';
 import { useDarkMode } from '@/contexts/DarkModeContext';
+import { ProductCardSkeleton } from '@/components/ProductCardSkeleton';
+import { getCardImageUrl } from '@/utils/imageUtils';
 
 const { width } = Dimensions.get('window');
 const isWeb = Platform.OS === 'web';
@@ -445,9 +447,7 @@ export default function HomeScreen() {
       >
         <View style={[styles.productsGrid, { maxWidth: maxContainerWidth, alignSelf: 'center', width: '100%' }]}>
           {loading ? (
-            <View style={styles.centerContainer}>
-              <ActivityIndicator size="small" color="#EE1C47" />
-            </View>
+            <ProductCardSkeleton count={8} />
           ) : error ? (
             <View style={styles.centerContainer}>
               <Text style={styles.errorText}>{error}</Text>
@@ -501,7 +501,7 @@ export default function HomeScreen() {
                   )}
                   
                   <Image
-                    source={{ uri: product.primary_image_url || product.image_url }}
+                    source={{ uri: getCardImageUrl(product.primary_image_url || product.image_url, 250, 50) }} // Optimized for cards: 250px, quality 50
                     style={styles.productImage}
                     resizeMode="contain"
                   />
