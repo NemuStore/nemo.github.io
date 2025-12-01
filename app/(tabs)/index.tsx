@@ -20,6 +20,7 @@ import CountdownTimer from '@/components/CountdownTimer';
 import { useDarkMode } from '@/contexts/DarkModeContext';
 import { ProductCardSkeleton } from '@/components/ProductCardSkeleton';
 import { getCardImageUrl } from '@/utils/imageUtils';
+import { getSupabaseUrl, getSupabaseAnonKey } from '@/utils/env';
 
 const { width } = Dimensions.get('window');
 const isWeb = Platform.OS === 'web';
@@ -59,9 +60,17 @@ export default function HomeScreen() {
     try {
       setLoading(true);
       setError(null);
+      
+      const supabaseUrl = getSupabaseUrl();
+      const supabaseKey = getSupabaseAnonKey();
+      
       console.log('🛍️ Loading products...');
-      console.log('🔗 Supabase URL:', process.env.EXPO_PUBLIC_SUPABASE_URL?.substring(0, 30) + '...');
-      console.log('🔑 Supabase Key exists:', !!process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY);
+      console.log('🔗 Supabase URL:', supabaseUrl?.substring(0, 30) + '...');
+      console.log('🔑 Supabase Key exists:', !!supabaseKey);
+      
+      if (!supabaseUrl || !supabaseKey) {
+        throw new Error('Missing Supabase environment variables');
+      }
       
       // Add timeout to prevent infinite loading (reduced to 5 seconds)
       timeoutId = setTimeout(() => {
@@ -73,10 +82,6 @@ export default function HomeScreen() {
 
       const startTime = Date.now();
       console.log('📡 Sending query...');
-      
-      // Use fetch directly since Supabase client has issues on web
-      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
-      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
       
       console.log('🌐 Using direct fetch (Supabase client has issues on web)...');
       const response = await fetch(`${supabaseUrl}/rest/v1/products?select=*&order=created_at.desc`, {
@@ -178,8 +183,8 @@ export default function HomeScreen() {
 
   const loadSections = async () => {
     try {
-      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
-      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+      const supabaseUrl = getSupabaseUrl();
+      const supabaseKey = getSupabaseAnonKey();
       
       const response = await fetch(`${supabaseUrl}/rest/v1/sections?select=*&is_active=eq.true&order=display_order.asc,name.asc`, {
         headers: {
@@ -200,8 +205,8 @@ export default function HomeScreen() {
 
   const loadCategories = async () => {
     try {
-      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
-      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+      const supabaseUrl = getSupabaseUrl();
+      const supabaseKey = getSupabaseAnonKey();
       
       // Load categories with their sections
       const response = await fetch(`${supabaseUrl}/rest/v1/categories?select=*,sections(*)&is_active=eq.true&order=display_order.asc,name.asc`, {

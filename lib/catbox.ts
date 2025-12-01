@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { getSupabaseUrl, getSupabaseAnonKey } from '@/utils/env';
 
 const CATBOX_USERHASH = process.env.EXPO_PUBLIC_CATBOX_USERHASH || '91318ab7fb7df25299e14a84b';
 
@@ -59,12 +60,12 @@ export async function uploadImageToCatbox(imageUri: string): Promise<string> {
     // Note: userhash should be set as CATBOX_USERHASH secret in Supabase Edge Function
     // If not set, it will fallback to sending it in the request body
     console.log('🔗 Invoking Edge Function: upload-to-catbox');
-    console.log('🌐 Supabase URL:', process.env.EXPO_PUBLIC_SUPABASE_URL);
-    console.log('🔑 Supabase Key exists:', !!process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY);
+    const supabaseUrl = getSupabaseUrl();
+    const supabaseKey = getSupabaseAnonKey();
+    console.log('🌐 Supabase URL:', supabaseUrl);
+    console.log('🔑 Supabase Key exists:', !!supabaseKey);
     
     // Use fetch directly instead of supabase.functions.invoke (more reliable on web)
-    const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
-    const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
     const functionUrl = `${supabaseUrl}/functions/v1/upload-to-catbox`;
     
     console.log('🌐 Function URL:', functionUrl);
