@@ -30,7 +30,9 @@
       "bundler": "metro",
       "build": {
         "babel": {
-          "include": ["@expo/vector-icons"]
+          "include": [
+            "@expo/vector-icons"
+          ]
         }
       }
     },
@@ -49,6 +51,15 @@
         }
       ]
     ],
-    "scheme": "nemu"
+    "scheme": "nemu",
+    "extra": {
+      "router": {
+        "origin": false
+      },
+      "eas": {
+        "projectId": "78b6347a-09fe-4958-9436-38fee73e802c"
+      }
+    },
+    "owner": "nemu700"
   }
 }
