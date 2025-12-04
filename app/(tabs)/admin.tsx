@@ -167,6 +167,8 @@ export default function AdminScreen() {
   const [productFilterSource, setProductFilterSource] = useState<'all' | 'warehouse' | 'external'>('all');
   const [productSortBy, setProductSortBy] = useState<'date' | 'name' | 'price' | 'stock'>('date');
   const [productSortOrder, setProductSortOrder] = useState<'asc' | 'desc'>('desc');
+  // Order filtering by region
+  const [orderRegionFilter, setOrderRegionFilter] = useState<string>('all');
   const [productCurrentPage, setProductCurrentPage] = useState(1);
   const [productsPerPage] = useState(12);
   const [productVariantsCount, setProductVariantsCount] = useState<{ [key: string]: number }>({});
@@ -4498,20 +4500,69 @@ export default function AdminScreen() {
         <View style={[styles.contentWrapper, { maxWidth: maxContentWidth, alignSelf: 'center', width: '100%' }]}>
         {activeTab === 'orders' && (
           <View>
+            {/* Region Filter - فلتر المناطق */}
+            <View style={styles.filterSection}>
+              <Text style={styles.filterLabel}>تصنيف حسب المنطقة:</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.regionFilterContainer}>
+                <TouchableOpacity
+                  style={[styles.regionFilterButton, orderRegionFilter === 'all' && styles.regionFilterButtonActive]}
+                  onPress={() => setOrderRegionFilter('all')}
+                >
+                  <Text style={[styles.regionFilterText, orderRegionFilter === 'all' && styles.regionFilterTextActive]}>
+                    الكل ({orders.length})
+                  </Text>
+                </TouchableOpacity>
+                {Array.from(new Set(orders.map(o => o.delivery_region).filter(Boolean))).map((region) => (
+                  <TouchableOpacity
+                    key={region}
+                    style={[styles.regionFilterButton, orderRegionFilter === region && styles.regionFilterButtonActive]}
+                    onPress={() => setOrderRegionFilter(region || 'all')}
+                  >
+                    <Text style={[styles.regionFilterText, orderRegionFilter === region && styles.regionFilterTextActive]}>
+                      {region} ({orders.filter(o => o.delivery_region === region).length})
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+                <TouchableOpacity
+                  style={[styles.regionFilterButton, orderRegionFilter === 'no-region' && styles.regionFilterButtonActive]}
+                  onPress={() => setOrderRegionFilter('no-region')}
+                >
+                  <Text style={[styles.regionFilterText, orderRegionFilter === 'no-region' && styles.regionFilterTextActive]}>
+                    بدون منطقة ({orders.filter(o => !o.delivery_region).length})
+                  </Text>
+                </TouchableOpacity>
+              </ScrollView>
+            </View>
+
             {/* External Orders - الطلبات من الخارج */}
-            {orders && orders.filter(o => o.source_type === 'external').length > 0 && (
+            {orders && orders.filter(o => {
+              const matchesSource = o.source_type === 'external';
+              const matchesRegion = orderRegionFilter === 'all' || 
+                (orderRegionFilter === 'no-region' ? !o.delivery_region : o.delivery_region === orderRegionFilter);
+              return matchesSource && matchesRegion;
+            }).length > 0 && (
               <View style={{ marginBottom: 30 }}>
                 <View style={styles.sectionHeader}>
                   <Ionicons name="globe-outline" size={20} color="#FF9800" />
                   <Text style={styles.sectionHeaderText}>الطلبات من الخارج</Text>
                   <View style={styles.sectionHeaderBadge}>
                     <Text style={styles.sectionHeaderBadgeText}>
-                      {orders.filter(o => o.source_type === 'external').length}
+                      {orders.filter(o => {
+                        const matchesSource = o.source_type === 'external';
+                        const matchesRegion = orderRegionFilter === 'all' || 
+                          (orderRegionFilter === 'no-region' ? !o.delivery_region : o.delivery_region === orderRegionFilter);
+                        return matchesSource && matchesRegion;
+                      }).length}
                     </Text>
                   </View>
                 </View>
             <View style={styles.gridContainer}>
-                  {orders.filter(o => o.source_type === 'external').map((order) => {
+                  {orders.filter(o => {
+                    const matchesSource = o.source_type === 'external';
+                    const matchesRegion = orderRegionFilter === 'all' || 
+                      (orderRegionFilter === 'no-region' ? !o.delivery_region : o.delivery_region === orderRegionFilter);
+                    return matchesSource && matchesRegion;
+                  }).map((order) => {
                 const isEditing = editingOrderId === order.id;
                 const quickEdit = quickEditOrder[order.id] || {};
                 const displayStatus = isEditing ? (quickEdit.status || order.status) : order.status;
@@ -4637,19 +4688,34 @@ export default function AdminScreen() {
             )}
 
             {/* Warehouse Orders - الطلبات من المخزون الداخلي */}
-            {orders && orders.filter(o => o.source_type === 'warehouse' || !o.source_type).length > 0 && (
+            {orders && orders.filter(o => {
+              const matchesSource = o.source_type === 'warehouse' || !o.source_type;
+              const matchesRegion = orderRegionFilter === 'all' || 
+                (orderRegionFilter === 'no-region' ? !o.delivery_region : o.delivery_region === orderRegionFilter);
+              return matchesSource && matchesRegion;
+            }).length > 0 && (
               <View style={{ marginBottom: 30 }}>
                 <View style={styles.sectionHeader}>
                   <Ionicons name="cube-outline" size={20} color="#10B981" />
                   <Text style={styles.sectionHeaderText}>الطلبات من المخزون الداخلي</Text>
                   <View style={styles.sectionHeaderBadge}>
                     <Text style={styles.sectionHeaderBadgeText}>
-                      {orders.filter(o => o.source_type === 'warehouse' || !o.source_type).length}
+                      {orders.filter(o => {
+                        const matchesSource = o.source_type === 'warehouse' || !o.source_type;
+                        const matchesRegion = orderRegionFilter === 'all' || 
+                          (orderRegionFilter === 'no-region' ? !o.delivery_region : o.delivery_region === orderRegionFilter);
+                        return matchesSource && matchesRegion;
+                      }).length}
                     </Text>
                   </View>
                 </View>
                 <View style={styles.gridContainer}>
-                  {orders.filter(o => o.source_type === 'warehouse' || !o.source_type).map((order) => {
+                  {orders.filter(o => {
+                    const matchesSource = o.source_type === 'warehouse' || !o.source_type;
+                    const matchesRegion = orderRegionFilter === 'all' || 
+                      (orderRegionFilter === 'no-region' ? !o.delivery_region : o.delivery_region === orderRegionFilter);
+                    return matchesSource && matchesRegion;
+                  }).map((order) => {
                 const isEditing = editingOrderId === order.id;
                 const quickEdit = quickEditOrder[order.id] || {};
                 const displayStatus = isEditing ? (quickEdit.status || order.status) : order.status;
@@ -4683,6 +4749,25 @@ export default function AdminScreen() {
                       <Text style={styles.gridPrice}>{formatPrice(order.total_amount)} ج.م</Text>
                     </View>
 
+                    {/* العنوان والمنطقة */}
+                    <View style={styles.orderAddressSection}>
+                      <Text style={styles.orderAddressText} numberOfLines={2}>
+                        {order.shipping_address}
+                      </Text>
+                      {order.delivery_region && (
+                        <View style={styles.regionBadge}>
+                          <Ionicons name="location" size={12} color="#EE1C47" />
+                          <Text style={styles.regionBadgeText}>{order.delivery_region}</Text>
+                        </View>
+                      )}
+                      {order.delivery_notes && (
+                        <View style={styles.notesBadge}>
+                          <Ionicons name="pricetag" size={12} color="#666" />
+                          <Text style={styles.notesBadgeText}>{order.delivery_notes}</Text>
+                        </View>
+                      )}
+                    </View>
+
                     <View style={styles.gridCardMeta}>
                       {isEditing ? (
                         <View style={{ flex: 1 }}>
@@ -4705,6 +4790,27 @@ export default function AdminScreen() {
                               ))}
                             </View>
                           </ScrollView>
+                          
+                          {/* تعديل المنطقة والملاحظات */}
+                          <View style={{ marginTop: 12 }}>
+                            <Text style={styles.gridCardMetaText}>المنطقة:</Text>
+                            <TextInput
+                              style={styles.quickEditInput}
+                              placeholder="مثل: القاهرة، الجيزة، الإسكندرية..."
+                              value={quickEdit.delivery_region || order.delivery_region || ''}
+                              onChangeText={(text) => setQuickEditOrder({ ...quickEditOrder, [order.id]: { ...quickEdit, delivery_region: text } })}
+                            />
+                          </View>
+                          
+                          <View style={{ marginTop: 12 }}>
+                            <Text style={styles.gridCardMetaText}>ملاحظة / علامة مميزة:</Text>
+                            <TextInput
+                              style={styles.quickEditInput}
+                              placeholder="ملاحظات التوصيل..."
+                              value={quickEdit.delivery_notes || order.delivery_notes || ''}
+                              onChangeText={(text) => setQuickEditOrder({ ...quickEditOrder, [order.id]: { ...quickEdit, delivery_notes: text } })}
+                            />
+                          </View>
                         </View>
                       ) : (
                         <View style={[styles.statusBadgeSmall, getStatusBadgeColor(order.status)]}>
@@ -9129,6 +9235,103 @@ const styles = StyleSheet.create({
   },
   variantsManagementSection: {
     marginBottom: 30,
+  },
+  filterSection: {
+    marginBottom: 20,
+    padding: 16,
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  filterLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 12,
+  },
+  regionFilterContainer: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  regionFilterButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    backgroundColor: '#F5F5F5',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  regionFilterButtonActive: {
+    backgroundColor: '#EE1C47',
+    borderColor: '#EE1C47',
+  },
+  regionFilterText: {
+    fontSize: 13,
+    color: '#666',
+    fontWeight: '500',
+  },
+  regionFilterTextActive: {
+    color: '#fff',
+    fontWeight: '600',
+  },
+  orderAddressSection: {
+    marginTop: 8,
+    marginBottom: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#F0F0F0',
+  },
+  orderAddressText: {
+    fontSize: 12,
+    color: '#666',
+    marginBottom: 6,
+    lineHeight: 16,
+  },
+  regionBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    alignSelf: 'flex-start',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    backgroundColor: '#FFF5F5',
+    marginTop: 4,
+  },
+  regionBadgeText: {
+    fontSize: 11,
+    color: '#EE1C47',
+    fontWeight: '600',
+  },
+  notesBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    alignSelf: 'flex-start',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    backgroundColor: '#F5F5F5',
+    marginTop: 4,
+  },
+  notesBadgeText: {
+    fontSize: 11,
+    color: '#666',
+    fontWeight: '500',
+  },
+  quickEditInput: {
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 8,
+    padding: 10,
+    fontSize: 14,
+    color: '#333',
+    backgroundColor: '#fff',
+    marginTop: 6,
   },
 });
 

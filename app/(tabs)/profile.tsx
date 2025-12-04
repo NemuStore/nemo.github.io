@@ -315,82 +315,133 @@ export default function ProfileScreen() {
       }
     >
       <View style={[styles.contentWrapper, { maxWidth: maxContentWidth, alignSelf: 'center', width: '100%' }]}>
-        {/* User Info */}
-        <View style={styles.userSection}>
-        <View style={styles.avatar}>
-          <Ionicons name="person" size={40} color="#EE1C47" />
+        {/* User Header - Temu Style */}
+        <View style={styles.userHeader}>
+          <View style={styles.avatar}>
+            <Ionicons name="person" size={50} color="#EE1C47" />
+          </View>
+          <View style={styles.userInfo}>
+            <Text style={styles.userName}>{user.full_name || user.email}</Text>
+            <Text style={styles.userEmail}>{user.email}</Text>
+          </View>
+          <TouchableOpacity 
+            style={styles.editButton}
+            onPress={() => router.push('/(tabs)/admin')}
+          >
+            <Ionicons name="create-outline" size={20} color="#666" />
+          </TouchableOpacity>
         </View>
-        <Text style={styles.userName}>{user.full_name || user.email}</Text>
-        <Text style={styles.userEmail}>{user.email}</Text>
-        {user.phone && <Text style={styles.userPhone}>{user.phone}</Text>}
-        {user.address && <Text style={styles.userAddress}>{user.address}</Text>}
-      </View>
 
-      {/* Pending Orders */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>الطلبات القادمة</Text>
-        {pendingOrders.length === 0 ? (
-          <Text style={styles.emptyText}>لا توجد طلبات قادمة</Text>
-        ) : (
-          pendingOrders.map((order) => (
-            <View key={order.id} style={styles.orderCard}>
-              <View style={styles.orderHeader}>
-                <Text style={styles.orderNumber}>#{order.order_number}</Text>
-                <View
-                  style={[
-                    styles.statusBadge,
-                    { backgroundColor: getStatusColor(order.status) },
-                  ]}
-                >
-                  <Text style={styles.statusText}>
-                    {getStatusText(order.status)}
-                  </Text>
+        {/* Menu Items - Temu Style */}
+        <View style={styles.menuSection}>
+          {/* Orders */}
+          <TouchableOpacity 
+            style={styles.menuItem}
+            onPress={() => router.push('/orders')}
+          >
+            <View style={styles.menuItemLeft}>
+              <Ionicons name="receipt-outline" size={24} color="#333" />
+              <Text style={styles.menuItemText}>طلباتي</Text>
+            </View>
+            <View style={styles.menuItemRight}>
+              <Text style={styles.menuItemBadge}>{pendingOrders.length + deliveredOrders.length}</Text>
+              <Ionicons name="chevron-forward" size={20} color="#999" />
+            </View>
+          </TouchableOpacity>
+
+          {/* Addresses */}
+          <TouchableOpacity 
+            style={styles.menuItem}
+            onPress={() => router.push('/addresses')}
+          >
+            <View style={styles.menuItemLeft}>
+              <Ionicons name="location-outline" size={24} color="#333" />
+              <Text style={styles.menuItemText}>عناوين التوصيل</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color="#999" />
+          </TouchableOpacity>
+
+          {/* Payment Methods */}
+          <TouchableOpacity 
+            style={styles.menuItem}
+            onPress={() => router.push('/payment-methods')}
+          >
+            <View style={styles.menuItemLeft}>
+              <Ionicons name="card-outline" size={24} color="#333" />
+              <Text style={styles.menuItemText}>طرق الدفع</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color="#999" />
+          </TouchableOpacity>
+
+          {/* Settings */}
+          <TouchableOpacity 
+            style={styles.menuItem}
+            onPress={() => router.push('/settings')}
+          >
+            <View style={styles.menuItemLeft}>
+              <Ionicons name="settings-outline" size={24} color="#333" />
+              <Text style={styles.menuItemText}>الإعدادات</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color="#999" />
+          </TouchableOpacity>
+
+          {/* Help & Support */}
+          <TouchableOpacity 
+            style={styles.menuItem}
+            onPress={() => router.push('/help-support')}
+          >
+            <View style={styles.menuItemLeft}>
+              <Ionicons name="help-circle-outline" size={24} color="#333" />
+              <Text style={styles.menuItemText}>المساعدة والدعم</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color="#999" />
+          </TouchableOpacity>
+        </View>
+
+        {/* Pending Orders Section */}
+        {pendingOrders.length > 0 && (
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>الطلبات القادمة</Text>
+              <TouchableOpacity onPress={() => {/* Navigate to all orders */}}>
+                <Text style={styles.seeAllText}>عرض الكل</Text>
+              </TouchableOpacity>
+            </View>
+            {pendingOrders.slice(0, 3).map((order) => (
+              <TouchableOpacity 
+                key={order.id} 
+                style={styles.orderCard}
+                onPress={() => {/* Navigate to order details */}}
+              >
+                <View style={styles.orderHeader}>
+                  <Text style={styles.orderNumber}>#{order.order_number}</Text>
+                  <View
+                    style={[
+                      styles.statusBadge,
+                      { backgroundColor: getStatusColor(order.status) },
+                    ]}
+                  >
+                    <Text style={styles.statusText}>
+                      {getStatusText(order.status)}
+                    </Text>
+                  </View>
                 </View>
-              </View>
-              <Text style={styles.orderAmount}>
-                {order.total_amount.toFixed(2)} ج.م
-              </Text>
-              {order.estimated_delivery_days && (
-                <Text style={styles.deliveryInfo}>
-                  متوقع الوصول خلال {order.estimated_delivery_days} أيام
+                <Text style={styles.orderAmount}>
+                  {order.total_amount.toFixed(2)} ج.م
                 </Text>
-              )}
-            </View>
-          ))
-        )}
-      </View>
-
-      {/* Delivered Orders */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>الطلبات المستلمة</Text>
-        {deliveredOrders.length === 0 ? (
-          <Text style={styles.emptyText}>لا توجد طلبات مستلمة</Text>
-        ) : (
-          deliveredOrders.map((order) => (
-            <View key={order.id} style={styles.orderCard}>
-              <View style={styles.orderHeader}>
-                <Text style={styles.orderNumber}>#{order.order_number}</Text>
-                <View
-                  style={[
-                    styles.statusBadge,
-                    { backgroundColor: getStatusColor(order.status) },
-                  ]}
-                >
-                  <Text style={styles.statusText}>
-                    {getStatusText(order.status)}
+                {order.estimated_delivery_days && (
+                  <Text style={styles.deliveryInfo}>
+                    متوقع الوصول خلال {order.estimated_delivery_days} أيام
                   </Text>
-                </View>
-              </View>
-              <Text style={styles.orderAmount}>
-                {order.total_amount.toFixed(2)} ج.م
-              </Text>
-            </View>
-          ))
+                )}
+              </TouchableOpacity>
+            ))}
+          </View>
         )}
-      </View>
 
         {/* Logout Button */}
         <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
+          <Ionicons name="log-out-outline" size={20} color="#f44336" />
           <Text style={styles.logoutButtonText}>تسجيل الخروج</Text>
         </TouchableOpacity>
       </View>
@@ -428,41 +479,87 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: '#F5F5F5',
   },
-  userSection: {
-    backgroundColor: '#fff',
+  userHeader: {
+    backgroundColor: '#EE1C47',
     padding: 20,
+    flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 10,
   },
   avatar: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: '#f0f0f0',
+    width: 70,
+    height: 70,
+    borderRadius: 35,
+    backgroundColor: '#fff',
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 10,
+    marginRight: 15,
+  },
+  userInfo: {
+    flex: 1,
   },
   userName: {
     fontSize: 20,
     fontWeight: 'bold',
-    color: '#333',
+    color: '#fff',
     marginBottom: 5,
   },
   userEmail: {
     fontSize: 14,
-    color: '#666',
-    marginBottom: 5,
+    color: '#fff',
+    opacity: 0.9,
   },
-  userPhone: {
-    fontSize: 14,
-    color: '#666',
-    marginBottom: 5,
+  editButton: {
+    padding: 8,
   },
-  userAddress: {
-    fontSize: 14,
-    color: '#666',
+  menuSection: {
+    backgroundColor: '#fff',
+    marginBottom: 10,
+  },
+  menuItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0F0F0',
+  },
+  menuItemLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  menuItemText: {
+    fontSize: 16,
+    color: '#333',
+    marginLeft: 12,
+  },
+  menuItemRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  menuItemBadge: {
+    backgroundColor: '#EE1C47',
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: 'bold',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 10,
+    minWidth: 20,
     textAlign: 'center',
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 15,
+  },
+  seeAllText: {
+    fontSize: 14,
+    color: '#EE1C47',
+    fontWeight: '600',
   },
   section: {
     backgroundColor: '#fff',
@@ -530,16 +627,22 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
   },
   logoutButton: {
-    backgroundColor: '#f44336',
-    margin: 20,
+    backgroundColor: '#fff',
+    margin: 10,
+    marginTop: 20,
     padding: 15,
-    borderRadius: 25,
+    borderRadius: 12,
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
   },
   logoutButtonText: {
-    color: '#fff',
+    color: '#f44336',
     fontSize: 16,
-    fontWeight: 'bold',
+    fontWeight: '600',
+    marginLeft: 8,
   },
 });
 

@@ -30,10 +30,3 @@ export const getSupabaseAnonKey = (): string => {
   return getEnvVar('EXPO_PUBLIC_SUPABASE_ANON_KEY');
 };
 
-/**
- * Get ImgBB API Key
- */
-export const getImgbbApiKey = (): string => {
-  return getEnvVar('EXPO_PUBLIC_IMGBB_API_KEY');
-};
-

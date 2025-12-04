@@ -10,9 +10,9 @@ import {
   Platform,
   Dimensions,
   ActivityIndicator,
+  TextInput,
 } from 'react-native';
 import { supabase } from '@/lib/supabase';
-import { Order } from '@/types';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import * as Location from 'expo-location';
@@ -28,6 +28,8 @@ export default function CartScreen() {
   const [user, setUser] = useState<any>(null);
   const [variantImages, setVariantImages] = useState<Record<string, string>>({}); // variant_id -> image_url
   const [productImages, setProductImages] = useState<Record<string, string>>({}); // product_id -> primary_image_url
+  const [shippingAddress, setShippingAddress] = useState('');
+  const [phoneNumber, setPhoneNumber] = useState('');
   const router = useRouter();
   const sweetAlert = useSweetAlert();
 
@@ -40,6 +42,19 @@ export default function CartScreen() {
     };
     loadAllImages();
   }, [cartItems]);
+
+  // تحديث العنوان ورقم الهاتف من بيانات المستخدم عند التحميل
+  useEffect(() => {
+    if (user) {
+      // سحب العنوان تلقائياً من بيانات المستخدم
+      if (user.address) {
+        setShippingAddress(user.address);
+      }
+      if (user.phone) {
+        setPhoneNumber(user.phone);
+      }
+    }
+  }, [user]);
 
   const loadVariantImages = async () => {
     const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
@@ -294,11 +309,24 @@ export default function CartScreen() {
     try {
       console.log('🛒 Cart: Starting order creation...');
       
+      // التحقق من العنوان ورقم الهاتف
+      if (!shippingAddress || shippingAddress.trim() === '') {
+        sweetAlert.showError('خطأ', 'يرجى إدخال عنوان التوصيل');
+        setLoading(false);
+        return;
+      }
+
+      if (!phoneNumber || phoneNumber.trim() === '') {
+        sweetAlert.showError('خطأ', 'يرجى إدخال رقم الهاتف');
+        setLoading(false);
+        return;
+      }
+
       // Get location (optional)
       const location = await getLocation();
       
-      // Get address from user
-      let address = user.address || 'عنوان غير محدد';
+      // استخدام العنوان المدخل
+      const address = shippingAddress.trim();
       
       // فصل المنتجات حسب source_type
       const warehouseItems = cartItems.filter(item => 
@@ -430,6 +458,7 @@ export default function CartScreen() {
         const externalOrderData = await externalOrderResponse.json();
         const externalOrder = Array.isArray(externalOrderData) ? externalOrderData[0] : externalOrderData;
         console.log('✅ Cart: External order created:', externalOrder.id);
+        console.log('📋 Cart: External order data:', JSON.stringify(externalOrder, null, 2));
         
         // Create order items
         const externalOrderItems = externalItems.map((item) => ({
@@ -453,25 +482,45 @@ export default function CartScreen() {
         createdOrders.push(externalOrder);
       }
       
+      console.log('✅ Cart: Orders created successfully:', createdOrders.length);
+      console.log('📋 Cart: Created orders:', createdOrders);
+      
+      // Clear cart بعد نجاح إنشاء الطلبات
+      clearCart();
+      
       // عرض رسالة للعميل
       if (createdOrders.length === 2) {
+        console.log('🎉 Cart: Showing success message for 2 orders');
         sweetAlert.showSuccess(
           'تم إنشاء الطلبين',
           `تم إنشاء طلبين منفصلين:\n- طلب من المخزن: ${createdOrders[0].order_number}\n- طلب من الخارج: ${createdOrders[1].order_number}`,
-          () => router.push('/(tabs)/orders')
+          () => {
+            console.log('🔄 Cart: Navigating to profile');
+            // تأخير بسيط للتأكد من إغلاق الرسالة قبل التوجيه
+            setTimeout(() => {
+              router.push('/(tabs)/profile');
+            }, 100);
+          }
         );
       } else if (createdOrders.length === 1) {
         const order = createdOrders[0];
         const orderType = order.source_type === 'warehouse' ? 'من المخزن' : 'من الخارج';
-        sweetAlert.showConfirm(
-          'نجح',
-          `تم إنشاء الطلب بنجاح (${orderType})\nرقم الطلب: ${order.order_number}\nهل تريد الذهاب لصفحة الطلبات؟`,
-          () => router.push('/(tabs)/orders')
+        console.log('🎉 Cart: Showing success message for 1 order:', order.order_number);
+        sweetAlert.showSuccess(
+          'تم إنشاء الطلب بنجاح',
+          `تم إنشاء الطلب بنجاح (${orderType})\nرقم الطلب: ${order.order_number}`,
+          () => {
+            console.log('🔄 Cart: Navigating to profile');
+            // تأخير بسيط للتأكد من إغلاق الرسالة قبل التوجيه
+            setTimeout(() => {
+              router.push('/(tabs)/profile');
+            }, 100);
+          }
         );
+      } else {
+        console.warn('⚠️ Cart: No orders were created, but no error was thrown');
+        sweetAlert.showError('خطأ', 'لم يتم إنشاء أي طلبات');
       }
-      
-      // Clear cart بعد نجاح إنشاء الطلبات
-      clearCart();
       
     } catch (error: any) {
       console.error('❌ Cart: Error creating order:', error);
@@ -503,6 +552,56 @@ export default function CartScreen() {
   return (
     <View style={styles.container}>
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
+        {/* Checkout Steps - Temu Style */}
+        <View style={[styles.stepsContainer, { maxWidth: maxContentWidth, alignSelf: 'center', width: '100%' }]}>
+          <View style={styles.step}>
+            <View style={[styles.stepCircle, styles.stepActive]}>
+              <Text style={[styles.stepNumber, styles.stepActiveText]}>1</Text>
+            </View>
+            <Text style={[styles.stepLabel, styles.stepActiveLabel]}>معلومات التوصيل</Text>
+          </View>
+          <View style={styles.stepLine} />
+          <View style={styles.step}>
+            <View style={styles.stepCircle}>
+              <Text style={styles.stepNumber}>2</Text>
+            </View>
+            <Text style={styles.stepLabel}>الدفع</Text>
+          </View>
+        </View>
+
+        {/* Shipping Information Form - Temu Style */}
+        <View style={[styles.shippingForm, { maxWidth: maxContentWidth, alignSelf: 'center', width: '100%' }]}>
+          <View style={styles.formHeader}>
+            <Ionicons name="location" size={20} color="#EE1C47" />
+            <Text style={styles.sectionTitle}>معلومات التوصيل</Text>
+          </View>
+          
+          <View style={styles.inputContainer}>
+            <Text style={styles.inputLabel}>العنوان الكامل *</Text>
+            <TextInput
+              style={styles.textInput}
+              placeholder="أدخل عنوان التوصيل الكامل"
+              placeholderTextColor="#999"
+              value={shippingAddress}
+              onChangeText={setShippingAddress}
+              multiline
+              numberOfLines={3}
+            />
+          </View>
+
+          <View style={styles.inputContainer}>
+            <Text style={styles.inputLabel}>رقم الهاتف *</Text>
+            <TextInput
+              style={styles.textInput}
+              placeholder="أدخل رقم الهاتف"
+              placeholderTextColor="#999"
+              value={phoneNumber}
+              onChangeText={setPhoneNumber}
+              keyboardType="phone-pad"
+            />
+          </View>
+        </View>
+
         <View style={[styles.cartItemsContainer, { maxWidth: maxContentWidth, alignSelf: 'center', width: '100%' }]}>
           {cartItems.map((item) => {
             const variantId = (item.product as any).variant_id;
@@ -848,6 +947,94 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 18,
     fontWeight: 'bold',
+  },
+  stepsContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 20,
+    backgroundColor: '#fff',
+    marginBottom: 10,
+  },
+  step: {
+    alignItems: 'center',
+  },
+  stepCircle: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#E5E7EB',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  stepActive: {
+    backgroundColor: '#EE1C47',
+  },
+  stepNumber: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#666',
+  },
+  stepActiveText: {
+    color: '#fff',
+  },
+  stepLabel: {
+    fontSize: 12,
+    color: '#666',
+  },
+  stepActiveLabel: {
+    color: '#EE1C47',
+    fontWeight: '600',
+  },
+  stepLine: {
+    flex: 1,
+    height: 2,
+    backgroundColor: '#E5E7EB',
+    marginHorizontal: 10,
+    marginBottom: 24,
+  },
+  shippingForm: {
+    backgroundColor: '#fff',
+    padding: 20,
+    margin: 10,
+    borderRadius: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  formHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#333',
+    marginLeft: 8,
+  },
+  inputContainer: {
+    marginBottom: 15,
+  },
+  inputLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 8,
+  },
+  textInput: {
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 16,
+    color: '#333',
+    backgroundColor: '#fff',
+    minHeight: 44,
+    textAlignVertical: 'top',
   },
 });
 

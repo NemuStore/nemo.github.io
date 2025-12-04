@@ -21,6 +21,7 @@ export function useSweetAlert() {
   });
 
   const showAlert = useCallback((options: AlertOptions) => {
+    console.log('🔔 useSweetAlert: showAlert called', { visible: true, options });
     setAlert({
       visible: true,
       options,
@@ -43,6 +44,7 @@ export function useSweetAlert() {
 
   const showSuccess = useCallback(
     (title: string, message?: string, onConfirm?: () => void) => {
+      console.log('🎉 useSweetAlert: showSuccess called', { title, message });
       showAlert({
         type: 'success',
         title,

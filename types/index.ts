@@ -166,6 +166,8 @@ export interface Order {
   estimated_delivery_days: number | null;
   source_type: ProductSource | null; // 'warehouse' أو 'external' - null للطلبات القديمة
   parent_order_id: string | null; // إذا كان هذا الطلب جزء من طلب أكبر (للفصل بين الداخلي والخارجي)
+  delivery_notes: string | null; // ملاحظات التوصيل أو علامة مميزة للمكان
+  delivery_region: string | null; // المنطقة الجغرافية للتوزيع
   created_at: string;
   updated_at: string;
 }
