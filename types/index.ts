@@ -75,6 +75,7 @@ export interface Product {
   id: string;
   name: string;
   description: string | null;
+  product_url: string | null; // رابط المنتج من Temu أو أي مصدر خارجي
   price: number;
   purchase_price_aed: number | null; // سعر الشراء بالدرهم الإماراتي
   cost_multiplier: number; // معامل التكلفة
@@ -159,6 +160,7 @@ export interface Order {
   user_id: string;
   order_number: string;
   status: OrderStatus;
+  admin_status: string | null; // حالة الطلب من ناحية الإدارة (مستقل عن حالة العميل)
   total_amount: number;
   shipping_address: string;
   latitude: number | null;
@@ -178,6 +180,7 @@ export interface OrderItem {
   product_id: string;
   quantity: number;
   price: number;
+  is_purchased: boolean; // هل تم شراء المنتج من Temu
   product?: Product;
 }
 

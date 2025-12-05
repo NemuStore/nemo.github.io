@@ -21,6 +21,8 @@ import { useSweetAlert } from '@/hooks/useSweetAlert';
 import SweetAlert from '@/components/SweetAlert';
 import { SkeletonCard } from '@/components/SkeletonCard';
 
+type TabType = 'external' | 'warehouse';
+
 export default function CartScreen() {
   const { cartItems, removeFromCart, updateQuantity, getTotal, clearCart } = useCart();
   const [loading, setLoading] = useState(false);
@@ -30,8 +32,42 @@ export default function CartScreen() {
   const [productImages, setProductImages] = useState<Record<string, string>>({}); // product_id -> primary_image_url
   const [shippingAddress, setShippingAddress] = useState('');
   const [phoneNumber, setPhoneNumber] = useState('');
+  const [activeTab, setActiveTab] = useState<TabType>('external'); // التبويب النشط
   const router = useRouter();
   const sweetAlert = useSweetAlert();
+
+  // فصل المنتجات حسب source_type
+  const externalItems = cartItems.filter(item => 
+    item.product.source_type === 'external'
+  );
+  const warehouseItems = cartItems.filter(item => 
+    item.product.source_type === 'warehouse' || !item.product.source_type
+  );
+
+  // تحديد التبويب الافتراضي بناءً على المنتجات المتاحة
+  useEffect(() => {
+    const hasExternal = externalItems.length > 0;
+    const hasWarehouse = warehouseItems.length > 0;
+    
+    if (hasExternal && !hasWarehouse) {
+      setActiveTab('external');
+    } else if (hasWarehouse && !hasExternal) {
+      setActiveTab('warehouse');
+    } else if (hasExternal && activeTab !== 'external' && activeTab !== 'warehouse') {
+      setActiveTab('external'); // الافتراضي لمنتجات الخارج
+    }
+  }, [externalItems.length, warehouseItems.length]);
+
+  // الحصول على المنتجات للتبويب النشط
+  const getActiveTabItems = () => {
+    return activeTab === 'external' ? externalItems : warehouseItems;
+  };
+
+  // حساب الإجمالي للتبويب النشط
+  const getActiveTabTotal = () => {
+    const items = getActiveTabItems();
+    return items.reduce((sum, item) => sum + (item.product.price * item.quantity), 0);
+  };
 
   useEffect(() => {
     loadUser();
@@ -299,15 +335,18 @@ export default function CartScreen() {
       return;
     }
 
-    if (cartItems.length === 0) {
-      sweetAlert.showError('خطأ', 'السلة فارغة');
+    // الحصول على المنتجات للتبويب النشط فقط
+    const activeItems = getActiveTabItems();
+
+    if (activeItems.length === 0) {
+      sweetAlert.showError('خطأ', `لا توجد منتجات في تبويب ${activeTab === 'external' ? 'من الخارج' : 'من المخزن'}`);
       return;
     }
 
     setLoading(true);
 
     try {
-      console.log('🛒 Cart: Starting order creation...');
+      console.log('🛒 Cart: Starting order creation for tab:', activeTab);
       
       // التحقق من العنوان ورقم الهاتف
       if (!shippingAddress || shippingAddress.trim() === '') {
@@ -327,17 +366,6 @@ export default function CartScreen() {
       
       // استخدام العنوان المدخل
       const address = shippingAddress.trim();
-      
-      // فصل المنتجات حسب source_type
-      const warehouseItems = cartItems.filter(item => 
-        item.product.source_type === 'warehouse' || !item.product.source_type
-      );
-      const externalItems = cartItems.filter(item => 
-        item.product.source_type === 'external'
-      );
-      
-      console.log('📦 Cart: Warehouse items:', warehouseItems.length);
-      console.log('📦 Cart: External items:', externalItems.length);
       
       // Get access_token from localStorage
       let accessToken = '';
@@ -360,167 +388,111 @@ export default function CartScreen() {
       const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
       const authToken = accessToken || supabaseKey || '';
       
-      const createdOrders = [];
+      // حساب إجمالي المنتجات في التبويب النشط فقط
+      const totalAmount = activeItems.reduce((sum, item) => 
+        sum + (item.product.price * item.quantity), 0
+      );
       
-      // إنشاء طلب للمنتجات الداخلية (إن وجدت)
-      if (warehouseItems.length > 0) {
-        const warehouseTotal = warehouseItems.reduce((sum, item) => 
-          sum + (item.product.price * item.quantity), 0
-        );
-        const warehouseOrderNumber = `ORD-W-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-        
-        console.log('📡 Cart: Creating warehouse order...');
-        const warehouseOrderResponse = await fetch(`${supabaseUrl}/rest/v1/orders`, {
-          method: 'POST',
-          headers: {
-            'apikey': supabaseKey || '',
-            'Authorization': `Bearer ${authToken}`,
-            'Content-Type': 'application/json',
-            'Prefer': 'return=representation'
-          },
-          body: JSON.stringify({
-            user_id: user.id,
-            order_number: warehouseOrderNumber,
-            status: 'pending',
-            total_amount: warehouseTotal,
-            shipping_address: address,
-            latitude: location?.latitude || null,
-            longitude: location?.longitude || null,
-            source_type: 'warehouse',
-          })
-        });
-        
-        if (!warehouseOrderResponse.ok) {
-          const errorText = await warehouseOrderResponse.text();
-          throw new Error(errorText || 'فشل إنشاء طلب المخزن');
+      // تحديد source_type بناءً على التبويب النشط
+      const sourceType = activeTab === 'external' ? 'external' : 'warehouse';
+      
+      const orderNumber = `ORD-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      
+      console.log('📡 Cart: Creating order for tab:', activeTab);
+      console.log('📦 Cart: Total items:', activeItems.length);
+      console.log('💰 Cart: Total amount:', totalAmount);
+      console.log('📦 Cart: Source type:', sourceType);
+      
+      // إنشاء طلب للمنتجات في التبويب النشط فقط
+      const orderResponse = await fetch(`${supabaseUrl}/rest/v1/orders`, {
+        method: 'POST',
+        headers: {
+          'apikey': supabaseKey || '',
+          'Authorization': `Bearer ${authToken}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=representation'
+        },
+        body: JSON.stringify({
+          user_id: user.id,
+          order_number: orderNumber,
+          status: 'pending',
+          total_amount: totalAmount,
+          shipping_address: address,
+          latitude: location?.latitude || null,
+          longitude: location?.longitude || null,
+          source_type: sourceType,
+        })
+      });
+      
+      if (!orderResponse.ok) {
+        const errorText = await orderResponse.text();
+        throw new Error(errorText || 'فشل إنشاء الطلب');
+      }
+      
+      const orderData = await orderResponse.json();
+      const order = Array.isArray(orderData) ? orderData[0] : orderData;
+      console.log('✅ Cart: Order created:', order.id);
+      console.log('📋 Cart: Order data:', JSON.stringify(order, null, 2));
+      
+      // إنشاء order items للمنتجات في التبويب النشط فقط
+      const orderItems = activeItems.map((item) => ({
+        order_id: order.id,
+        product_id: item.product.id,
+        quantity: item.quantity,
+        price: item.product.price,
+      }));
+      
+      console.log('📦 Cart: Creating order items:', orderItems.length);
+      const orderItemsResponse = await fetch(`${supabaseUrl}/rest/v1/order_items`, {
+        method: 'POST',
+        headers: {
+          'apikey': supabaseKey || '',
+          'Authorization': `Bearer ${authToken}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=representation'
+        },
+        body: JSON.stringify(orderItems)
+      });
+      
+      if (!orderItemsResponse.ok) {
+        const errorText = await orderItemsResponse.text();
+        console.error('❌ Cart: Failed to create order items:', errorText);
+        throw new Error(errorText || 'فشل إنشاء عناصر الطلب');
+      }
+      
+      const createdOrderItems = await orderItemsResponse.json();
+      console.log('✅ Cart: Order items created successfully:', Array.isArray(createdOrderItems) ? createdOrderItems.length : 1);
+      
+      // إزالة المنتجات من السلة (التبويب النشط فقط)
+      activeItems.forEach(item => {
+        removeFromCart(item.product.id);
+      });
+      
+      const orderType = sourceType === 'warehouse' ? 'من المخزن' : 'من الخارج';
+      console.log('🎉 Cart: Showing success message for order:', order.order_number);
+      
+      const navigateToOrders = () => {
+        console.log('🚀🚀🚀 Cart: navigateToOrders CALLED!');
+        console.log('🚀 Cart: onConfirm callback called, navigating to orders...');
+        console.log('📍 Cart: Platform.OS:', Platform.OS);
+        console.log('📍 Cart: window exists:', typeof window !== 'undefined');
+        console.log('📍 Cart: router exists:', !!router);
+        if (Platform.OS === 'web' && typeof window !== 'undefined') {
+          console.log('🌐 Cart: Using window.location.href for web');
+          window.location.href = '/orders';
+          console.log('✅ Cart: window.location.href set to /orders');
+        } else {
+          console.log('📱 Cart: Using router.replace for mobile');
+          router.replace('/orders');
+          console.log('✅ Cart: router.replace called');
         }
-        
-        const warehouseOrderData = await warehouseOrderResponse.json();
-        const warehouseOrder = Array.isArray(warehouseOrderData) ? warehouseOrderData[0] : warehouseOrderData;
-        console.log('✅ Cart: Warehouse order created:', warehouseOrder.id);
-        
-        // Create order items
-        const warehouseOrderItems = warehouseItems.map((item) => ({
-          order_id: warehouseOrder.id,
-          product_id: item.product.id,
-          quantity: item.quantity,
-          price: item.product.price,
-        }));
-        
-        await fetch(`${supabaseUrl}/rest/v1/order_items`, {
-          method: 'POST',
-          headers: {
-            'apikey': supabaseKey || '',
-            'Authorization': `Bearer ${authToken}`,
-            'Content-Type': 'application/json',
-            'Prefer': 'return=representation'
-          },
-          body: JSON.stringify(warehouseOrderItems)
-        });
-        
-        createdOrders.push(warehouseOrder);
-      }
+      };
       
-      // إنشاء طلب للمنتجات الخارجية (إن وجدت)
-      if (externalItems.length > 0) {
-        const externalTotal = externalItems.reduce((sum, item) => 
-          sum + (item.product.price * item.quantity), 0
-        );
-        const externalOrderNumber = `ORD-E-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-        
-        console.log('📡 Cart: Creating external order...');
-        const externalOrderResponse = await fetch(`${supabaseUrl}/rest/v1/orders`, {
-          method: 'POST',
-          headers: {
-            'apikey': supabaseKey || '',
-            'Authorization': `Bearer ${authToken}`,
-            'Content-Type': 'application/json',
-            'Prefer': 'return=representation'
-          },
-          body: JSON.stringify({
-            user_id: user.id,
-            order_number: externalOrderNumber,
-            status: 'pending',
-            total_amount: externalTotal,
-            shipping_address: address,
-            latitude: location?.latitude || null,
-            longitude: location?.longitude || null,
-            source_type: 'external',
-            parent_order_id: createdOrders.length > 0 ? createdOrders[0].id : null, // ربط الطلب الثاني بالأول
-          })
-        });
-        
-        if (!externalOrderResponse.ok) {
-          const errorText = await externalOrderResponse.text();
-          throw new Error(errorText || 'فشل إنشاء طلب الخارج');
-        }
-        
-        const externalOrderData = await externalOrderResponse.json();
-        const externalOrder = Array.isArray(externalOrderData) ? externalOrderData[0] : externalOrderData;
-        console.log('✅ Cart: External order created:', externalOrder.id);
-        console.log('📋 Cart: External order data:', JSON.stringify(externalOrder, null, 2));
-        
-        // Create order items
-        const externalOrderItems = externalItems.map((item) => ({
-          order_id: externalOrder.id,
-          product_id: item.product.id,
-          quantity: item.quantity,
-          price: item.product.price,
-        }));
-        
-        await fetch(`${supabaseUrl}/rest/v1/order_items`, {
-          method: 'POST',
-          headers: {
-            'apikey': supabaseKey || '',
-            'Authorization': `Bearer ${authToken}`,
-            'Content-Type': 'application/json',
-            'Prefer': 'return=representation'
-          },
-          body: JSON.stringify(externalOrderItems)
-        });
-        
-        createdOrders.push(externalOrder);
-      }
-      
-      console.log('✅ Cart: Orders created successfully:', createdOrders.length);
-      console.log('📋 Cart: Created orders:', createdOrders);
-      
-      // Clear cart بعد نجاح إنشاء الطلبات
-      clearCart();
-      
-      // عرض رسالة للعميل
-      if (createdOrders.length === 2) {
-        console.log('🎉 Cart: Showing success message for 2 orders');
-        sweetAlert.showSuccess(
-          'تم إنشاء الطلبين',
-          `تم إنشاء طلبين منفصلين:\n- طلب من المخزن: ${createdOrders[0].order_number}\n- طلب من الخارج: ${createdOrders[1].order_number}`,
-          () => {
-            console.log('🔄 Cart: Navigating to profile');
-            // تأخير بسيط للتأكد من إغلاق الرسالة قبل التوجيه
-            setTimeout(() => {
-              router.push('/(tabs)/profile');
-            }, 100);
-          }
-        );
-      } else if (createdOrders.length === 1) {
-        const order = createdOrders[0];
-        const orderType = order.source_type === 'warehouse' ? 'من المخزن' : 'من الخارج';
-        console.log('🎉 Cart: Showing success message for 1 order:', order.order_number);
-        sweetAlert.showSuccess(
-          'تم إنشاء الطلب بنجاح',
-          `تم إنشاء الطلب بنجاح (${orderType})\nرقم الطلب: ${order.order_number}`,
-          () => {
-            console.log('🔄 Cart: Navigating to profile');
-            // تأخير بسيط للتأكد من إغلاق الرسالة قبل التوجيه
-            setTimeout(() => {
-              router.push('/(tabs)/profile');
-            }, 100);
-          }
-        );
-      } else {
-        console.warn('⚠️ Cart: No orders were created, but no error was thrown');
-        sweetAlert.showError('خطأ', 'لم يتم إنشاء أي طلبات');
-      }
+      sweetAlert.showSuccess(
+        'تم إنشاء الطلب بنجاح',
+        `تم إنشاء الطلب بنجاح (${orderType})\nرقم الطلب: ${order.order_number}`,
+        navigateToOrders
+      );
       
     } catch (error: any) {
       console.error('❌ Cart: Error creating order:', error);
@@ -602,8 +574,42 @@ export default function CartScreen() {
           </View>
         </View>
 
+        {/* Tabs for External and Warehouse Products */}
+        {(externalItems.length > 0 || warehouseItems.length > 0) && (
+          <View style={[styles.tabsContainer, { maxWidth: maxContentWidth, alignSelf: 'center', width: '100%' }]}>
+            {externalItems.length > 0 && (
+              <TouchableOpacity
+                style={[styles.tab, activeTab === 'external' && styles.tabActive]}
+                onPress={() => setActiveTab('external')}
+              >
+                <Text style={[styles.tabText, activeTab === 'external' && styles.tabTextActive]}>
+                  من الخارج ({externalItems.length})
+                </Text>
+              </TouchableOpacity>
+            )}
+            {warehouseItems.length > 0 && (
+              <TouchableOpacity
+                style={[styles.tab, activeTab === 'warehouse' && styles.tabActive]}
+                onPress={() => setActiveTab('warehouse')}
+              >
+                <Text style={[styles.tabText, activeTab === 'warehouse' && styles.tabTextActive]}>
+                  من المخزن ({warehouseItems.length})
+                </Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        )}
+
         <View style={[styles.cartItemsContainer, { maxWidth: maxContentWidth, alignSelf: 'center', width: '100%' }]}>
-          {cartItems.map((item) => {
+          {getActiveTabItems().length === 0 ? (
+            <View style={styles.emptyTabContainer}>
+              <Ionicons name="cart-outline" size={60} color="#ccc" />
+              <Text style={styles.emptyTabText}>
+                لا توجد منتجات في تبويب {activeTab === 'external' ? 'من الخارج' : 'من المخزن'}
+              </Text>
+            </View>
+          ) : (
+            getActiveTabItems().map((item) => {
             const variantId = (item.product as any).variant_id;
             const variantName = (item.product as any).variant_name || '';
             const variantImage = variantId ? variantImages[variantId] : null;
@@ -724,20 +730,21 @@ export default function CartScreen() {
                 </TouchableOpacity>
               </TouchableOpacity>
             );
-          })}
+            })
+          )}
         </View>
       </ScrollView>
 
       <View style={[styles.footer, isWeb && styles.footerWeb]}>
         <View style={[styles.footerContent, { maxWidth: maxContentWidth, alignSelf: 'center', width: '100%' }]}>
         <View style={styles.totalContainer}>
-          <Text style={styles.totalLabel}>الإجمالي:</Text>
-          <Text style={styles.totalAmount}>{getTotal().toFixed(2)} ج.م</Text>
+          <Text style={styles.totalLabel}>الإجمالي ({activeTab === 'external' ? 'من الخارج' : 'من المخزن'}):</Text>
+          <Text style={styles.totalAmount}>{getActiveTabTotal().toFixed(2)} ج.م</Text>
         </View>
         <TouchableOpacity
-          style={[styles.confirmButton, loading && styles.confirmButtonDisabled]}
+          style={[styles.confirmButton, (loading || getActiveTabItems().length === 0) && styles.confirmButtonDisabled]}
           onPress={confirmOrder}
-          disabled={loading}
+          disabled={loading || getActiveTabItems().length === 0}
         >
           {loading ? (
             <ActivityIndicator size="small" color="#fff" />
@@ -1035,6 +1042,51 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
     minHeight: 44,
     textAlignVertical: 'top',
+  },
+  tabsContainer: {
+    flexDirection: 'row',
+    backgroundColor: '#fff',
+    margin: 10,
+    marginTop: 0,
+    borderRadius: 12,
+    padding: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  tab: {
+    flex: 1,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'transparent',
+  },
+  tabActive: {
+    backgroundColor: '#EE1C47',
+  },
+  tabText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#666',
+  },
+  tabTextActive: {
+    color: '#fff',
+    fontWeight: 'bold',
+  },
+  emptyTabContainer: {
+    padding: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emptyTabText: {
+    fontSize: 16,
+    color: '#999',
+    marginTop: 16,
+    textAlign: 'center',
   },
 });
 

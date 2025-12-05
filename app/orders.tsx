@@ -339,7 +339,12 @@ export default function OrdersScreen() {
             </View>
           ) : (
             filteredOrders.map((order) => (
-              <View key={order.id} style={styles.orderCard}>
+              <TouchableOpacity 
+                key={order.id} 
+                style={styles.orderCard}
+                onPress={() => router.push(`/order/${order.id}`)}
+                activeOpacity={0.7}
+              >
                 <View style={styles.orderHeader}>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.orderNumber}>#{order.order_number}</Text>
@@ -396,13 +401,16 @@ export default function OrdersScreen() {
                   </View>
                   <TouchableOpacity 
                     style={styles.editButton}
-                    onPress={() => handleEditOrder(order)}
+                    onPress={(e) => {
+                      e.stopPropagation();
+                      handleEditOrder(order);
+                    }}
                   >
                     <Ionicons name="create-outline" size={18} color="#EE1C47" />
                     <Text style={styles.editButtonText}>تعديل</Text>
                   </TouchableOpacity>
                 </View>
-              </View>
+              </TouchableOpacity>
             ))
           )}
         </View>
@@ -527,7 +535,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
     backgroundColor: '#fff',
     borderBottomWidth: 1,
     borderBottomColor: '#E5E7EB',
@@ -547,24 +556,27 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
     borderBottomWidth: 1,
     borderBottomColor: '#E5E7EB',
+    flexShrink: 0,
+    flexGrow: 0,
   },
   filtersContent: {
     paddingHorizontal: 16,
-    paddingVertical: 12,
-    gap: 8,
+    paddingVertical: 8,
+    gap: 6,
   },
   filterButton: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
     backgroundColor: '#F5F5F5',
-    marginRight: 8,
+    marginRight: 6,
+    justifyContent: 'center',
   },
   filterButtonActive: {
     backgroundColor: '#EE1C47',
   },
   filterText: {
-    fontSize: 14,
+    fontSize: 12,
     color: '#666',
     fontWeight: '500',
   },
@@ -576,10 +588,11 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scrollContent: {
-    padding: Platform.OS === 'web' ? 20 : 10,
+    padding: Platform.OS === 'web' ? 16 : 12,
+    paddingBottom: 16,
   },
   contentWrapper: {
-    padding: Platform.OS === 'web' ? 0 : 0,
+    padding: 0,
   },
   emptyContainer: {
     alignItems: 'center',
@@ -607,10 +620,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
-    marginBottom: 16,
+    marginBottom: 14,
   },
   orderNumber: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: 'bold',
     color: '#333',
     marginBottom: 4,
@@ -622,11 +635,13 @@ const styles = StyleSheet.create({
   statusBadge: {
     paddingHorizontal: 12,
     paddingVertical: 6,
-    borderRadius: 15,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   statusText: {
     color: '#fff',
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '600',
   },
   addressSection: {
@@ -647,10 +662,10 @@ const styles = StyleSheet.create({
     color: '#666',
   },
   addressText: {
-    fontSize: 14,
+    fontSize: 13,
     color: '#333',
     lineHeight: 20,
-    paddingRight: 24,
+    paddingRight: 0,
   },
   notesSection: {
     marginBottom: 12,
@@ -659,10 +674,10 @@ const styles = StyleSheet.create({
     borderBottomColor: '#F0F0F0',
   },
   notesText: {
-    fontSize: 14,
+    fontSize: 13,
     color: '#666',
     lineHeight: 20,
-    paddingRight: 24,
+    paddingRight: 0,
     fontStyle: 'italic',
   },
   orderFooter: {
@@ -670,6 +685,9 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     marginTop: 8,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#F0F0F0',
   },
   orderAmount: {
     fontSize: 18,
@@ -680,22 +698,24 @@ const styles = StyleSheet.create({
   editButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 8,
+    gap: 5,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 12,
     borderWidth: 1,
     borderColor: '#EE1C47',
+    backgroundColor: '#FFF5F5',
   },
   editButtonText: {
-    fontSize: 14,
+    fontSize: 13,
     color: '#EE1C47',
     fontWeight: '600',
   },
   deliveryInfo: {
-    fontSize: 12,
+    fontSize: 11,
     color: '#666',
     fontStyle: 'italic',
+    marginTop: 2,
   },
   modalOverlay: {
     flex: 1,
@@ -773,8 +793,9 @@ const styles = StyleSheet.create({
   },
   cancelModalButton: {
     flex: 1,
-    padding: 14,
-    borderRadius: 8,
+    paddingVertical: 15,
+    paddingHorizontal: 20,
+    borderRadius: 12,
     borderWidth: 1,
     borderColor: '#E5E7EB',
     alignItems: 'center',
@@ -786,8 +807,9 @@ const styles = StyleSheet.create({
   },
   saveModalButton: {
     flex: 1,
-    padding: 14,
-    borderRadius: 8,
+    paddingVertical: 15,
+    paddingHorizontal: 20,
+    borderRadius: 12,
     backgroundColor: '#EE1C47',
     alignItems: 'center',
   },

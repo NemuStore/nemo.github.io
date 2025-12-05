@@ -615,9 +615,7 @@ export default function ProductDetailScreen() {
       
       addToCart(productToAdd, quantity);
       
-      sweetAlert.showConfirm('نجح', 'تم إضافة المنتج للسلة. هل تريد الذهاب للسلة؟', () => {
-        router.push('/(tabs)/cart');
-      });
+      sweetAlert.showSuccess('نجح', 'تم إضافة المنتج للسلة بنجاح');
     }
   };
 

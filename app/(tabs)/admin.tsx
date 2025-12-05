@@ -34,15 +34,65 @@ export default function AdminScreen() {
   };
 
   const [user, setUser] = useState<any>(null);
-  const [activeTab, setActiveTab] = useState<'orders' | 'shipments' | 'inventory' | 'products' | 'users' | 'categories' | 'sections'>('orders');
+  const [activeTab, setActiveTab] = useState<'orders' | 'shipments' | 'inventory' | 'products' | 'users' | 'categories' | 'sections' | 'status_mappings'>('orders');
   const [orders, setOrders] = useState<Order[]>([]);
+  const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
+  const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [shipments, setShipments] = useState<Shipment[]>([]);
   const [inventory, setInventory] = useState<Inventory[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+  const [selectedProducts, setSelectedProducts] = useState<Set<string>>(new Set());
+  const [isProductSelectionMode, setIsProductSelectionMode] = useState(false);
   const [limitedDiscountProducts, setLimitedDiscountProducts] = useState<Product[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [sections, setSections] = useState<Section[]>([]);
+  const [statusMappings, setStatusMappings] = useState<Array<{
+    id: string;
+    admin_status: string;
+    customer_status: string;
+    description: string | null;
+    is_active: boolean;
+  }>>([]);
+  const [editingStatusMapping, setEditingStatusMapping] = useState<{
+    id: string;
+    admin_status: string;
+    customer_status: string;
+    description: string;
+  } | null>(null);
+  const [newStatusMapping, setNewStatusMapping] = useState({
+    admin_status: '',
+    customer_status: '',
+    description: '',
+  });
+  const [orderStatuses, setOrderStatuses] = useState<Array<{
+    id: string;
+    status_key: string;
+    status_name_ar: string;
+    status_type: 'admin' | 'customer';
+    display_order: number;
+    is_active: boolean;
+    color: string | null;
+    description: string | null;
+  }>>([]);
+  const [editingStatus, setEditingStatus] = useState<{
+    id: string;
+    status_key: string;
+    status_name_ar: string;
+    status_type: 'admin' | 'customer';
+    display_order: number;
+    color: string;
+    description: string;
+  } | null>(null);
+  const [newStatus, setNewStatus] = useState({
+    status_key: '',
+    status_name_ar: '',
+    status_type: 'admin' as 'admin' | 'customer',
+    display_order: '0',
+    color: '#2196F3',
+    description: '',
+  });
+  const [statusMappingsSubTab, setStatusMappingsSubTab] = useState<'statuses' | 'mappings'>('statuses');
   const [loading, setLoading] = useState(false);
   const router = useRouter();
   const sweetAlert = useSweetAlert();
@@ -62,6 +112,7 @@ export default function AdminScreen() {
   const [newProduct, setNewProduct] = useState({
     name: '',
     description: '',
+    product_url: '', // رابط المنتج من Temu
     price: '',
     purchase_price_aed: '', // سعر الشراء بالدرهم الإماراتي
     cost_multiplier: '1.0', // معامل التكلفة
@@ -665,6 +716,66 @@ export default function AdminScreen() {
       }
     } catch (error) {
       console.error('❌ Admin: Error loading sections:', error);
+    }
+  };
+
+  const loadStatusMappings = async () => {
+    try {
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+      const accessToken = await getAccessToken();
+
+      const response = await fetch(
+        `${supabaseUrl}/rest/v1/admin_status_mapping?order=admin_status.asc`,
+        {
+          headers: {
+            'apikey': supabaseKey || '',
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          }
+        }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        setStatusMappings(data);
+      } else {
+        console.error('❌ Error loading status mappings:', response.status);
+        setStatusMappings([]);
+      }
+    } catch (error) {
+      console.error('❌ Error loading status mappings:', error);
+      setStatusMappings([]);
+    }
+  };
+
+  const loadOrderStatuses = async () => {
+    try {
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+      const accessToken = await getAccessToken();
+
+      const response = await fetch(
+        `${supabaseUrl}/rest/v1/order_statuses?order=status_type.asc,display_order.asc`,
+        {
+          headers: {
+            'apikey': supabaseKey || '',
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          }
+        }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        setOrderStatuses(data);
+      } else {
+        console.error('❌ Error loading order statuses:', response.status);
+        setOrderStatuses([]);
+      }
+    } catch (error) {
+      console.error('❌ Error loading order statuses:', error);
+      setOrderStatuses([]);
     }
   };
 
@@ -1415,12 +1526,18 @@ export default function AdminScreen() {
       const accessToken = await getAccessToken();
       
       if (activeTab === 'orders') {
-        const response = await fetch(`${supabaseUrl}/rest/v1/orders?select=*&order=created_at.desc`, {
+        // Add timestamp to prevent caching
+        const timestamp = Date.now();
+        const response = await fetch(`${supabaseUrl}/rest/v1/orders?select=*&order=created_at.desc&_t=${timestamp}`, {
           headers: {
             'apikey': supabaseKey || '',
             'Authorization': `Bearer ${accessToken}`, // Use access_token for RLS
             'Content-Type': 'application/json',
-          }
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
+            'Pragma': 'no-cache',
+            'Expires': '0',
+          },
+          cache: 'no-store', // Prevent caching
         });
         if (response.ok) {
           const data = await response.json();
@@ -1592,6 +1709,9 @@ export default function AdminScreen() {
         await loadSections(); // Load sections for category dropdown
       } else if (activeTab === 'sections') {
         await loadSections();
+      } else if (activeTab === 'status_mappings') {
+        await loadStatusMappings();
+        await loadOrderStatuses();
       }
     } catch (error) {
       console.error('❌ Admin: Error loading data:', error);
@@ -2569,6 +2689,7 @@ export default function AdminScreen() {
         body: JSON.stringify({
           name: newProduct.name,
           description: newProduct.description || null,
+          product_url: newProduct.product_url || null,
           price: newProduct.selling_price_egp ? parseFloat(newProduct.selling_price_egp) : parseFloat(newProduct.price),
           purchase_price_aed: newProduct.purchase_price_aed ? parseFloat(newProduct.purchase_price_aed) : null,
           cost_multiplier: newProduct.cost_multiplier ? parseFloat(newProduct.cost_multiplier) : 1.0,
@@ -3141,6 +3262,7 @@ export default function AdminScreen() {
     const newProductData = {
       name: product.name || '',
       description: product.description || '',
+      product_url: (product as any).product_url || '',
       price: (product.price || 0).toString(),
       purchase_price_aed: (product.purchase_price_aed || '').toString(),
       cost_multiplier: (product.cost_multiplier || '1.0').toString(),
@@ -3179,6 +3301,7 @@ export default function AdminScreen() {
     const safeNewProductData = {
       name: String(newProductData.name || ''),
       description: String(newProductData.description || ''),
+      product_url: String(newProductData.product_url || ''),
       price: String(newProductData.price || '0'),
       purchase_price_aed: String(newProductData.purchase_price_aed || ''),
       cost_multiplier: String(newProductData.cost_multiplier || '1.0'),
@@ -3468,6 +3591,7 @@ export default function AdminScreen() {
         body: JSON.stringify({
           name: newProduct.name,
           description: newProduct.description || null,
+          product_url: newProduct.product_url || null,
           price: newProduct.selling_price_egp ? parseFloat(newProduct.selling_price_egp) : parseFloat(newProduct.price),
           purchase_price_aed: newProduct.purchase_price_aed ? parseFloat(newProduct.purchase_price_aed) : null,
           cost_multiplier: newProduct.cost_multiplier ? parseFloat(newProduct.cost_multiplier) : 1.0,
@@ -4494,12 +4618,276 @@ export default function AdminScreen() {
             الأقسام
           </Text>
         </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.tab, activeTab === 'status_mappings' && styles.activeTab]}
+          onPress={() => setActiveTab('status_mappings')}
+        >
+          <Text style={[
+            styles.tabText, 
+            isDarkMode && styles.tabTextDark,
+            activeTab === 'status_mappings' && styles.activeTabText,
+            activeTab === 'status_mappings' && isDarkMode && styles.activeTabTextDark
+          ]}>
+            تعيينات الحالات
+          </Text>
+        </TouchableOpacity>
       </View>
 
       <ScrollView style={styles.content} contentContainerStyle={styles.scrollContent}>
         <View style={[styles.contentWrapper, { maxWidth: maxContentWidth, alignSelf: 'center', width: '100%' }]}>
         {activeTab === 'orders' && (
           <View>
+            {/* Selection Mode Controls - أزرار وضع الاختيار */}
+            <View style={styles.selectionControls}>
+              <TouchableOpacity
+                style={[styles.selectionButton, isSelectionMode && styles.selectionButtonActive]}
+                onPress={() => {
+                  setIsSelectionMode(!isSelectionMode);
+                  if (!isSelectionMode) {
+                    setSelectedOrders(new Set());
+                  }
+                }}
+              >
+                <Ionicons name={isSelectionMode ? "checkbox-outline" : "square-outline"} size={18} color={isSelectionMode ? "#EE1C47" : "#666"} />
+                <Text style={[styles.selectionButtonText, isSelectionMode && styles.selectionButtonTextActive]}>
+                  {isSelectionMode ? 'إلغاء وضع الاختيار' : 'تحديد الطلبات'}
+                </Text>
+              </TouchableOpacity>
+              
+              {isSelectionMode && (
+                <>
+                  <TouchableOpacity
+                    style={[styles.selectionButton, { backgroundColor: '#2196F3', marginLeft: 8 }]}
+                    onPress={() => {
+                      const filteredOrders = orders.filter(o => {
+                        const matchesSource = o.source_type === 'external' || o.source_type === 'warehouse' || !o.source_type;
+                        const matchesRegion = orderRegionFilter === 'all' || 
+                          (orderRegionFilter === 'no-region' ? !o.delivery_region : o.delivery_region === orderRegionFilter);
+                        return matchesSource && matchesRegion;
+                      });
+                      if (selectedOrders.size === filteredOrders.length) {
+                        setSelectedOrders(new Set());
+                      } else {
+                        setSelectedOrders(new Set(filteredOrders.map(o => o.id)));
+                      }
+                    }}
+                  >
+                    <Ionicons name="checkmark-done-outline" size={18} color="#fff" />
+                    <Text style={[styles.selectionButtonText, { color: '#fff' }]}>
+                      {selectedOrders.size === orders.filter(o => {
+                        const matchesSource = o.source_type === 'external' || o.source_type === 'warehouse' || !o.source_type;
+                        const matchesRegion = orderRegionFilter === 'all' || 
+                          (orderRegionFilter === 'no-region' ? !o.delivery_region : o.delivery_region === orderRegionFilter);
+                        return matchesSource && matchesRegion;
+                      }).length ? 'إلغاء الكل' : 'تحديد الكل'}
+                    </Text>
+                  </TouchableOpacity>
+                  
+                  {selectedOrders.size > 0 && (
+                    <TouchableOpacity
+                      style={[styles.selectionButton, { backgroundColor: '#f44336', marginLeft: 8 }]}
+                      onPress={() => {
+                        sweetAlert.showConfirm(
+                          'تأكيد الحذف',
+                          `هل أنت متأكد من حذف ${selectedOrders.size} طلب؟\n\nهذا الإجراء لا يمكن التراجع عنه.`,
+                          async () => {
+                            setLoading(true);
+                            try {
+                              const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+                              const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+                              const accessToken = await getAccessToken();
+                              
+                              const orderIds = Array.from(selectedOrders);
+                              
+                              console.log('🗑️ Deleting selected orders:', orderIds.length, 'orders');
+                              console.log('🗑️ Order IDs:', orderIds);
+                              
+                              // حذف order_items أولاً - استخدام or مع عدة شروط لحذف جميع order_items دفعة واحدة
+                              const orderItemConditions = orderIds.map(id => `order_id.eq.${id}`).join(',');
+                              console.log('🗑️ Deleting order_items with conditions:', orderItemConditions);
+                              
+                              const itemsDeleteResponse = await fetch(
+                                `${supabaseUrl}/rest/v1/order_items?or=(${orderItemConditions})`,
+                                {
+                                  method: 'DELETE',
+                                  headers: {
+                                    'apikey': supabaseKey || '',
+                                    'Authorization': `Bearer ${accessToken}`,
+                                    'Content-Type': 'application/json',
+                                    'Prefer': 'return=minimal',
+                                  }
+                                }
+                              );
+                              
+                              console.log('🗑️ Order items delete response status:', itemsDeleteResponse.status);
+                              
+                              if (!itemsDeleteResponse.ok) {
+                                const itemsErrorText = await itemsDeleteResponse.text();
+                                console.error('❌ Failed to delete order_items:', itemsErrorText);
+                                // لا نرمي خطأ هنا، نتابع محاولة حذف الطلبات
+                              } else {
+                                console.log('✅ Order items deleted successfully');
+                              }
+                              
+                              // حذف الطلبات - استخدام or مع عدة شروط
+                              const orderIdConditions = orderIds.map(id => `id.eq.${id}`).join(',');
+                              console.log('🗑️ Deleting orders with conditions:', orderIdConditions);
+                              
+                              const deleteResponse = await fetch(
+                                `${supabaseUrl}/rest/v1/orders?or=(${orderIdConditions})`,
+                                {
+                                  method: 'DELETE',
+                                  headers: {
+                                    'apikey': supabaseKey || '',
+                                    'Authorization': `Bearer ${accessToken}`,
+                                    'Content-Type': 'application/json',
+                                    'Prefer': 'return=minimal',
+                                  }
+                                }
+                              );
+                              
+                              console.log('🗑️ Orders delete response status:', deleteResponse.status);
+                              
+                              if (deleteResponse.ok) {
+                                console.log('✅ Selected orders deleted successfully');
+                                // Clear selected orders and exit selection mode immediately
+                                const deletedCount = selectedOrders.size;
+                                setSelectedOrders(new Set());
+                                setIsSelectionMode(false);
+                                // Remove deleted orders from state immediately
+                                setOrders(prevOrders => prevOrders.filter(o => !orderIds.includes(o.id)));
+                                // Wait a bit before reloading to ensure deletion is committed
+                                setTimeout(() => {
+                                  console.log('🔄 Reloading data after deletion...');
+                                  loadData();
+                                }, 1000);
+                                sweetAlert.showSuccess('نجح', `تم حذف ${deletedCount} طلب بنجاح`);
+                              } else {
+                                const errorText = await deleteResponse.text();
+                                console.error('❌ Delete error:', errorText);
+                                throw new Error(errorText || 'فشل حذف الطلبات');
+                              }
+                            } catch (error: any) {
+                              sweetAlert.showError('خطأ', error.message || 'فشل حذف الطلبات');
+                            } finally {
+                              setLoading(false);
+                            }
+                          }
+                        );
+                      }}
+                    >
+                      <Ionicons name="trash-outline" size={18} color="#fff" />
+                      <Text style={[styles.selectionButtonText, { color: '#fff' }]}>
+                        حذف المحدد ({selectedOrders.size})
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+                  
+                  <TouchableOpacity
+                    style={[styles.selectionButton, { backgroundColor: '#FF9800', marginLeft: 8 }]}
+                    onPress={() => {
+                      const filteredOrders = orders.filter(o => {
+                        const matchesSource = o.source_type === 'external' || o.source_type === 'warehouse' || !o.source_type;
+                        const matchesRegion = orderRegionFilter === 'all' || 
+                          (orderRegionFilter === 'no-region' ? !o.delivery_region : o.delivery_region === orderRegionFilter);
+                        return matchesSource && matchesRegion;
+                      });
+                      
+                      sweetAlert.showConfirm(
+                        'تأكيد الحذف',
+                        `هل أنت متأكد من حذف جميع الطلبات (${filteredOrders.length} طلب)؟\n\nهذا الإجراء لا يمكن التراجع عنه.`,
+                        async () => {
+                          setLoading(true);
+                          try {
+                            const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+                            const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+                            const accessToken = await getAccessToken();
+                            
+                            const orderIds = filteredOrders.map(o => o.id);
+                            
+                            console.log('🗑️ Deleting orders:', orderIds.length, 'orders');
+                            console.log('🗑️ Order IDs:', orderIds);
+                            
+                            // حذف order_items أولاً - استخدام or مع عدة شروط لحذف جميع order_items دفعة واحدة
+                            const orderItemConditions = orderIds.map(id => `order_id.eq.${id}`).join(',');
+                            console.log('🗑️ Deleting order_items with conditions:', orderItemConditions);
+                            
+                            const itemsDeleteResponse = await fetch(
+                              `${supabaseUrl}/rest/v1/order_items?or=(${orderItemConditions})`,
+                              {
+                                method: 'DELETE',
+                                headers: {
+                                  'apikey': supabaseKey || '',
+                                  'Authorization': `Bearer ${accessToken}`,
+                                  'Content-Type': 'application/json',
+                                  'Prefer': 'return=minimal',
+                                }
+                              }
+                            );
+                            
+                            console.log('🗑️ Order items delete response status:', itemsDeleteResponse.status);
+                            
+                            if (!itemsDeleteResponse.ok) {
+                              const itemsErrorText = await itemsDeleteResponse.text();
+                              console.error('❌ Failed to delete order_items:', itemsErrorText);
+                              // لا نرمي خطأ هنا، نتابع محاولة حذف الطلبات
+                            } else {
+                              console.log('✅ Order items deleted successfully');
+                            }
+                            
+                            // حذف جميع الطلبات - استخدام or مع عدة شروط
+                            const orderIdConditions = orderIds.map(id => `id.eq.${id}`).join(',');
+                            console.log('🗑️ Deleting orders with conditions:', orderIdConditions);
+                            
+                            const deleteResponse = await fetch(
+                              `${supabaseUrl}/rest/v1/orders?or=(${orderIdConditions})`,
+                              {
+                                method: 'DELETE',
+                                headers: {
+                                  'apikey': supabaseKey || '',
+                                  'Authorization': `Bearer ${accessToken}`,
+                                  'Content-Type': 'application/json',
+                                  'Prefer': 'return=minimal',
+                                }
+                              }
+                            );
+                            
+                            console.log('🗑️ Orders delete response status:', deleteResponse.status);
+                            
+                            if (deleteResponse.ok) {
+                              console.log('✅ Orders deleted successfully');
+                              // Clear selected orders and exit selection mode immediately
+                              setSelectedOrders(new Set());
+                              setIsSelectionMode(false);
+                              // Clear orders state immediately
+                              setOrders([]);
+                              // Wait a bit before reloading to ensure deletion is committed
+                              setTimeout(() => {
+                                console.log('🔄 Reloading data after deletion...');
+                                loadData();
+                              }, 1000);
+                              sweetAlert.showSuccess('نجح', `تم حذف ${orderIds.length} طلب بنجاح`);
+                            } else {
+                              const errorText = await deleteResponse.text();
+                              console.error('❌ Delete error:', errorText);
+                              throw new Error(errorText || 'فشل حذف الطلبات');
+                            }
+                          } catch (error: any) {
+                            sweetAlert.showError('خطأ', error.message || 'فشل حذف الطلبات');
+                          } finally {
+                            setLoading(false);
+                          }
+                        }
+                      );
+                    }}
+                  >
+                    <Ionicons name="trash" size={18} color="#fff" />
+                    <Text style={[styles.selectionButtonText, { color: '#fff' }]}>حذف الكل</Text>
+                  </TouchableOpacity>
+                </>
+              )}
+            </View>
+            
             {/* Region Filter - فلتر المناطق */}
             <View style={styles.filterSection}>
               <Text style={styles.filterLabel}>تصنيف حسب المنطقة:</Text>
@@ -4567,8 +4955,34 @@ export default function AdminScreen() {
                 const quickEdit = quickEditOrder[order.id] || {};
                 const displayStatus = isEditing ? (quickEdit.status || order.status) : order.status;
 
+                const isSelected = selectedOrders.has(order.id);
+                
                 return (
-                  <View key={order.id} style={styles.gridCard}>
+                  <TouchableOpacity 
+                    key={order.id} 
+                    style={[styles.gridCard, isSelected && styles.gridCardSelected]}
+                    onPress={() => {
+                      if (isSelectionMode) {
+                        const newSelected = new Set(selectedOrders);
+                        if (isSelected) {
+                          newSelected.delete(order.id);
+                        } else {
+                          newSelected.add(order.id);
+                        }
+                        setSelectedOrders(newSelected);
+                      } else {
+                        router.push(`/admin/order/${order.id}`);
+                      }
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    {isSelectionMode && (
+                      <View style={styles.checkboxContainer}>
+                        <View style={[styles.checkbox, isSelected && styles.checkboxChecked]}>
+                          {isSelected && <Ionicons name="checkmark" size={16} color="#fff" />}
+                        </View>
+                      </View>
+                    )}
                     <View style={styles.cardHeader}>
                       <View style={{ flex: 1 }}>
                         <Text style={styles.gridCardTitle}>#{order.order_number}</Text>
@@ -4576,20 +4990,23 @@ export default function AdminScreen() {
                           {new Date(order.created_at).toLocaleDateString('ar-EG')}
                         </Text>
                       </View>
-                      <TouchableOpacity
-                        style={styles.cardMenuButton}
-                        onPress={() => {
-                          if (isEditing) {
-                            setEditingOrderId(null);
-                            setQuickEditOrder({});
-                          } else {
-                            setEditingOrderId(order.id);
-                            setQuickEditOrder({ [order.id]: {} });
-                          }
-                        }}
-                      >
-                        <Ionicons name={isEditing ? "checkmark" : "create-outline"} size={18} color={isEditing ? "#10B981" : "#666"} />
-                      </TouchableOpacity>
+                      {!isSelectionMode && (
+                        <TouchableOpacity
+                          style={styles.cardMenuButton}
+                          onPress={(e) => {
+                            e.stopPropagation();
+                            if (isEditing) {
+                              setEditingOrderId(null);
+                              setQuickEditOrder({});
+                            } else {
+                              setEditingOrderId(order.id);
+                              setQuickEditOrder({ [order.id]: {} });
+                            }
+                          }}
+                        >
+                          <Ionicons name={isEditing ? "checkmark" : "create-outline"} size={18} color={isEditing ? "#10B981" : "#666"} />
+                        </TouchableOpacity>
+                      )}
                     </View>
 
                     <View style={styles.gridProductPrice}>
@@ -4609,7 +5026,10 @@ export default function AdminScreen() {
                                     styles.statusOption,
                                     displayStatus === status && styles.statusOptionActive
                                   ]}
-                                  onPress={() => setQuickEditOrder({ ...quickEditOrder, [order.id]: { ...quickEdit, status: status as any } })}
+                                  onPress={(e) => {
+                                    e.stopPropagation();
+                                    setQuickEditOrder({ ...quickEditOrder, [order.id]: { ...quickEdit, status: status as any } });
+                                  }}
                                 >
                                   <Text style={[styles.statusOptionText, displayStatus === status && styles.statusOptionTextActive]}>
                                     {getStatusText(status)}
@@ -4630,7 +5050,8 @@ export default function AdminScreen() {
                       <View style={styles.quickEditActions}>
                         <TouchableOpacity
                           style={[styles.quickEditButton, styles.saveButton]}
-                          onPress={async () => {
+                          onPress={async (e) => {
+                            e.stopPropagation();
                             const updates = quickEditOrder[order.id];
                             if (updates && Object.keys(updates).length > 0) {
                               setLoading(true);
@@ -4670,7 +5091,8 @@ export default function AdminScreen() {
                         </TouchableOpacity>
                         <TouchableOpacity
                           style={[styles.quickEditButton, styles.cancelQuickEditButton]}
-                          onPress={() => {
+                          onPress={(e) => {
+                            e.stopPropagation();
                             setEditingOrderId(null);
                             setQuickEditOrder({});
                           }}
@@ -4680,7 +5102,7 @@ export default function AdminScreen() {
                         </TouchableOpacity>
                       </View>
                     )}
-                  </View>
+                  </TouchableOpacity>
                 );
               })}
                 </View>
@@ -4720,8 +5142,32 @@ export default function AdminScreen() {
                 const quickEdit = quickEditOrder[order.id] || {};
                 const displayStatus = isEditing ? (quickEdit.status || order.status) : order.status;
 
+                const isSelected = selectedOrders.has(order.id);
+                
                 return (
-                  <View key={order.id} style={styles.gridCard}>
+                  <TouchableOpacity
+                    key={order.id}
+                    style={[styles.gridCard, isSelected && styles.gridCardSelected]}
+                    onPress={() => {
+                      if (isSelectionMode) {
+                        const newSelected = new Set(selectedOrders);
+                        if (isSelected) {
+                          newSelected.delete(order.id);
+                        } else {
+                          newSelected.add(order.id);
+                        }
+                        setSelectedOrders(newSelected);
+                      }
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    {isSelectionMode && (
+                      <View style={styles.checkboxContainer}>
+                        <View style={[styles.checkbox, isSelected && styles.checkboxChecked]}>
+                          {isSelected && <Ionicons name="checkmark" size={16} color="#fff" />}
+                        </View>
+                      </View>
+                    )}
                     <View style={styles.cardHeader}>
                       <View style={{ flex: 1 }}>
                         <Text style={styles.gridCardTitle}>#{order.order_number}</Text>
@@ -4729,20 +5175,22 @@ export default function AdminScreen() {
                           {new Date(order.created_at).toLocaleDateString('ar-EG')}
                         </Text>
                       </View>
-                      <TouchableOpacity
-                        style={styles.cardMenuButton}
-                        onPress={() => {
-                          if (isEditing) {
-                            setEditingOrderId(null);
-                            setQuickEditOrder({});
-                          } else {
-                            setEditingOrderId(order.id);
-                            setQuickEditOrder({ [order.id]: {} });
-                          }
-                        }}
-                      >
-                        <Ionicons name={isEditing ? "checkmark" : "create-outline"} size={18} color={isEditing ? "#10B981" : "#666"} />
-                      </TouchableOpacity>
+                      {!isSelectionMode && (
+                        <TouchableOpacity
+                          style={styles.cardMenuButton}
+                          onPress={() => {
+                            if (isEditing) {
+                              setEditingOrderId(null);
+                              setQuickEditOrder({});
+                            } else {
+                              setEditingOrderId(order.id);
+                              setQuickEditOrder({ [order.id]: {} });
+                            }
+                          }}
+                        >
+                          <Ionicons name={isEditing ? "checkmark" : "create-outline"} size={18} color={isEditing ? "#10B981" : "#666"} />
+                        </TouchableOpacity>
+                      )}
                     </View>
 
                     <View style={styles.gridProductPrice}>
@@ -4873,7 +5321,7 @@ export default function AdminScreen() {
                         </TouchableOpacity>
                       </View>
                     )}
-                  </View>
+                  </TouchableOpacity>
                 );
               })}
                 </View>
@@ -5179,6 +5627,312 @@ export default function AdminScreen() {
 
         {activeTab === 'products' && (
           <View>
+            {/* Selection Mode Controls for Products - أزرار وضع الاختيار للمنتجات */}
+            <View style={styles.selectionControls}>
+              <TouchableOpacity
+                style={[styles.selectionButton, isProductSelectionMode && styles.selectionButtonActive]}
+                onPress={() => {
+                  setIsProductSelectionMode(!isProductSelectionMode);
+                  if (!isProductSelectionMode) {
+                    setSelectedProducts(new Set());
+                  }
+                }}
+              >
+                <Ionicons name={isProductSelectionMode ? "checkbox-outline" : "square-outline"} size={18} color={isProductSelectionMode ? "#EE1C47" : "#666"} />
+                <Text style={[styles.selectionButtonText, isProductSelectionMode && styles.selectionButtonTextActive]}>
+                  {isProductSelectionMode ? 'إلغاء وضع الاختيار' : 'تحديد المنتجات'}
+                </Text>
+              </TouchableOpacity>
+              
+              {isProductSelectionMode && (
+                <>
+                  <TouchableOpacity
+                    style={[styles.selectionButton, { backgroundColor: '#2196F3', marginLeft: 8 }]}
+                    onPress={() => {
+                      const visibleProducts = paginatedProductsData.products || [];
+                      if (selectedProducts.size === visibleProducts.length) {
+                        setSelectedProducts(new Set());
+                      } else {
+                        setSelectedProducts(new Set(visibleProducts.map((p: Product) => p.id)));
+                      }
+                    }}
+                  >
+                    <Ionicons name="checkmark-done-outline" size={18} color="#fff" />
+                    <Text style={[styles.selectionButtonText, { color: '#fff' }]}>
+                      {selectedProducts.size === (paginatedProductsData.products?.length || 0) ? 'إلغاء الكل' : 'تحديد الكل'}
+                    </Text>
+                  </TouchableOpacity>
+                  
+                  {selectedProducts.size > 0 && (
+                    <TouchableOpacity
+                      style={[styles.selectionButton, { backgroundColor: '#f44336', marginLeft: 8 }]}
+                      onPress={() => {
+                        sweetAlert.showConfirm(
+                          'تأكيد الحذف',
+                          `هل أنت متأكد من حذف ${selectedProducts.size} منتج؟\n\nسيتم حذف جميع الجداول المرتبطة (المتغيرات، الصور، العناصر في الطلبات، إلخ).\n\nهذا الإجراء لا يمكن التراجع عنه.`,
+                          async () => {
+                            setLoading(true);
+                            try {
+                              const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+                              const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+                              const accessToken = await getAccessToken();
+                              
+                              const productIds = Array.from(selectedProducts);
+                              
+                              console.log('🗑️ Deleting products:', productIds.length, 'products');
+                              console.log('🗑️ Product IDs:', productIds);
+                              
+                              // حذف الجداول المرتبطة أولاً (مع أن ON DELETE CASCADE يجب أن يعمل، لكن للتأكد)
+                              // 1. حذف product_variants
+                              const variantConditions = productIds.map(id => `product_id.eq.${id}`).join(',');
+                              if (variantConditions) {
+                                const variantsDeleteResponse = await fetch(
+                                  `${supabaseUrl}/rest/v1/product_variants?or=(${variantConditions})`,
+                                  {
+                                    method: 'DELETE',
+                                    headers: {
+                                      'apikey': supabaseKey || '',
+                                      'Authorization': `Bearer ${accessToken}`,
+                                      'Content-Type': 'application/json',
+                                      'Prefer': 'return=minimal',
+                                    }
+                                  }
+                                );
+                                console.log('🗑️ Product variants delete status:', variantsDeleteResponse.status);
+                              }
+                              
+                              // 2. حذف product_images
+                              const imageConditions = productIds.map(id => `product_id.eq.${id}`).join(',');
+                              if (imageConditions) {
+                                const imagesDeleteResponse = await fetch(
+                                  `${supabaseUrl}/rest/v1/product_images?or=(${imageConditions})`,
+                                  {
+                                    method: 'DELETE',
+                                    headers: {
+                                      'apikey': supabaseKey || '',
+                                      'Authorization': `Bearer ${accessToken}`,
+                                      'Content-Type': 'application/json',
+                                      'Prefer': 'return=minimal',
+                                    }
+                                  }
+                                );
+                                console.log('🗑️ Product images delete status:', imagesDeleteResponse.status);
+                              }
+                              
+                              // 3. حذف order_items المرتبطة (ON DELETE CASCADE يجب أن يعمل تلقائياً)
+                              const orderItemConditions = productIds.map(id => `product_id.eq.${id}`).join(',');
+                              if (orderItemConditions) {
+                                const orderItemsDeleteResponse = await fetch(
+                                  `${supabaseUrl}/rest/v1/order_items?or=(${orderItemConditions})`,
+                                  {
+                                    method: 'DELETE',
+                                    headers: {
+                                      'apikey': supabaseKey || '',
+                                      'Authorization': `Bearer ${accessToken}`,
+                                      'Content-Type': 'application/json',
+                                      'Prefer': 'return=minimal',
+                                    }
+                                  }
+                                );
+                                console.log('🗑️ Order items delete status:', orderItemsDeleteResponse.status);
+                              }
+                              
+                              // 4. حذف inventory المرتبط
+                              const inventoryConditions = productIds.map(id => `product_id.eq.${id}`).join(',');
+                              if (inventoryConditions) {
+                                const inventoryDeleteResponse = await fetch(
+                                  `${supabaseUrl}/rest/v1/inventory?or=(${inventoryConditions})`,
+                                  {
+                                    method: 'DELETE',
+                                    headers: {
+                                      'apikey': supabaseKey || '',
+                                      'Authorization': `Bearer ${accessToken}`,
+                                      'Content-Type': 'application/json',
+                                      'Prefer': 'return=minimal',
+                                    }
+                                  }
+                                );
+                                console.log('🗑️ Inventory delete status:', inventoryDeleteResponse.status);
+                              }
+                              
+                              // 5. حذف المنتجات نفسها
+                              const productConditions = productIds.map(id => `id.eq.${id}`).join(',');
+                              const deleteResponse = await fetch(
+                                `${supabaseUrl}/rest/v1/products?or=(${productConditions})`,
+                                {
+                                  method: 'DELETE',
+                                  headers: {
+                                    'apikey': supabaseKey || '',
+                                    'Authorization': `Bearer ${accessToken}`,
+                                    'Content-Type': 'application/json',
+                                    'Prefer': 'return=minimal',
+                                  }
+                                }
+                              );
+                              
+                              console.log('🗑️ Products delete response status:', deleteResponse.status);
+                              
+                              if (deleteResponse.ok) {
+                                console.log('✅ Products deleted successfully');
+                                const deletedCount = selectedProducts.size;
+                                setSelectedProducts(new Set());
+                                setIsProductSelectionMode(false);
+                                // Remove deleted products from state immediately
+                                setProducts(prevProducts => prevProducts.filter(p => !productIds.includes(p.id)));
+                                // Wait a bit before reloading
+                                setTimeout(() => {
+                                  console.log('🔄 Reloading data after deletion...');
+                                  loadData();
+                                }, 1000);
+                                sweetAlert.showSuccess('نجح', `تم حذف ${deletedCount} منتج بنجاح`);
+                              } else {
+                                const errorText = await deleteResponse.text();
+                                console.error('❌ Delete error:', errorText);
+                                throw new Error(errorText || 'فشل حذف المنتجات');
+                              }
+                            } catch (error: any) {
+                              sweetAlert.showError('خطأ', error.message || 'فشل حذف المنتجات');
+                            } finally {
+                              setLoading(false);
+                            }
+                          }
+                        );
+                      }}
+                    >
+                      <Ionicons name="trash-outline" size={18} color="#fff" />
+                      <Text style={[styles.selectionButtonText, { color: '#fff' }]}>
+                        حذف المحدد ({selectedProducts.size})
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+                  
+                  <TouchableOpacity
+                    style={[styles.selectionButton, { backgroundColor: '#FF9800', marginLeft: 8 }]}
+                    onPress={() => {
+                      const visibleProducts = paginatedProductsData.products || [];
+                      
+                      sweetAlert.showConfirm(
+                        'تأكيد الحذف',
+                        `هل أنت متأكد من حذف جميع المنتجات المرئية (${visibleProducts.length} منتج)؟\n\nسيتم حذف جميع الجداول المرتبطة (المتغيرات، الصور، العناصر في الطلبات، إلخ).\n\nهذا الإجراء لا يمكن التراجع عنه.`,
+                        async () => {
+                          setLoading(true);
+                          try {
+                            const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+                            const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+                            const accessToken = await getAccessToken();
+                            
+                            const productIds = visibleProducts.map((p: Product) => p.id);
+                            
+                            console.log('🗑️ Deleting all visible products:', productIds.length, 'products');
+                            
+                            // حذف الجداول المرتبطة أولاً
+                            const variantConditions = productIds.map(id => `product_id.eq.${id}`).join(',');
+                            if (variantConditions) {
+                              await fetch(
+                                `${supabaseUrl}/rest/v1/product_variants?or=(${variantConditions})`,
+                                {
+                                  method: 'DELETE',
+                                  headers: {
+                                    'apikey': supabaseKey || '',
+                                    'Authorization': `Bearer ${accessToken}`,
+                                    'Content-Type': 'application/json',
+                                    'Prefer': 'return=minimal',
+                                  }
+                                }
+                              );
+                            }
+                            
+                            const imageConditions = productIds.map(id => `product_id.eq.${id}`).join(',');
+                            if (imageConditions) {
+                              await fetch(
+                                `${supabaseUrl}/rest/v1/product_images?or=(${imageConditions})`,
+                                {
+                                  method: 'DELETE',
+                                  headers: {
+                                    'apikey': supabaseKey || '',
+                                    'Authorization': `Bearer ${accessToken}`,
+                                    'Content-Type': 'application/json',
+                                    'Prefer': 'return=minimal',
+                                  }
+                                }
+                              );
+                            }
+                            
+                            const orderItemConditions = productIds.map(id => `product_id.eq.${id}`).join(',');
+                            if (orderItemConditions) {
+                              await fetch(
+                                `${supabaseUrl}/rest/v1/order_items?or=(${orderItemConditions})`,
+                                {
+                                  method: 'DELETE',
+                                  headers: {
+                                    'apikey': supabaseKey || '',
+                                    'Authorization': `Bearer ${accessToken}`,
+                                    'Content-Type': 'application/json',
+                                    'Prefer': 'return=minimal',
+                                  }
+                                }
+                              );
+                            }
+                            
+                            const inventoryConditions = productIds.map(id => `product_id.eq.${id}`).join(',');
+                            if (inventoryConditions) {
+                              await fetch(
+                                `${supabaseUrl}/rest/v1/inventory?or=(${inventoryConditions})`,
+                                {
+                                  method: 'DELETE',
+                                  headers: {
+                                    'apikey': supabaseKey || '',
+                                    'Authorization': `Bearer ${accessToken}`,
+                                    'Content-Type': 'application/json',
+                                    'Prefer': 'return=minimal',
+                                  }
+                                }
+                              );
+                            }
+                            
+                            // حذف المنتجات
+                            const productConditions = productIds.map(id => `id.eq.${id}`).join(',');
+                            const deleteResponse = await fetch(
+                              `${supabaseUrl}/rest/v1/products?or=(${productConditions})`,
+                              {
+                                method: 'DELETE',
+                                headers: {
+                                  'apikey': supabaseKey || '',
+                                  'Authorization': `Bearer ${accessToken}`,
+                                  'Content-Type': 'application/json',
+                                  'Prefer': 'return=minimal',
+                                }
+                              }
+                            );
+                            
+                            if (deleteResponse.ok) {
+                              setSelectedProducts(new Set());
+                              setIsProductSelectionMode(false);
+                              setProducts([]);
+                              setTimeout(() => {
+                                loadData();
+                              }, 1000);
+                              sweetAlert.showSuccess('نجح', `تم حذف ${productIds.length} منتج بنجاح`);
+                            } else {
+                              const errorText = await deleteResponse.text();
+                              throw new Error(errorText || 'فشل حذف المنتجات');
+                            }
+                          } catch (error: any) {
+                            sweetAlert.showError('خطأ', error.message || 'فشل حذف المنتجات');
+                          } finally {
+                            setLoading(false);
+                          }
+                        }
+                      );
+                    }}
+                  >
+                    <Ionicons name="trash" size={18} color="#fff" />
+                    <Text style={[styles.selectionButtonText, { color: '#fff' }]}>حذف الكل</Text>
+                  </TouchableOpacity>
+                </>
+              )}
+            </View>
+            
             <View style={styles.formCard}>
               <Text style={styles.formTitle}>
                 {editingProduct ? 'تعديل منتج' : 'إضافة منتج جديد'}
@@ -5239,6 +5993,15 @@ export default function AdminScreen() {
                   ⚠️ الكود يجب أن يكون فريداً ولا يتكرر
                 </Text>
               )}
+              <Text style={{ fontSize: 11, color: '#6B7280', marginBottom: 4, marginTop: 8 }}>رابط المنتج (Temu)</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="https://www.temu.com/ae/..."
+                value={newProduct.product_url || ''}
+                onChangeText={(text) => setNewProduct({ ...newProduct, product_url: text })}
+                keyboardType="url"
+                autoCapitalize="none"
+              />
               <Text style={{ fontSize: 11, color: '#6B7280', marginBottom: 4, marginTop: 8 }}>الوصف</Text>
               <TextInput
                 style={styles.input}
@@ -6440,8 +7203,32 @@ export default function AdminScreen() {
                 const safeDisplayPrice = typeof displayPrice === 'number' && !isNaN(displayPrice) ? displayPrice : (product.price || 0);
                 const safeDisplayStock = typeof displayStock === 'number' && !isNaN(displayStock) ? displayStock : (product.stock_quantity || 0);
 
+                const isSelected = selectedProducts.has(product.id);
+                
                 return (
-                  <View key={product.id} style={styles.gridCard}>
+                  <TouchableOpacity
+                    key={product.id}
+                    style={[styles.gridCard, isSelected && styles.gridCardSelected]}
+                    onPress={() => {
+                      if (isProductSelectionMode) {
+                        const newSelected = new Set(selectedProducts);
+                        if (isSelected) {
+                          newSelected.delete(product.id);
+                        } else {
+                          newSelected.add(product.id);
+                        }
+                        setSelectedProducts(newSelected);
+                      }
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    {isProductSelectionMode && (
+                      <View style={styles.checkboxContainer}>
+                        <View style={[styles.checkbox, isSelected && styles.checkboxChecked]}>
+                          {isSelected && <Ionicons name="checkmark" size={16} color="#fff" />}
+                        </View>
+                      </View>
+                    )}
                     {(product.primary_image_url || product.image_url) && (
                       <Image
                         source={{ uri: product.primary_image_url || product.image_url }}
@@ -6461,20 +7248,22 @@ export default function AdminScreen() {
                       ) : (
                         <Text style={styles.gridCardTitle} numberOfLines={2}>{product.name}</Text>
                       )}
-                      <TouchableOpacity
-                        style={styles.cardMenuButton}
-                        onPress={() => {
-                          if (isEditing) {
-                            setEditingProductId(null);
-                            setQuickEditProduct({});
-                          } else {
-                            setEditingProductId(product.id);
-                            setQuickEditProduct({ [product.id]: {} });
-                          }
-                        }}
-                      >
-                        <Ionicons name={isEditing ? "checkmark" : "create-outline"} size={18} color={isEditing ? "#10B981" : "#666"} />
-                      </TouchableOpacity>
+                      {!isProductSelectionMode && (
+                        <TouchableOpacity
+                          style={styles.cardMenuButton}
+                          onPress={() => {
+                            if (isEditing) {
+                              setEditingProductId(null);
+                              setQuickEditProduct({});
+                            } else {
+                              setEditingProductId(product.id);
+                              setQuickEditProduct({ [product.id]: {} });
+                            }
+                          }}
+                        >
+                          <Ionicons name={isEditing ? "checkmark" : "create-outline"} size={18} color={isEditing ? "#10B981" : "#666"} />
+                        </TouchableOpacity>
+                      )}
                     </View>
 
                     <View style={styles.gridProductPrice}>
@@ -6695,7 +7484,7 @@ export default function AdminScreen() {
                         </TouchableOpacity>
                       </>
                     )}
-                  </View>
+                  </TouchableOpacity>
                 );
               }) : (
                 <View style={{ padding: 20, alignItems: 'center', width: '100%' }}>
@@ -7542,6 +8331,726 @@ export default function AdminScreen() {
             </View>
           </View>
         )}
+
+        {activeTab === 'status_mappings' && (
+          <View>
+            {/* تبويبات داخلية */}
+            <View style={styles.subTabsContainer}>
+              <TouchableOpacity
+                style={[styles.subTab, statusMappingsSubTab === 'statuses' && styles.subTabActive]}
+                onPress={() => setStatusMappingsSubTab('statuses')}
+              >
+                <Text style={[styles.subTabText, statusMappingsSubTab === 'statuses' && styles.subTabTextActive]}>
+                  الحالات
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.subTab, statusMappingsSubTab === 'mappings' && styles.subTabActive]}
+                onPress={() => setStatusMappingsSubTab('mappings')}
+              >
+                <Text style={[styles.subTabText, statusMappingsSubTab === 'mappings' && styles.subTabTextActive]}>
+                  التعيينات
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            {statusMappingsSubTab === 'statuses' && (
+              <View>
+                {/* إدارة الحالات */}
+                <View style={styles.formCard}>
+                  <Text style={styles.formTitle}>
+                    {editingStatus ? 'تعديل حالة' : 'إضافة حالة جديدة'}
+                  </Text>
+                  {editingStatus && (
+                    <TouchableOpacity
+                      style={styles.cancelButton}
+                      onPress={() => {
+                        setEditingStatus(null);
+                        setNewStatus({ status_key: '', status_name_ar: '', status_type: 'admin', display_order: '0', color: '#2196F3', description: '' });
+                      }}
+                    >
+                      <Text style={styles.cancelButtonText}>إلغاء</Text>
+                    </TouchableOpacity>
+                  )}
+                  
+                  <Text style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>نوع الحالة *</Text>
+                  <View style={styles.statusSelectContainer}>
+                    <TouchableOpacity
+                      style={[
+                        styles.statusSelectOption,
+                        (editingStatus?.status_type || newStatus.status_type) === 'admin' && styles.statusSelectOptionActive
+                      ]}
+                      onPress={() => {
+                        if (editingStatus) {
+                          setEditingStatus({ ...editingStatus, status_type: 'admin' });
+                        } else {
+                          setNewStatus({ ...newStatus, status_type: 'admin' });
+                        }
+                      }}
+                    >
+                      <Text style={[
+                        styles.statusSelectOptionText,
+                        (editingStatus?.status_type || newStatus.status_type) === 'admin' && styles.statusSelectOptionTextActive
+                      ]}>
+                        إدارية
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[
+                        styles.statusSelectOption,
+                        (editingStatus?.status_type || newStatus.status_type) === 'customer' && styles.statusSelectOptionActive
+                      ]}
+                      onPress={() => {
+                        if (editingStatus) {
+                          setEditingStatus({ ...editingStatus, status_type: 'customer' });
+                        } else {
+                          setNewStatus({ ...newStatus, status_type: 'customer' });
+                        }
+                      }}
+                    >
+                      <Text style={[
+                        styles.statusSelectOptionText,
+                        (editingStatus?.status_type || newStatus.status_type) === 'customer' && styles.statusSelectOptionTextActive
+                      ]}>
+                        عميل
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  <TextInput
+                    style={styles.input}
+                    placeholder="مفتاح الحالة (مثل: new_status) *"
+                    value={editingStatus?.status_key || newStatus.status_key}
+                    onChangeText={(text) => {
+                      if (editingStatus) {
+                        setEditingStatus({ ...editingStatus, status_key: text });
+                      } else {
+                        setNewStatus({ ...newStatus, status_key: text });
+                      }
+                    }}
+                    editable={!editingStatus}
+                  />
+
+                  <TextInput
+                    style={styles.input}
+                    placeholder="اسم الحالة بالعربية *"
+                    value={editingStatus?.status_name_ar || newStatus.status_name_ar}
+                    onChangeText={(text) => {
+                      if (editingStatus) {
+                        setEditingStatus({ ...editingStatus, status_name_ar: text });
+                      } else {
+                        setNewStatus({ ...newStatus, status_name_ar: text });
+                      }
+                    }}
+                  />
+
+              <TouchableOpacity
+                style={styles.submitButton}
+                onPress={async () => {
+                  const status = editingStatus || newStatus;
+                  if (!status.status_key || !status.status_name_ar) {
+                    sweetAlert.showError('خطأ', 'يرجى إدخال مفتاح الحالة واسم الحالة');
+                    return;
+                  }
+
+                  setLoading(true);
+                  try {
+                    const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+                    const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+                    const accessToken = await getAccessToken();
+
+                    if (editingStatus) {
+                      // تحديث
+                      const response = await fetch(
+                        `${supabaseUrl}/rest/v1/order_statuses?id=eq.${editingStatus.id}`,
+                        {
+                          method: 'PATCH',
+                          headers: {
+                            'apikey': supabaseKey || '',
+                            'Authorization': `Bearer ${accessToken}`,
+                            'Content-Type': 'application/json',
+                          },
+                          body: JSON.stringify({
+                            status_name_ar: status.status_name_ar,
+                            display_order: typeof status.display_order === 'number' ? status.display_order : parseInt(status.display_order) || 0,
+                            color: status.color || null,
+                            description: status.description || null,
+                          })
+                        }
+                      );
+
+                      if (response.ok) {
+                        sweetAlert.showSuccess('نجح', 'تم تحديث الحالة بنجاح', () => {
+                          setEditingStatus(null);
+                          setNewStatus({ status_key: '', status_name_ar: '', status_type: 'admin', display_order: '0', color: '#2196F3', description: '' });
+                          loadOrderStatuses();
+                        });
+                      } else {
+                        throw new Error('فشل تحديث الحالة');
+                      }
+                    } else {
+                      // إضافة جديد
+                      const response = await fetch(
+                        `${supabaseUrl}/rest/v1/order_statuses`,
+                        {
+                          method: 'POST',
+                          headers: {
+                            'apikey': supabaseKey || '',
+                            'Authorization': `Bearer ${accessToken}`,
+                            'Content-Type': 'application/json',
+                          },
+                          body: JSON.stringify({
+                            status_key: status.status_key,
+                            status_name_ar: status.status_name_ar,
+                            status_type: status.status_type,
+                            display_order: parseInt(status.display_order) || 0,
+                            color: status.color || null,
+                            description: status.description || null,
+                            is_active: true,
+                          })
+                        }
+                      );
+
+                      if (response.ok) {
+                        sweetAlert.showSuccess('نجح', 'تم إضافة الحالة بنجاح', () => {
+                          setNewStatus({ status_key: '', status_name_ar: '', status_type: 'admin', display_order: '0', color: '#2196F3', description: '' });
+                          loadOrderStatuses();
+                        });
+                      } else {
+                        const errorText = await response.text();
+                        throw new Error(errorText || 'فشل إضافة الحالة');
+                      }
+                    }
+                  } catch (error: any) {
+                    sweetAlert.showError('خطأ', error.message || 'فشل حفظ الحالة');
+                  } finally {
+                    setLoading(false);
+                  }
+                }}
+              >
+                <Text style={styles.submitButtonText}>
+                  {editingStatus ? 'تحديث الحالة' : 'إضافة الحالة'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.statusesRow}>
+              <View style={[styles.listCard, { flex: 1, marginRight: 8 }]}>
+                <Text style={styles.listTitle}>حالات الإدارة</Text>
+                {orderStatuses.filter(s => s.status_type === 'admin').length === 0 ? (
+                  <Text style={styles.emptyText}>لا توجد حالات</Text>
+                ) : (
+                  orderStatuses.filter(s => s.status_type === 'admin').map((status) => (
+                    <View key={status.id} style={[styles.mappingCard, !status.is_active && { opacity: 0.5 }]}>
+                      <Text style={[styles.mappingValue, { color: status.color || '#333', fontSize: 15, fontWeight: 'bold' }]}>
+                        {status.status_name_ar}
+                      </Text>
+                      <View style={styles.mappingActions}>
+                        <TouchableOpacity
+                          style={styles.editButtonSmall}
+                          onPress={() => {
+                            setEditingStatus({
+                              id: status.id,
+                              status_key: status.status_key,
+                              status_name_ar: status.status_name_ar,
+                              status_type: status.status_type,
+                              display_order: status.display_order,
+                              color: status.color || '#2196F3',
+                              description: status.description || '',
+                            });
+                          }}
+                        >
+                          <Ionicons name="create-outline" size={14} color="#fff" />
+                        </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[styles.editButtonSmall, { backgroundColor: status.is_active ? '#f44336' : '#10B981', marginLeft: 6 }]}
+                        onPress={async () => {
+                          setLoading(true);
+                          try {
+                            const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+                            const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+                            const accessToken = await getAccessToken();
+
+                            const response = await fetch(
+                              `${supabaseUrl}/rest/v1/order_statuses?id=eq.${status.id}`,
+                              {
+                                method: 'PATCH',
+                                headers: {
+                                  'apikey': supabaseKey || '',
+                                  'Authorization': `Bearer ${accessToken}`,
+                                  'Content-Type': 'application/json',
+                                },
+                                body: JSON.stringify({
+                                  is_active: !status.is_active,
+                                })
+                              }
+                            );
+
+                            if (response.ok) {
+                              loadOrderStatuses();
+                            } else {
+                              throw new Error('فشل تحديث الحالة');
+                            }
+                          } catch (error: any) {
+                            sweetAlert.showError('خطأ', error.message || 'فشل تحديث الحالة');
+                          } finally {
+                            setLoading(false);
+                          }
+                        }}
+                      >
+                        <Ionicons name={status.is_active ? "eye-off-outline" : "eye-outline"} size={14} color="#fff" />
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[styles.editButtonSmall, { backgroundColor: '#f44336', marginLeft: 6 }]}
+                        onPress={() => {
+                          sweetAlert.showConfirm(
+                            'تأكيد الحذف',
+                            `هل أنت متأكد من حذف الحالة "${status.status_name_ar}"؟\n\nملاحظة: لا يمكن حذف الحالات المستخدمة في طلبات موجودة.`,
+                            async () => {
+                              setLoading(true);
+                              try {
+                                const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+                                const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+                                const accessToken = await getAccessToken();
+
+                                const response = await fetch(
+                                  `${supabaseUrl}/rest/v1/order_statuses?id=eq.${status.id}`,
+                                  {
+                                    method: 'DELETE',
+                                    headers: {
+                                      'apikey': supabaseKey || '',
+                                      'Authorization': `Bearer ${accessToken}`,
+                                      'Content-Type': 'application/json',
+                                    }
+                                  }
+                                );
+
+                                if (response.ok) {
+                                  sweetAlert.showSuccess('نجح', 'تم حذف الحالة بنجاح', () => {
+                                    loadOrderStatuses();
+                                  });
+                                } else {
+                                  const errorText = await response.text();
+                                  throw new Error(errorText || 'فشل حذف الحالة');
+                                }
+                              } catch (error: any) {
+                                sweetAlert.showError('خطأ', error.message || 'فشل حذف الحالة. قد تكون الحالة مستخدمة في طلبات موجودة.');
+                              } finally {
+                                setLoading(false);
+                              }
+                            }
+                          );
+                        }}
+                      >
+                        <Ionicons name="trash-outline" size={14} color="#fff" />
+                      </TouchableOpacity>
+                      </View>
+                    </View>
+                  ))
+                )}
+              </View>
+
+              <View style={[styles.listCard, { flex: 1, marginLeft: 8 }]}>
+                <Text style={styles.listTitle}>حالات العميل</Text>
+                {orderStatuses.filter(s => s.status_type === 'customer').length === 0 ? (
+                  <Text style={styles.emptyText}>لا توجد حالات</Text>
+                ) : (
+                  orderStatuses.filter(s => s.status_type === 'customer').map((status) => (
+                    <View key={status.id} style={[styles.mappingCard, !status.is_active && { opacity: 0.5 }]}>
+                      <Text style={[styles.mappingValue, { color: status.color || '#333', fontSize: 15, fontWeight: 'bold' }]}>
+                        {status.status_name_ar}
+                      </Text>
+                      <View style={styles.mappingActions}>
+                        <TouchableOpacity
+                          style={styles.editButtonSmall}
+                          onPress={() => {
+                            setEditingStatus({
+                              id: status.id,
+                              status_key: status.status_key,
+                              status_name_ar: status.status_name_ar,
+                              status_type: status.status_type,
+                              display_order: status.display_order,
+                              color: status.color || '#2196F3',
+                              description: status.description || '',
+                            });
+                          }}
+                        >
+                          <Ionicons name="create-outline" size={14} color="#fff" />
+                        </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[styles.editButtonSmall, { backgroundColor: status.is_active ? '#f44336' : '#10B981', marginLeft: 6 }]}
+                        onPress={async () => {
+                          setLoading(true);
+                          try {
+                            const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+                            const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+                            const accessToken = await getAccessToken();
+
+                            const response = await fetch(
+                              `${supabaseUrl}/rest/v1/order_statuses?id=eq.${status.id}`,
+                              {
+                                method: 'PATCH',
+                                headers: {
+                                  'apikey': supabaseKey || '',
+                                  'Authorization': `Bearer ${accessToken}`,
+                                  'Content-Type': 'application/json',
+                                },
+                                body: JSON.stringify({
+                                  is_active: !status.is_active,
+                                })
+                              }
+                            );
+
+                            if (response.ok) {
+                              loadOrderStatuses();
+                            } else {
+                              throw new Error('فشل تحديث الحالة');
+                            }
+                          } catch (error: any) {
+                            sweetAlert.showError('خطأ', error.message || 'فشل تحديث الحالة');
+                          } finally {
+                            setLoading(false);
+                          }
+                        }}
+                      >
+                        <Ionicons name={status.is_active ? "eye-off-outline" : "eye-outline"} size={14} color="#fff" />
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[styles.editButtonSmall, { backgroundColor: '#f44336', marginLeft: 6 }]}
+                        onPress={() => {
+                          sweetAlert.showConfirm(
+                            'تأكيد الحذف',
+                            `هل أنت متأكد من حذف الحالة "${status.status_name_ar}"؟\n\nملاحظة: لا يمكن حذف الحالات المستخدمة في طلبات موجودة.`,
+                            async () => {
+                              setLoading(true);
+                              try {
+                                const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+                                const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+                                const accessToken = await getAccessToken();
+
+                                const response = await fetch(
+                                  `${supabaseUrl}/rest/v1/order_statuses?id=eq.${status.id}`,
+                                  {
+                                    method: 'DELETE',
+                                    headers: {
+                                      'apikey': supabaseKey || '',
+                                      'Authorization': `Bearer ${accessToken}`,
+                                      'Content-Type': 'application/json',
+                                    }
+                                  }
+                                );
+
+                                if (response.ok) {
+                                  sweetAlert.showSuccess('نجح', 'تم حذف الحالة بنجاح', () => {
+                                    loadOrderStatuses();
+                                  });
+                                } else {
+                                  const errorText = await response.text();
+                                  throw new Error(errorText || 'فشل حذف الحالة');
+                                }
+                              } catch (error: any) {
+                                sweetAlert.showError('خطأ', error.message || 'فشل حذف الحالة. قد تكون الحالة مستخدمة في طلبات موجودة.');
+                              } finally {
+                                setLoading(false);
+                              }
+                            }
+                          );
+                        }}
+                      >
+                        <Ionicons name="trash-outline" size={14} color="#fff" />
+                      </TouchableOpacity>
+                      </View>
+                    </View>
+                  ))
+                )}
+              </View>
+            </View>
+              </View>
+            )}
+
+            {statusMappingsSubTab === 'mappings' && (
+              <View>
+                {/* تعيينات الحالات */}
+                <View style={styles.formCard}>
+                  <Text style={styles.formTitle}>
+                    {editingStatusMapping ? 'تعديل تعيين' : 'إضافة تعيين جديد'}
+                  </Text>
+                  {editingStatusMapping && (
+                    <TouchableOpacity
+                      style={styles.cancelButton}
+                      onPress={() => {
+                        setEditingStatusMapping(null);
+                        setNewStatusMapping({ admin_status: '', customer_status: '', description: '' });
+                      }}
+                    >
+                      <Text style={styles.cancelButtonText}>إلغاء</Text>
+                    </TouchableOpacity>
+                  )}
+              
+              <Text style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>الحالة الإدارية *</Text>
+              <View style={styles.statusSelectContainer}>
+                {orderStatuses.filter(s => s.status_type === 'admin' && s.is_active).map((status) => (
+                  <TouchableOpacity
+                    key={status.id}
+                    style={[
+                      styles.statusSelectOption,
+                      (editingStatusMapping?.admin_status || newStatusMapping.admin_status) === status.status_key && styles.statusSelectOptionActive
+                    ]}
+                    onPress={() => {
+                      if (editingStatusMapping) {
+                        setEditingStatusMapping({ ...editingStatusMapping, admin_status: status.status_key });
+                      } else {
+                        setNewStatusMapping({ ...newStatusMapping, admin_status: status.status_key });
+                      }
+                    }}
+                  >
+                    <Text style={[
+                      styles.statusSelectOptionText,
+                      (editingStatusMapping?.admin_status || newStatusMapping.admin_status) === status.status_key && styles.statusSelectOptionTextActive
+                    ]}>
+                      {status.status_name_ar}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              <Text style={{ fontSize: 11, color: '#6B7280', marginBottom: 4, marginTop: 12 }}>حالة العميل *</Text>
+              <View style={styles.statusSelectContainer}>
+                {orderStatuses.filter(s => s.status_type === 'customer' && s.is_active).map((status) => (
+                  <TouchableOpacity
+                    key={status.id}
+                    style={[
+                      styles.statusSelectOption,
+                      (editingStatusMapping?.customer_status || newStatusMapping.customer_status) === status.status_key && styles.statusSelectOptionActive
+                    ]}
+                    onPress={() => {
+                      if (editingStatusMapping) {
+                        setEditingStatusMapping({ ...editingStatusMapping, customer_status: status.status_key });
+                      } else {
+                        setNewStatusMapping({ ...newStatusMapping, customer_status: status.status_key });
+                      }
+                    }}
+                  >
+                    <Text style={[
+                      styles.statusSelectOptionText,
+                      (editingStatusMapping?.customer_status || newStatusMapping.customer_status) === status.status_key && styles.statusSelectOptionTextActive
+                    ]}>
+                      {status.status_name_ar}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+
+              <TouchableOpacity
+                style={styles.submitButton}
+                onPress={async () => {
+                  const mapping = editingStatusMapping || newStatusMapping;
+                  if (!mapping.admin_status || !mapping.customer_status) {
+                    sweetAlert.showError('خطأ', 'يرجى اختيار الحالة الإدارية وحالة العميل');
+                    return;
+                  }
+
+                  setLoading(true);
+                  try {
+                    const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+                    const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+                    const accessToken = await getAccessToken();
+
+                    if (editingStatusMapping) {
+                      // تحديث
+                      const response = await fetch(
+                        `${supabaseUrl}/rest/v1/admin_status_mapping?id=eq.${editingStatusMapping.id}`,
+                        {
+                          method: 'PATCH',
+                          headers: {
+                            'apikey': supabaseKey || '',
+                            'Authorization': `Bearer ${accessToken}`,
+                            'Content-Type': 'application/json',
+                          },
+                          body: JSON.stringify({
+                            admin_status: mapping.admin_status,
+                            customer_status: mapping.customer_status,
+                            description: mapping.description || null,
+                          })
+                        }
+                      );
+
+                      if (response.ok) {
+                        sweetAlert.showSuccess('نجح', 'تم تحديث التعيين بنجاح', () => {
+                          setEditingStatusMapping(null);
+                          setNewStatusMapping({ admin_status: '', customer_status: '', description: '' });
+                          loadStatusMappings();
+                        });
+                      } else {
+                        throw new Error('فشل تحديث التعيين');
+                      }
+                    } else {
+                      // إضافة جديد
+                      const response = await fetch(
+                        `${supabaseUrl}/rest/v1/admin_status_mapping`,
+                        {
+                          method: 'POST',
+                          headers: {
+                            'apikey': supabaseKey || '',
+                            'Authorization': `Bearer ${accessToken}`,
+                            'Content-Type': 'application/json',
+                          },
+                          body: JSON.stringify({
+                            admin_status: mapping.admin_status,
+                            customer_status: mapping.customer_status,
+                            description: mapping.description || null,
+                            is_active: true,
+                          })
+                        }
+                      );
+
+                      if (response.ok) {
+                        sweetAlert.showSuccess('نجح', 'تم إضافة التعيين بنجاح', () => {
+                          setNewStatusMapping({ admin_status: '', customer_status: '', description: '' });
+                          loadStatusMappings();
+                        });
+                      } else {
+                        const errorText = await response.text();
+                        throw new Error(errorText || 'فشل إضافة التعيين');
+                      }
+                    }
+                  } catch (error: any) {
+                    sweetAlert.showError('خطأ', error.message || 'فشل حفظ التعيين');
+                  } finally {
+                    setLoading(false);
+                  }
+                }}
+              >
+                <Text style={styles.submitButtonText}>
+                  {editingStatusMapping ? 'تحديث التعيين' : 'إضافة التعيين'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.listCard}>
+              <Text style={styles.listTitle}>التعيينات الحالية</Text>
+              {statusMappings.length === 0 ? (
+                <Text style={styles.emptyText}>لا توجد تعيينات</Text>
+              ) : (
+                statusMappings.map((mapping) => {
+                  const adminStatus = orderStatuses.find(s => s.status_key === mapping.admin_status);
+                  const customerStatus = orderStatuses.find(s => s.status_key === mapping.customer_status);
+                  return (
+                    <View key={mapping.id} style={[styles.mappingCard, !mapping.is_active && { opacity: 0.5 }]}>
+                      <View style={styles.mappingContent}>
+                        <Text style={styles.mappingValue}>
+                          {adminStatus?.status_name_ar || mapping.admin_status} → {customerStatus?.status_name_ar || mapping.customer_status}
+                        </Text>
+                      </View>
+                      <View style={styles.mappingActions}>
+                        <TouchableOpacity
+                          style={styles.editButtonSmall}
+                          onPress={() => {
+                            setEditingStatusMapping({
+                              id: mapping.id,
+                              admin_status: mapping.admin_status,
+                              customer_status: mapping.customer_status,
+                              description: mapping.description || '',
+                            });
+                          }}
+                        >
+                          <Ionicons name="create-outline" size={14} color="#fff" />
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.editButtonSmall, { backgroundColor: mapping.is_active ? '#f44336' : '#10B981', marginLeft: 6 }]}
+                          onPress={async () => {
+                            setLoading(true);
+                            try {
+                              const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+                              const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+                              const accessToken = await getAccessToken();
+
+                              const response = await fetch(
+                                `${supabaseUrl}/rest/v1/admin_status_mapping?id=eq.${mapping.id}`,
+                                {
+                                  method: 'PATCH',
+                                  headers: {
+                                    'apikey': supabaseKey || '',
+                                    'Authorization': `Bearer ${accessToken}`,
+                                    'Content-Type': 'application/json',
+                                  },
+                                  body: JSON.stringify({
+                                    is_active: !mapping.is_active,
+                                  })
+                                }
+                              );
+
+                              if (response.ok) {
+                                loadStatusMappings();
+                              } else {
+                                throw new Error('فشل تحديث التعيين');
+                              }
+                            } catch (error: any) {
+                              sweetAlert.showError('خطأ', error.message || 'فشل تحديث التعيين');
+                            } finally {
+                              setLoading(false);
+                            }
+                          }}
+                        >
+                          <Ionicons name={mapping.is_active ? "eye-off-outline" : "eye-outline"} size={14} color="#fff" />
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.editButtonSmall, { backgroundColor: '#f44336', marginLeft: 6 }]}
+                          onPress={() => {
+                            const adminStatusName = adminStatus?.status_name_ar || mapping.admin_status;
+                            const customerStatusName = customerStatus?.status_name_ar || mapping.customer_status;
+                            sweetAlert.showConfirm(
+                              'تأكيد الحذف',
+                              `هل أنت متأكد من حذف التعيين:\n${adminStatusName} → ${customerStatusName}؟`,
+                              async () => {
+                                setLoading(true);
+                                try {
+                                  const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+                                  const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+                                  const accessToken = await getAccessToken();
+
+                                  const response = await fetch(
+                                    `${supabaseUrl}/rest/v1/admin_status_mapping?id=eq.${mapping.id}`,
+                                    {
+                                      method: 'DELETE',
+                                      headers: {
+                                        'apikey': supabaseKey || '',
+                                        'Authorization': `Bearer ${accessToken}`,
+                                        'Content-Type': 'application/json',
+                                      }
+                                    }
+                                  );
+
+                                  if (response.ok) {
+                                    sweetAlert.showSuccess('نجح', 'تم حذف التعيين بنجاح', () => {
+                                      loadStatusMappings();
+                                    });
+                                  } else {
+                                    const errorText = await response.text();
+                                    throw new Error(errorText || 'فشل حذف التعيين');
+                                  }
+                                } catch (error: any) {
+                                  sweetAlert.showError('خطأ', error.message || 'فشل حذف التعيين');
+                                } finally {
+                                  setLoading(false);
+                                }
+                              }
+                            );
+                          }}
+                        >
+                          <Ionicons name="trash-outline" size={14} color="#fff" />
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  );
+                })
+              )}
+            </View>
+              </View>
+            )}
+          </View>
+        )}
         </View>
       </ScrollView>
 
@@ -7756,6 +9265,67 @@ const styles = StyleSheet.create({
     position: 'relative',
     borderWidth: 1,
     borderColor: '#E5E7EB',
+  },
+  gridCardSelected: {
+    borderColor: '#EE1C47',
+    borderWidth: 2,
+    backgroundColor: '#FFF5F5',
+  },
+  checkboxContainer: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    zIndex: 10,
+  },
+  checkbox: {
+    width: 24,
+    height: 24,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: '#D1D5DB',
+    backgroundColor: '#fff',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  checkboxChecked: {
+    backgroundColor: '#EE1C47',
+    borderColor: '#EE1C47',
+  },
+  selectionControls: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: '#F9FAFB',
+    borderRadius: 12,
+    marginBottom: 12,
+    gap: 8,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  selectionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+  },
+  selectionButtonActive: {
+    backgroundColor: '#EE1C47',
+    borderColor: '#EE1C47',
+  },
+  selectionButtonText: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#666',
+  },
+  selectionButtonTextActive: {
+    color: '#fff',
+    fontWeight: '600',
   },
   cardHeader: {
     flexDirection: 'row',
@@ -9332,6 +10902,119 @@ const styles = StyleSheet.create({
     color: '#333',
     backgroundColor: '#fff',
     marginTop: 6,
+  },
+  statusSelectContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 12,
+  },
+  statusSelectOption: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: '#F5F5F5',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  statusSelectOptionActive: {
+    backgroundColor: '#EE1C47',
+    borderColor: '#EE1C47',
+  },
+  statusSelectOptionText: {
+    fontSize: 12,
+    color: '#666',
+    fontWeight: '500',
+  },
+  statusSelectOptionTextActive: {
+    color: '#fff',
+    fontWeight: '600',
+  },
+  mappingCard: {
+    backgroundColor: '#fff',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  mappingContent: {
+    flex: 1,
+  },
+  mappingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  mappingLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#666',
+    marginRight: 8,
+  },
+  mappingValue: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#333',
+  },
+  mappingDescription: {
+    fontSize: 12,
+    color: '#999',
+    fontStyle: 'italic',
+    marginTop: 4,
+  },
+  mappingInactive: {
+    fontSize: 11,
+    color: '#f44336',
+    fontWeight: '600',
+    marginTop: 4,
+  },
+  mappingActions: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  editButtonSmall: {
+    backgroundColor: '#2196F3',
+    padding: 8,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  subTabsContainer: {
+    flexDirection: 'row',
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 4,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  subTab: {
+    flex: 1,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  subTabActive: {
+    backgroundColor: '#EE1C47',
+  },
+  subTabText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#666',
+  },
+  subTabTextActive: {
+    color: '#fff',
+    fontWeight: '600',
+  },
+  statusesRow: {
+    flexDirection: 'row',
+    gap: 12,
   },
 });
 

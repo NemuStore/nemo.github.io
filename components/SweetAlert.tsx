@@ -10,6 +10,7 @@ import {
   Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 
 const { width } = Dimensions.get('window');
 
@@ -38,6 +39,7 @@ export default function SweetAlert({
   onCancel,
   onClose,
 }: SweetAlertProps) {
+  const router = useRouter();
   const scaleAnim = React.useRef(new Animated.Value(0)).current;
   const opacityAnim = React.useRef(new Animated.Value(0)).current;
 
@@ -63,10 +65,44 @@ export default function SweetAlert({
   }, [visible]);
 
   const handleConfirm = () => {
+    console.log('✅ SweetAlert: handleConfirm called, onConfirm exists:', !!onConfirm);
+    console.log('🔍 SweetAlert: onConfirm type:', typeof onConfirm);
+    console.log('🔍 SweetAlert: onConfirm function:', onConfirm);
+    console.log('🔍 SweetAlert: onConfirm name:', onConfirm?.name || 'anonymous');
+    console.log('🔍 SweetAlert: type:', type, 'message:', message);
+    
+    // استدعاء الـ callback أولاً
     if (onConfirm) {
-      onConfirm();
+      try {
+        console.log('🔄 SweetAlert: Calling onConfirm callback...');
+        console.log('🔄 SweetAlert: onConfirm.toString():', onConfirm.toString().substring(0, 200));
+        const result = onConfirm();
+        console.log('✅ SweetAlert: onConfirm callback executed successfully, result:', result);
+      } catch (error) {
+        console.error('❌ SweetAlert: Error in onConfirm callback:', error);
+        console.error('❌ SweetAlert: Error stack:', error instanceof Error ? error.stack : 'No stack');
+      }
+    } else {
+      console.warn('⚠️ SweetAlert: onConfirm is not defined!');
     }
-    onClose();
+    
+    // حل بديل: إذا كان success و message يحتوي على "تم إنشاء الطلب"، ننفذ التنقل مباشرة
+    if (type === 'success' && message && message.includes('تم إنشاء الطلب')) {
+      console.log('🚀 SweetAlert: Fallback navigation - redirecting to /orders');
+      setTimeout(() => {
+        if (Platform.OS === 'web' && typeof window !== 'undefined') {
+          window.location.href = '/orders';
+        } else {
+          router.replace('/orders');
+        }
+      }, 300);
+    }
+    
+    // إغلاق الـ alert بعد تنفيذ الـ callback
+    setTimeout(() => {
+      console.log('🔒 SweetAlert: Closing alert...');
+      onClose();
+    }, 200);
   };
 
   const handleCancel = () => {
