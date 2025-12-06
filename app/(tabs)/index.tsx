@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -10,6 +10,8 @@ import {
   Platform,
   Dimensions,
   ActivityIndicator,
+  Animated,
+  Easing,
 } from 'react-native';
 import { supabase } from '@/lib/supabase';
 import { Product, Category, Section } from '@/types';
@@ -27,7 +29,7 @@ const isWeb = Platform.OS === 'web';
 // Responsive item width: Web gets more columns (5-6 like Temu), mobile gets 2 columns
 const itemWidth = isWeb 
   ? Math.min(220, Math.floor((Math.min(width, 1600) - 80) / 6)) // Max 6 columns on web (like Temu)
-  : (width - 30) / 2; // 2 columns on mobile with better spacing
+  : Math.floor((width - 24) / 2); // 2 columns on mobile with 8px padding on each side and 8px gap
 const maxContainerWidth = isWeb ? 1600 : width; // Max width for web container (wider like Temu)
 
 export default function HomeScreen() {
@@ -40,13 +42,83 @@ export default function HomeScreen() {
   const [error, setError] = useState<string | null>(null);
   const [selectedSection, setSelectedSection] = useState<string | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [wishlistItems, setWishlistItems] = useState<Set<string>>(new Set()); // Set of product IDs in wishlist
+  const wishlistAnimations = useRef<Record<string, Animated.Value>>({}); // Animation values for scale
+  const wishlistOpacityAnimations = useRef<Record<string, Animated.Value>>({}); // Animation values for opacity
+  const scrollY = useRef(0);
+  const lastScrollY = useRef(0);
+  const filtersOpacity = useRef(new Animated.Value(1)).current;
+  const filtersTranslateY = useRef(new Animated.Value(0)).current;
+  const filtersHeight = useRef(new Animated.Value(1)).current;
+  const filtersContainerRef = useRef<View>(null);
+  const [filtersContainerHeight, setFiltersContainerHeight] = useState(0);
   const router = useRouter();
 
   useEffect(() => {
     loadProducts();
     loadCategories();
     loadSections();
+    loadWishlistStatus();
   }, []);
+
+  // Handle scroll to show/hide filters with smooth fade animation
+  const handleScroll = (event: any) => {
+    const currentScrollY = event.nativeEvent.contentOffset.y;
+    const scrollDifference = currentScrollY - lastScrollY.current;
+    
+    // Update last scroll position
+    lastScrollY.current = currentScrollY;
+    scrollY.current = currentScrollY;
+    
+    // Hide filters when scrolling down (after 50px) with fade
+    if (currentScrollY > 50 && scrollDifference > 5) {
+      // Scrolling down - fade out and collapse height
+      Animated.parallel([
+        Animated.timing(filtersOpacity, {
+          toValue: 0,
+          duration: 250,
+          useNativeDriver: true,
+          easing: Easing.out(Easing.ease),
+        }),
+        Animated.timing(filtersTranslateY, {
+          toValue: -100,
+          duration: 250,
+          useNativeDriver: true,
+          easing: Easing.out(Easing.ease),
+        }),
+        Animated.timing(filtersHeight, {
+          toValue: 0,
+          duration: 250,
+          useNativeDriver: false, // height doesn't support native driver
+          easing: Easing.out(Easing.ease),
+        }),
+      ]).start();
+    } 
+    // Show filters when scrolling up or near top
+    else if (scrollDifference < -5 || currentScrollY < 50) {
+      // Scrolling up or near top - fade in and expand height
+      Animated.parallel([
+        Animated.timing(filtersOpacity, {
+          toValue: 1,
+          duration: 250,
+          useNativeDriver: true,
+          easing: Easing.out(Easing.ease),
+        }),
+        Animated.timing(filtersTranslateY, {
+          toValue: 0,
+          duration: 250,
+          useNativeDriver: true,
+          easing: Easing.out(Easing.ease),
+        }),
+        Animated.timing(filtersHeight, {
+          toValue: 1,
+          duration: 250,
+          useNativeDriver: false,
+          easing: Easing.out(Easing.ease),
+        }),
+      ]).start();
+    }
+  };
 
   useEffect(() => {
     // Reset category selection when section changes
@@ -259,6 +331,253 @@ export default function HomeScreen() {
     router.push(`/product/${productId}`);
   };
 
+
+  const loadWishlistStatus = async () => {
+    try {
+      const supabaseUrl = getSupabaseUrl();
+      const supabaseKey = getSupabaseAnonKey();
+      
+      // Get user ID from localStorage
+      let userId: string | null = null;
+      let accessToken: string | null = null;
+      
+      if (typeof window !== 'undefined') {
+        try {
+          const projectRef = supabaseUrl?.split('//')[1]?.split('.')[0] || 'default';
+          const storageKey = `sb-${projectRef}-auth-token`;
+          const tokenData = localStorage.getItem(storageKey);
+          
+          if (tokenData) {
+            try {
+              const parsed = JSON.parse(tokenData);
+              userId = parsed?.user?.id || parsed?.currentSession?.user?.id || parsed?.session?.user?.id;
+              accessToken = parsed?.access_token || parsed?.currentSession?.access_token || parsed?.session?.access_token;
+            } catch (e) {
+              // Continue
+            }
+          }
+          
+          // Fallback: search all localStorage keys
+          if (!userId) {
+            const allKeys = Object.keys(localStorage);
+            for (const key of allKeys) {
+              if (key.includes('supabase') || key.includes('auth')) {
+                try {
+                  const data = localStorage.getItem(key);
+                  if (data) {
+                    const parsed = JSON.parse(data);
+                    userId = parsed?.user?.id || parsed?.currentSession?.user?.id || parsed?.session?.user?.id;
+                    accessToken = accessToken || parsed?.access_token || parsed?.currentSession?.access_token || parsed?.session?.access_token;
+                    if (userId) break;
+                  }
+                } catch (e) {
+                  // Continue
+                }
+              }
+            }
+          }
+        } catch (e) {
+          // Continue
+        }
+      }
+      
+      if (!userId) {
+        return; // User not logged in
+      }
+
+      // Fetch wishlist items
+      const response = await fetch(
+        `${supabaseUrl}/rest/v1/product_wishlist?user_id=eq.${userId}&select=product_id`,
+        {
+          headers: {
+            'apikey': supabaseKey || '',
+            'Authorization': `Bearer ${accessToken || supabaseKey || ''}`,
+            'Content-Type': 'application/json',
+          }
+        }
+      );
+
+      if (response.ok) {
+        const wishlistData: any[] = await response.json();
+        const productIds = new Set(wishlistData.map(item => item.product_id));
+        setWishlistItems(productIds);
+      }
+    } catch (error) {
+      console.warn('⚠️ Error loading wishlist status:', error);
+    }
+  };
+
+  const toggleWishlist = async (productId: string, event?: any) => {
+    // Prevent navigation when clicking heart
+    if (event) {
+      event.stopPropagation();
+    }
+
+    try {
+      const supabaseUrl = getSupabaseUrl();
+      const supabaseKey = getSupabaseAnonKey();
+      
+      // Get user ID from localStorage
+      let userId: string | null = null;
+      let accessToken: string | null = null;
+      
+      if (typeof window !== 'undefined') {
+        try {
+          const projectRef = supabaseUrl?.split('//')[1]?.split('.')[0] || 'default';
+          const storageKey = `sb-${projectRef}-auth-token`;
+          const tokenData = localStorage.getItem(storageKey);
+          
+          if (tokenData) {
+            try {
+              const parsed = JSON.parse(tokenData);
+              userId = parsed?.user?.id || parsed?.currentSession?.user?.id || parsed?.session?.user?.id;
+              accessToken = parsed?.access_token || parsed?.currentSession?.access_token || parsed?.session?.access_token;
+            } catch (e) {
+              // Continue
+            }
+          }
+          
+          // Fallback: search all localStorage keys
+          if (!userId) {
+            const allKeys = Object.keys(localStorage);
+            for (const key of allKeys) {
+              if (key.includes('supabase') || key.includes('auth')) {
+                try {
+                  const data = localStorage.getItem(key);
+                  if (data) {
+                    const parsed = JSON.parse(data);
+                    userId = parsed?.user?.id || parsed?.currentSession?.user?.id || parsed?.session?.user?.id;
+                    accessToken = accessToken || parsed?.access_token || parsed?.currentSession?.access_token || parsed?.session?.access_token;
+                    if (userId) break;
+                  }
+                } catch (e) {
+                  // Continue
+                }
+              }
+            }
+          }
+        } catch (e) {
+          // Continue
+        }
+      }
+      
+      if (!userId) {
+        return; // User not logged in, silently fail
+      }
+
+      const isInWishlist = wishlistItems.has(productId);
+
+      // Initialize animation if not exists
+      if (!wishlistAnimations.current[productId]) {
+        wishlistAnimations.current[productId] = new Animated.Value(1);
+      }
+      if (!wishlistOpacityAnimations.current[productId]) {
+        wishlistOpacityAnimations.current[productId] = new Animated.Value(1);
+      }
+
+      // Lottie-like animation: heart beat effect (same as product page)
+      // Reset animation values
+      wishlistAnimations.current[productId].setValue(1);
+      wishlistOpacityAnimations.current[productId].setValue(1);
+      
+      // Create a heart beat animation sequence (same as product page)
+      Animated.sequence([
+        // First beat - quick scale up
+        Animated.parallel([
+          Animated.spring(wishlistAnimations.current[productId], {
+            toValue: 1.4,
+            useNativeDriver: true,
+            tension: 300,
+            friction: 3,
+          }),
+          Animated.timing(wishlistOpacityAnimations.current[productId], {
+            toValue: 0.8,
+            duration: 100,
+            useNativeDriver: true,
+          }),
+        ]),
+        // Quick scale down
+        Animated.parallel([
+          Animated.spring(wishlistAnimations.current[productId], {
+            toValue: 0.9,
+            useNativeDriver: true,
+            tension: 300,
+            friction: 3,
+          }),
+          Animated.timing(wishlistOpacityAnimations.current[productId], {
+            toValue: 1,
+            duration: 100,
+            useNativeDriver: true,
+          }),
+        ]),
+        // Second beat - smaller
+        Animated.parallel([
+          Animated.spring(wishlistAnimations.current[productId], {
+            toValue: 1.2,
+            useNativeDriver: true,
+            tension: 300,
+            friction: 4,
+          }),
+        ]),
+        // Final settle
+        Animated.spring(wishlistAnimations.current[productId], {
+          toValue: 1,
+          useNativeDriver: true,
+          tension: 200,
+          friction: 5,
+        }),
+      ]).start();
+
+      if (isInWishlist) {
+        // Remove from wishlist
+        const response = await fetch(
+          `${supabaseUrl}/rest/v1/product_wishlist?user_id=eq.${userId}&product_id=eq.${productId}`,
+          {
+            method: 'DELETE',
+            headers: {
+              'apikey': supabaseKey || '',
+              'Authorization': `Bearer ${accessToken || supabaseKey || ''}`,
+              'Content-Type': 'application/json',
+            }
+          }
+        );
+
+        if (response.ok) {
+          setWishlistItems(prev => {
+            const newSet = new Set(prev);
+            newSet.delete(productId);
+            return newSet;
+          });
+        }
+      } else {
+        // Add to wishlist
+        const response = await fetch(
+          `${supabaseUrl}/rest/v1/product_wishlist`,
+          {
+            method: 'POST',
+            headers: {
+              'apikey': supabaseKey || '',
+              'Authorization': `Bearer ${accessToken || supabaseKey || ''}`,
+              'Content-Type': 'application/json',
+              'Prefer': 'return=representation'
+            },
+            body: JSON.stringify({
+              user_id: userId,
+              product_id: productId,
+            })
+          }
+        );
+
+        if (response.ok || response.status === 409) {
+          // 409 means already exists, which is fine
+          setWishlistItems(prev => new Set(prev).add(productId));
+        }
+      }
+    } catch (error) {
+      console.warn('⚠️ Error toggling wishlist:', error);
+    }
+  };
+
   // Get discount from database fields
   const getDiscount = (product: Product): number => {
     // Check if limited time discount is active
@@ -320,135 +639,161 @@ export default function HomeScreen() {
         />
       </View>
 
-      {/* Lightning Deals Banner (inspired by Temu) */}
-      {filteredProducts.length > 0 && !loading && (
-        <View style={[styles.dealsBanner, { backgroundColor: isDarkMode ? '#2D1B0E' : '#FFF3E0' }]}>
-          <View style={styles.dealsBannerContent}>
-            <Ionicons name="flash" size={20} color="#FF6B00" />
-            <Text style={[styles.dealsBannerText, { color: '#FF6B00' }]}>عروض محدودة - خصومات تصل إلى 50%</Text>
+      {/* Filters Container - Animated with Fade */}
+      <Animated.View
+        ref={filtersContainerRef}
+        onLayout={(event) => {
+          const { height } = event.nativeEvent.layout;
+          if (height > 0 && filtersContainerHeight === 0) {
+            setFiltersContainerHeight(height);
+          }
+        }}
+        style={{
+          opacity: filtersOpacity,
+          transform: [{ translateY: filtersTranslateY }],
+          height: filtersContainerHeight > 0 
+            ? filtersHeight.interpolate({
+                inputRange: [0, 1],
+                outputRange: [0, filtersContainerHeight],
+              })
+            : undefined,
+          overflow: 'hidden',
+          position: 'relative',
+          zIndex: 100,
+        }}
+      >
+        {/* Lightning Deals Banner (inspired by Temu) */}
+        {filteredProducts.length > 0 && !loading && (
+          <View style={[styles.dealsBanner, { backgroundColor: isDarkMode ? '#2D1B0E' : '#FFF3E0' }]}>
+            <View style={styles.dealsBannerContent}>
+              <Ionicons name="flash" size={18} color="#FF6B00" />
+              <Text style={[styles.dealsBannerText, { color: '#FF6B00' }]}>عروض محدودة - خصومات تصل إلى 50%</Text>
+            </View>
           </View>
-        </View>
-      )}
+        )}
 
-      {/* Sections Section */}
-      {sections.length > 0 && !loading && (
-        <View style={styles.categoriesContainer}>
-          <Text style={[styles.sectionTitle, { color: colors.text }]}>الأقسام</Text>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.categoriesScroll}
-          >
-            <TouchableOpacity
-              style={[
-                styles.categoryChip, 
-                !selectedSection && styles.categoryChipActive,
-                !selectedSection && { backgroundColor: colors.surface, borderColor: colors.border }
-              ]}
-              onPress={() => {
-                setSelectedSection(null);
-                setSelectedCategory(null);
-              }}
+        {/* Sections Section */}
+        {sections.length > 0 && !loading && (
+          <View style={styles.categoriesContainer}>
+            <Text style={[styles.sectionTitle, { color: colors.text }]}>الأقسام</Text>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.categoriesScroll}
             >
-              <Text style={[
-                styles.categoryChipText, 
-                !selectedSection && styles.categoryChipTextActive,
-                !selectedSection && { color: colors.textSecondary }
-              ]}>
-                الكل
-              </Text>
-            </TouchableOpacity>
-            {sections.map((section) => (
               <TouchableOpacity
-                key={section.id}
                 style={[
                   styles.categoryChip, 
-                  selectedSection === section.id && styles.categoryChipActive,
-                  selectedSection !== section.id && { backgroundColor: colors.surface, borderColor: colors.border }
+                  !selectedSection && styles.categoryChipActive,
+                  !selectedSection && { backgroundColor: colors.surface, borderColor: colors.border }
                 ]}
                 onPress={() => {
-                  setSelectedSection(section.id);
+                  setSelectedSection(null);
                   setSelectedCategory(null);
                 }}
               >
-                {section.icon && (
-                  <Ionicons 
-                    name={section.icon as any} 
-                    size={16} 
-                    color={selectedSection === section.id ? '#fff' : colors.textSecondary} 
-                    style={{ marginRight: 5 }} 
-                  />
-                )}
                 <Text style={[
                   styles.categoryChipText, 
-                  selectedSection === section.id && styles.categoryChipTextActive,
-                  selectedSection !== section.id && { color: colors.textSecondary }
+                  !selectedSection && styles.categoryChipTextActive,
+                  !selectedSection && { color: colors.textSecondary }
                 ]}>
-                  {section.name}
+                  الكل
                 </Text>
               </TouchableOpacity>
-            ))}
-          </ScrollView>
-        </View>
-      )}
+              {sections.map((section) => (
+                <TouchableOpacity
+                  key={section.id}
+                  style={[
+                    styles.categoryChip, 
+                    selectedSection === section.id && styles.categoryChipActive,
+                    selectedSection !== section.id && { backgroundColor: colors.surface, borderColor: colors.border }
+                  ]}
+                  onPress={() => {
+                    setSelectedSection(section.id);
+                    setSelectedCategory(null);
+                  }}
+                >
+                  {section.icon && (
+                    <Ionicons 
+                      name={section.icon as any} 
+                      size={14} 
+                      color={selectedSection === section.id ? '#fff' : colors.textSecondary} 
+                      style={{ marginRight: 4 }} 
+                    />
+                  )}
+                  <Text style={[
+                    styles.categoryChipText, 
+                    selectedSection === section.id && styles.categoryChipTextActive,
+                    selectedSection !== section.id && { color: colors.textSecondary }
+                  ]}>
+                    {section.name}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        )}
 
-      {/* Categories Section (inspired by Temu) */}
-      {filteredCategories.length > 0 && !loading && (
-        <View style={styles.categoriesContainer}>
-          <Text style={[styles.sectionTitle, { color: colors.text }]}>الفئات</Text>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.categoriesScroll}
-          >
-            <TouchableOpacity
-              style={[styles.categoryChip, !selectedCategory && styles.categoryChipActive]}
-              onPress={() => setSelectedCategory(null)}
+        {/* Categories Section (inspired by Temu) */}
+        {filteredCategories.length > 0 && !loading && (
+          <View style={styles.categoriesContainer}>
+            <Text style={[styles.sectionTitle, { color: colors.text }]}>الفئات</Text>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.categoriesScroll}
             >
-              <Text style={[
-                styles.categoryChipText, 
-                !selectedCategory && styles.categoryChipTextActive,
-                !selectedCategory && { color: colors.textSecondary }
-              ]}>
-                الكل
-              </Text>
-            </TouchableOpacity>
-            {filteredCategories.map((category) => (
               <TouchableOpacity
-                key={category.id}
-                style={[
-                  styles.categoryChip, 
-                  selectedCategory === category.id && styles.categoryChipActive,
-                  selectedCategory !== category.id && { backgroundColor: colors.surface, borderColor: colors.border }
-                ]}
-                onPress={() => setSelectedCategory(category.id)}
+                style={[styles.categoryChip, !selectedCategory && styles.categoryChipActive]}
+                onPress={() => setSelectedCategory(null)}
               >
-                {category.icon && (
-                  <Ionicons 
-                    name={category.icon as any} 
-                    size={16} 
-                    color={selectedCategory === category.id ? '#fff' : colors.textSecondary} 
-                    style={{ marginRight: 5 }} 
-                  />
-                )}
                 <Text style={[
                   styles.categoryChipText, 
-                  selectedCategory === category.id && styles.categoryChipTextActive,
-                  selectedCategory !== category.id && { color: colors.textSecondary }
+                  !selectedCategory && styles.categoryChipTextActive,
+                  !selectedCategory && { color: colors.textSecondary }
                 ]}>
-                  {category.name}
+                  الكل
                 </Text>
               </TouchableOpacity>
-            ))}
-          </ScrollView>
-        </View>
-      )}
+              {filteredCategories.map((category) => (
+                <TouchableOpacity
+                  key={category.id}
+                  style={[
+                    styles.categoryChip, 
+                    selectedCategory === category.id && styles.categoryChipActive,
+                    selectedCategory !== category.id && { backgroundColor: colors.surface, borderColor: colors.border }
+                  ]}
+                  onPress={() => setSelectedCategory(category.id)}
+                >
+                  {category.icon && (
+                    <Ionicons 
+                      name={category.icon as any} 
+                      size={14} 
+                      color={selectedCategory === category.id ? '#fff' : colors.textSecondary} 
+                      style={{ marginRight: 4 }} 
+                    />
+                  )}
+                  <Text style={[
+                    styles.categoryChipText, 
+                    selectedCategory === category.id && styles.categoryChipTextActive,
+                    selectedCategory !== category.id && { color: colors.textSecondary }
+                  ]}>
+                    {category.name}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        )}
+      </Animated.View>
 
       {/* Products Grid */}
       <ScrollView
         style={styles.scrollView}
         contentContainerStyle={styles.productsGridContainer}
         showsVerticalScrollIndicator={false}
+        onScroll={handleScroll}
+        scrollEventThrottle={16}
       >
         <View style={[styles.productsGrid, { maxWidth: maxContainerWidth, alignSelf: 'center', width: '100%' }]}>
           {loading ? (
@@ -485,6 +830,16 @@ export default function HomeScreen() {
               
               const showBothPrices = originalPrice && originalPrice > product.price;
               
+              const isInWishlist = wishlistItems.has(product.id);
+              const heartScale = wishlistAnimations.current[product.id] || new Animated.Value(1);
+              const heartOpacity = wishlistOpacityAnimations.current[product.id] || new Animated.Value(1);
+              if (!wishlistAnimations.current[product.id]) {
+                wishlistAnimations.current[product.id] = heartScale;
+              }
+              if (!wishlistOpacityAnimations.current[product.id]) {
+                wishlistOpacityAnimations.current[product.id] = heartOpacity;
+              }
+
               return (
                 <TouchableOpacity
                   key={product.id}
@@ -504,6 +859,27 @@ export default function HomeScreen() {
                       <Text style={styles.stockBadgeText}>آخر {product.stock_quantity}</Text>
                     </View>
                   )}
+
+                  {/* Wishlist Heart Button */}
+                  <TouchableOpacity
+                    style={styles.wishlistButton}
+                    onPress={(e) => toggleWishlist(product.id, e)}
+                    activeOpacity={0.8}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  >
+                    <Animated.View
+                      style={{
+                        transform: [{ scale: heartScale }],
+                        opacity: heartOpacity,
+                      }}
+                    >
+                      <Ionicons
+                        name={isInWishlist ? "heart" : "heart-outline"}
+                        size={22}
+                        color={isInWishlist ? "#EE1C47" : "#666"}
+                      />
+                    </Animated.View>
+                  </TouchableOpacity>
                   
                   <Image
                     source={{ uri: getCardImageUrl(product.primary_image_url || product.image_url, 250, 50) }} // Optimized for cards: 250px, quality 50
@@ -511,7 +887,11 @@ export default function HomeScreen() {
                     resizeMode="contain"
                   />
                   <View style={styles.productInfo}>
-                    <Text style={[styles.productName, { color: colors.text }]} numberOfLines={2}>
+                    <Text 
+                      style={[styles.productName, { color: colors.text }]} 
+                      numberOfLines={2}
+                      ellipsizeMode="tail"
+                    >
                       {product.name}
                     </Text>
                     <View style={styles.priceContainer}>
@@ -576,7 +956,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#fff',
-    margin: isWeb ? 16 : 8,
+    marginTop: isWeb ? 16 : 6,
+    marginBottom: isWeb ? 16 : 4,
     marginHorizontal: isWeb ? 'auto' : 8,
     paddingHorizontal: isWeb ? 20 : 12,
     borderRadius: isWeb ? 30 : 24,
@@ -604,28 +985,30 @@ const styles = StyleSheet.create({
   },
   productsGridContainer: {
     padding: isWeb ? 16 : 8,
+    paddingTop: isWeb ? 16 : 4,
     paddingBottom: isWeb ? 40 : 20,
   },
   productsGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: isWeb ? 'flex-start' : 'space-between',
-    gap: isWeb ? 12 : 8,
+    gap: isWeb ? 12 : 0,
     padding: 0,
   },
   productCard: {
     width: isWeb ? itemWidth : itemWidth,
     backgroundColor: '#fff',
-    borderRadius: isWeb ? 8 : 10,
+    borderRadius: isWeb ? 8 : 12,
     marginBottom: isWeb ? 20 : 12,
+    marginHorizontal: isWeb ? 0 : 4,
     overflow: 'hidden',
     borderWidth: 1,
     borderColor: '#F3F4F6',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
-    elevation: 1,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    elevation: 2,
     position: 'relative',
     ...(isWeb && {
       transition: 'all 0.2s ease',
@@ -646,6 +1029,23 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.2,
     shadowRadius: 2,
     elevation: 3,
+  },
+  wishlistButton: {
+    position: 'absolute',
+    top: isWeb ? 6 : 6,
+    left: isWeb ? 6 : 6,
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    borderRadius: 20,
+    width: 36,
+    height: 36,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 4,
   },
   discountBadgeText: {
     color: '#fff',
@@ -674,11 +1074,11 @@ const styles = StyleSheet.create({
   },
   dealsBanner: {
     backgroundColor: '#FEF2F2', // Light red background like Temu
-    paddingVertical: isWeb ? 14 : 12,
-    paddingHorizontal: isWeb ? 24 : 16,
+    paddingVertical: isWeb ? 14 : 8,
+    paddingHorizontal: isWeb ? 24 : 12,
     marginHorizontal: isWeb ? 'auto' : 8,
-    marginTop: isWeb ? 12 : 8,
-    marginBottom: isWeb ? 16 : 12,
+    marginTop: isWeb ? 12 : 0,
+    marginBottom: isWeb ? 16 : 4,
     borderRadius: isWeb ? 6 : 8,
     maxWidth: isWeb ? 1600 : undefined,
     borderLeftWidth: 3,
@@ -692,33 +1092,35 @@ const styles = StyleSheet.create({
   },
   dealsBannerText: {
     color: '#EE1C47', // Temu red
-    fontSize: isWeb ? 15 : 14,
+    fontSize: isWeb ? 15 : 13,
     fontWeight: '600',
   },
   categoriesContainer: {
-    marginVertical: 10,
-    marginHorizontal: isWeb ? 'auto' : 10,
+    marginTop: isWeb ? 10 : 1,
+    marginBottom: isWeb ? 10 : 1,
+    marginHorizontal: isWeb ? 'auto' : 8,
     maxWidth: isWeb ? 1400 : undefined,
   },
   sectionTitle: {
-    fontSize: isWeb ? 18 : 16,
+    fontSize: isWeb ? 18 : 13,
     fontWeight: '700',
     color: '#1F2937',
-    marginBottom: isWeb ? 12 : 10,
+    marginBottom: isWeb ? 12 : 3,
     paddingHorizontal: isWeb ? 16 : 8,
   },
   categoriesScroll: {
-    paddingHorizontal: isWeb ? 20 : 10,
-    gap: 10,
+    paddingHorizontal: isWeb ? 20 : 8,
+    gap: isWeb ? 10 : 5,
+    paddingBottom: isWeb ? 0 : 2,
   },
   categoryChip: {
-    paddingHorizontal: isWeb ? 18 : 14,
-    paddingVertical: isWeb ? 9 : 7,
-    borderRadius: isWeb ? 20 : 18,
+    paddingHorizontal: isWeb ? 18 : 10,
+    paddingVertical: isWeb ? 9 : 5,
+    borderRadius: isWeb ? 20 : 14,
     backgroundColor: '#fff',
     borderWidth: 1,
     borderColor: '#E5E7EB',
-    marginRight: isWeb ? 10 : 8,
+    marginRight: isWeb ? 10 : 5,
     ...(isWeb && {
       transition: 'all 0.2s ease',
       cursor: 'pointer',
@@ -729,7 +1131,7 @@ const styles = StyleSheet.create({
     borderColor: '#EE1C47',
   },
   categoryChipText: {
-    fontSize: 14,
+    fontSize: isWeb ? 14 : 12,
     color: '#666',
     fontWeight: '500',
   },
@@ -739,57 +1141,68 @@ const styles = StyleSheet.create({
   },
   productImage: {
     width: '100%',
-    height: isWeb ? itemWidth * 1.15 : itemWidth * 1.1,
+    height: isWeb ? itemWidth * 1.15 : itemWidth * 1.2,
     backgroundColor: '#FAFAFA',
     objectFit: 'contain', // For web compatibility - shows full image
   },
   productInfo: {
     padding: isWeb ? 12 : 10,
     paddingTop: isWeb ? 10 : 8,
+    paddingBottom: isWeb ? 12 : 10,
   },
   productName: {
-    fontSize: isWeb ? 13 : 13,
+    fontSize: isWeb ? 13 : 12,
     fontWeight: '500',
     color: '#1F2937',
     marginBottom: isWeb ? 8 : 6,
-    minHeight: isWeb ? 36 : 38,
-    lineHeight: isWeb ? 18 : 18,
+    minHeight: isWeb ? 36 : 32,
+    maxHeight: isWeb ? 36 : 32,
+    lineHeight: isWeb ? 18 : 16,
+    textAlign: 'right',
   },
   priceContainer: {
     marginBottom: 4,
+    marginTop: 4,
   },
   priceRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 8,
+    gap: 6,
+    flexWrap: 'wrap',
   },
   priceColumn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 6,
     flexWrap: 'wrap',
+    flex: 1,
   },
   productPrice: {
-    fontSize: isWeb ? 16 : 17,
+    fontSize: isWeb ? 16 : 15,
     fontWeight: '700',
     color: '#EE1C47', // Temu red
+    textAlign: 'right',
   },
   originalPrice: {
-    fontSize: isWeb ? 12 : 12,
+    fontSize: isWeb ? 12 : 11,
     color: '#9CA3AF',
     textDecorationLine: 'line-through',
     marginLeft: 4,
+    textAlign: 'right',
   },
   discountBadgeSmall: {
     backgroundColor: '#EE1C47', // Temu red
-    paddingHorizontal: isWeb ? 7 : 6,
-    paddingVertical: isWeb ? 4 : 3,
+    paddingHorizontal: isWeb ? 7 : 5,
+    paddingVertical: isWeb ? 4 : 2,
     borderRadius: isWeb ? 3 : 4,
+    minWidth: isWeb ? 32 : 28,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   discountBadgeSmallText: {
     color: '#fff',
-    fontSize: 10,
+    fontSize: isWeb ? 10 : 9,
     fontWeight: 'bold',
   },
   outOfStock: {

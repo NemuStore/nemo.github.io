@@ -82,6 +82,8 @@ export default function ProductDetailScreen() {
   const [selectedSize, setSelectedSize] = useState<string | null>(null);
   const [faqs, setFaqs] = useState<ProductFAQ[]>([]);
   const [relatedProducts, setRelatedProducts] = useState<Product[]>([]);
+  const [similarProducts, setSimilarProducts] = useState<Product[]>([]);
+  const [similarProductsLoading, setSimilarProductsLoading] = useState(false);
   const [isInWishlist, setIsInWishlist] = useState(false);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [quantity, setQuantity] = useState(1);
@@ -89,6 +91,8 @@ export default function ProductDetailScreen() {
   const [imagesLoading, setImagesLoading] = useState(true);
   const [imageLoaded, setImageLoaded] = useState(false);
   const imageOpacity = useState(new Animated.Value(0))[0];
+  const heartScale = useState(new Animated.Value(1))[0];
+  const heartOpacity = useState(new Animated.Value(1))[0];
   const router = useRouter();
   const { addToCart } = useCart();
   const sweetAlert = useSweetAlert();
@@ -309,6 +313,9 @@ export default function ProductDetailScreen() {
         // Load related products (non-blocking)
         loadRelatedProducts(id, supabaseUrl, supabaseKey).catch(err => console.warn('Related products load error:', err));
         
+        // Load similar products from same category (non-blocking)
+        loadSimilarProducts(productData, supabaseUrl, supabaseKey).catch(err => console.warn('Similar products load error:', err));
+        
         // Check wishlist status (non-blocking)
         checkWishlistStatus(id, supabaseUrl, supabaseKey).catch(err => console.warn('Wishlist check error:', err));
       } else {
@@ -403,12 +410,25 @@ export default function ProductDetailScreen() {
     }
   };
 
-  const checkWishlistStatus = async (productId: string, supabaseUrl: string, supabaseKey: string) => {
+  const loadSimilarProducts = async (currentProduct: Product, supabaseUrl: string, supabaseKey: string) => {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
+      console.log('🔄 Loading similar products for category:', currentProduct.category_id);
+      setSimilarProductsLoading(true);
       
-      const response = await fetch(`${supabaseUrl}/rest/v1/product_wishlist?user_id=eq.${user.id}&product_id=eq.${productId}`, {
+      // Get products from the same category (excluding current product)
+      const categoryId = currentProduct.category_id;
+      if (!categoryId) {
+        console.log('⚠️ No category_id found, skipping similar products');
+        setSimilarProductsLoading(false);
+        return;
+      }
+      
+      // Use 'not' operator instead of 'neq' for PostgREST compatibility
+      // Note: products table doesn't have is_active field, so we filter by category_id only
+      const queryUrl = `${supabaseUrl}/rest/v1/products?category_id=eq.${categoryId}&id=not.eq.${currentProduct.id}&select=*&order=created_at.desc&limit=8`;
+      console.log('📡 Fetching similar products:', queryUrl);
+      
+      const response = await fetch(queryUrl, {
         headers: {
           'apikey': supabaseKey || '',
           'Authorization': `Bearer ${supabaseKey || ''}`,
@@ -416,12 +436,149 @@ export default function ProductDetailScreen() {
         }
       });
       
+      console.log('📡 Similar products response status:', response.status);
+      
       if (response.ok) {
-        const wishlistData = await response.json();
-        setIsInWishlist(wishlistData && wishlistData.length > 0);
+        const productsData = await response.json();
+        console.log('✅ Similar products loaded:', productsData.length);
+        
+        // Load primary images for similar products
+        if (productsData.length > 0) {
+          const productIds = productsData.map((p: Product) => p.id);
+          const productIdsQuery = productIds.map((id: string) => `product_id.eq.${id}`).join(',');
+          
+          try {
+            const imagesResponse = await fetch(
+              `${supabaseUrl}/rest/v1/product_images?or=(${productIdsQuery})&is_primary=eq.true&variant_id=is.null&select=product_id,image_url&order=display_order.asc&limit=100`,
+              {
+                headers: {
+                  'apikey': supabaseKey || '',
+                  'Authorization': `Bearer ${supabaseKey || ''}`,
+                  'Content-Type': 'application/json',
+                }
+              }
+            );
+            
+            if (imagesResponse.ok) {
+              const imagesData = await imagesResponse.json();
+              const imagesMap: Record<string, string> = {};
+              
+              imagesData.forEach((img: any) => {
+                if (img.product_id && !imagesMap[img.product_id]) {
+                  imagesMap[img.product_id] = img.image_url;
+                }
+              });
+              
+              // Add primary_image_url to products
+              const productsWithImages = productsData.map((p: Product) => ({
+                ...p,
+                primary_image_url: imagesMap[p.id] || p.image_url || null,
+              }));
+              
+              setSimilarProducts(productsWithImages);
+              console.log('✅ Similar products with images set:', productsWithImages.length);
+            } else {
+              setSimilarProducts(productsData);
+              console.log('✅ Similar products set (no images):', productsData.length);
+            }
+          } catch (imgError) {
+            console.warn('⚠️ Error loading similar products images:', imgError);
+            setSimilarProducts(productsData);
+          }
+        } else {
+          console.log('⚠️ No similar products found');
+          setSimilarProducts([]);
+        }
+      } else {
+        const errorText = await response.text();
+        console.error('❌ Error loading similar products:', response.status, errorText);
+        setSimilarProducts([]);
       }
     } catch (error) {
-      console.warn('⚠️ Error checking wishlist:', error);
+      console.error('❌ Error loading similar products:', error);
+      setSimilarProducts([]);
+    } finally {
+      setSimilarProductsLoading(false);
+    }
+  };
+
+  const checkWishlistStatus = async (productId: string, supabaseUrl: string, supabaseKey: string) => {
+    try {
+      // Get user ID from localStorage (same method as toggleWishlist)
+      let userId: string | null = null;
+      let accessToken: string | null = null;
+      
+      if (typeof window !== 'undefined') {
+        try {
+          const projectRef = supabaseUrl?.split('//')[1]?.split('.')[0] || 'default';
+          const storageKey = `sb-${projectRef}-auth-token`;
+          const tokenData = localStorage.getItem(storageKey);
+          
+          if (tokenData) {
+            try {
+              const parsed = JSON.parse(tokenData);
+              userId = parsed?.user?.id || parsed?.currentSession?.user?.id || parsed?.session?.user?.id;
+              accessToken = parsed?.access_token || parsed?.currentSession?.access_token || parsed?.session?.access_token;
+            } catch (e) {
+              console.log('⚠️ Error parsing localStorage token in checkWishlistStatus');
+            }
+          }
+          
+          // Fallback: search all localStorage keys
+          if (!userId) {
+            const allKeys = Object.keys(localStorage);
+            for (const key of allKeys) {
+              if (key.includes('supabase') || key.includes('auth')) {
+                try {
+                  const data = localStorage.getItem(key);
+                  if (data) {
+                    const parsed = JSON.parse(data);
+                    userId = parsed?.user?.id || parsed?.currentSession?.user?.id || parsed?.session?.user?.id;
+                    accessToken = accessToken || parsed?.access_token || parsed?.currentSession?.access_token || parsed?.session?.access_token;
+                    if (userId) break;
+                  }
+                } catch (e) {
+                  // Continue searching
+                }
+              }
+            }
+          }
+        } catch (e) {
+          console.log('⚠️ Error reading localStorage in checkWishlistStatus');
+        }
+      }
+      
+      if (!userId) {
+        console.log('⚠️ No user found in checkWishlistStatus');
+        return;
+      }
+      
+      console.log('🔍 Checking wishlist status for product:', productId, 'user:', userId);
+      
+      const response = await fetch(
+        `${supabaseUrl}/rest/v1/product_wishlist?user_id=eq.${userId}&product_id=eq.${productId}`,
+        {
+          headers: {
+            'apikey': supabaseKey || '',
+            'Authorization': `Bearer ${accessToken || supabaseKey || ''}`,
+            'Content-Type': 'application/json',
+          }
+        }
+      );
+      
+      console.log('🔍 Wishlist check response status:', response.status);
+      
+      if (response.ok) {
+        const wishlistData = await response.json();
+        const isInWishlist = wishlistData && wishlistData.length > 0;
+        console.log('🔍 Wishlist status:', isInWishlist ? 'IN wishlist' : 'NOT in wishlist');
+        setIsInWishlist(isInWishlist);
+      } else {
+        const errorText = await response.text();
+        console.error('❌ Error checking wishlist:', response.status, errorText);
+      }
+    } catch (error) {
+      console.error('❌ Error checking wishlist:', error);
     }
   };
 
@@ -540,19 +697,132 @@ export default function ProductDetailScreen() {
 
   const toggleWishlist = async () => {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
+      console.log('❤️ Toggle wishlist clicked');
+      console.log('❤️ Current wishlist status:', isInWishlist);
+      console.log('❤️ Product ID:', id);
+      
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+      
+      // Get user ID and access token from localStorage (faster and more reliable on web)
+      let userId: string | null = null;
+      let accessToken: string | null = null;
+      
+      if (typeof window !== 'undefined') {
+        try {
+          const projectRef = supabaseUrl?.split('//')[1]?.split('.')[0] || 'default';
+          const storageKey = `sb-${projectRef}-auth-token`;
+          const tokenData = localStorage.getItem(storageKey);
+          
+          if (tokenData) {
+            try {
+              const parsed = JSON.parse(tokenData);
+              userId = parsed?.user?.id || parsed?.currentSession?.user?.id || parsed?.session?.user?.id;
+              accessToken = parsed?.access_token || parsed?.currentSession?.access_token || parsed?.session?.access_token;
+              
+              if (userId) {
+                console.log('✅ Got user from localStorage:', userId);
+              }
+            } catch (e) {
+              console.log('⚠️ Error parsing localStorage token');
+            }
+          }
+          
+          // Fallback: search all localStorage keys
+          if (!userId) {
+            const allKeys = Object.keys(localStorage);
+            for (const key of allKeys) {
+              if (key.includes('supabase') || key.includes('auth')) {
+                try {
+                  const data = localStorage.getItem(key);
+                  if (data) {
+                    const parsed = JSON.parse(data);
+                    userId = parsed?.user?.id || parsed?.currentSession?.user?.id || parsed?.session?.user?.id;
+                    accessToken = accessToken || parsed?.access_token || parsed?.currentSession?.access_token || parsed?.session?.access_token;
+                    if (userId) {
+                      console.log('✅ Got user from localStorage key:', key);
+                      break;
+                    }
+                  }
+                } catch (e) {
+                  // Continue searching
+                }
+              }
+            }
+          }
+        } catch (e) {
+          console.log('⚠️ Error reading localStorage:', e);
+        }
+      }
+      
+      if (!userId) {
+        console.log('⚠️ No user found, showing login message');
         sweetAlert.showError('تنبيه', 'يجب تسجيل الدخول أولاً');
         return;
       }
 
-      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
-      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-      const accessToken = (await supabase.auth.getSession()).data.session?.access_token;
+      console.log('✅ User ID:', userId);
+      console.log('🔑 Access token:', accessToken ? 'Found' : 'Not found (will use anon key)');
+
+      // Lottie-like animation: heart beat effect with particles
+      // Reset animation values
+      heartScale.setValue(1);
+      heartOpacity.setValue(1);
+      
+      // Create a heart beat animation sequence
+      Animated.sequence([
+        // First beat - quick scale up
+        Animated.parallel([
+          Animated.spring(heartScale, {
+            toValue: 1.4,
+            useNativeDriver: true,
+            tension: 300,
+            friction: 3,
+          }),
+          Animated.timing(heartOpacity, {
+            toValue: 0.8,
+            duration: 100,
+            useNativeDriver: true,
+          }),
+        ]),
+        // Quick scale down
+        Animated.parallel([
+          Animated.spring(heartScale, {
+            toValue: 0.9,
+            useNativeDriver: true,
+            tension: 300,
+            friction: 3,
+          }),
+          Animated.timing(heartOpacity, {
+            toValue: 1,
+            duration: 100,
+            useNativeDriver: true,
+          }),
+        ]),
+        // Second beat - smaller
+        Animated.parallel([
+          Animated.spring(heartScale, {
+            toValue: 1.2,
+            useNativeDriver: true,
+            tension: 300,
+            friction: 4,
+          }),
+        ]),
+        // Final settle
+        Animated.spring(heartScale, {
+          toValue: 1,
+          useNativeDriver: true,
+          tension: 200,
+          friction: 5,
+        }),
+      ]).start();
 
       if (isInWishlist) {
         // Remove from wishlist
-        const response = await fetch(`${supabaseUrl}/rest/v1/product_wishlist?user_id=eq.${user.id}&product_id=eq.${id}`, {
+        console.log('🗑️ Removing from wishlist...');
+        const deleteUrl = `${supabaseUrl}/rest/v1/product_wishlist?user_id=eq.${userId}&product_id=eq.${id}`;
+        
+        const response = await fetch(deleteUrl, {
           method: 'DELETE',
           headers: {
             'apikey': supabaseKey || '',
@@ -563,11 +833,14 @@ export default function ProductDetailScreen() {
         
         if (response.ok) {
           setIsInWishlist(false);
-          sweetAlert.showSuccess('نجح', 'تم إزالة المنتج من المفضلة');
+          console.log('✅ Removed from wishlist');
         }
       } else {
         // Add to wishlist
-        const response = await fetch(`${supabaseUrl}/rest/v1/product_wishlist`, {
+        console.log('➕ Adding to wishlist...');
+        const addUrl = `${supabaseUrl}/rest/v1/product_wishlist`;
+        
+        const response = await fetch(addUrl, {
           method: 'POST',
           headers: {
             'apikey': supabaseKey || '',
@@ -576,19 +849,22 @@ export default function ProductDetailScreen() {
             'Prefer': 'return=representation'
           },
           body: JSON.stringify({
-            user_id: user.id,
+            user_id: userId,
             product_id: id,
           })
         });
         
-        if (response.ok) {
+        if (response.ok || response.status === 409) {
+          // 409 means already exists, which is fine
           setIsInWishlist(true);
-          sweetAlert.showSuccess('نجح', 'تم إضافة المنتج للمفضلة');
+          console.log('✅ Added to wishlist');
         }
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('❌ Error toggling wishlist:', error);
-      sweetAlert.showError('خطأ', 'فشل تحديث قائمة المفضلة');
+      console.error('❌ Error message:', error.message);
+      console.error('❌ Error stack:', error.stack);
+      sweetAlert.showError('خطأ', error.message || 'فشل تحديث قائمة المفضلة');
     }
   };
 
@@ -835,12 +1111,24 @@ export default function ProductDetailScreen() {
             <View style={styles.nameCard}>
               <View style={styles.nameRow}>
                 <Text style={styles.name}>{product.name}</Text>
-                <TouchableOpacity onPress={toggleWishlist} style={styles.wishlistButton}>
-                  <Ionicons 
-                    name={isInWishlist ? "heart" : "heart-outline"} 
-                    size={24} 
-                    color={isInWishlist ? "#EE1C47" : "#666"} 
-                  />
+                <TouchableOpacity 
+                  onPress={toggleWishlist} 
+                  style={styles.wishlistButton}
+                  activeOpacity={0.7}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                >
+                  <Animated.View
+                    style={{
+                      transform: [{ scale: heartScale }],
+                      opacity: heartOpacity,
+                    }}
+                  >
+                    <Ionicons 
+                      name={isInWishlist ? "heart" : "heart-outline"} 
+                      size={24} 
+                      color={isInWishlist ? "#EE1C47" : "#666"} 
+                    />
+                  </Animated.View>
                 </TouchableOpacity>
               </View>
               {product.description && (
@@ -1067,29 +1355,108 @@ export default function ProductDetailScreen() {
             </View>
           )}
 
-          {/* Related Products Section */}
+          {/* Similar Products Section - المنتجات المتشابهة من نفس الفئة */}
+          {(similarProducts.length > 0 || similarProductsLoading) && (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>منتجات متشابهة</Text>
+              {similarProductsLoading ? (
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.relatedProductsContainer}>
+                  {Array.from({ length: 4 }).map((_, index) => (
+                    <View key={index} style={[styles.relatedProductCard, { marginRight: 15 }]}>
+                      <SkeletonCard width={150} height={150} borderRadius={12} />
+                      <View style={{ padding: 8 }}>
+                        <SkeletonCard width="80%" height={16} borderRadius={4} />
+                        <View style={{ marginTop: 8 }}>
+                          <SkeletonCard width="60%" height={14} borderRadius={4} />
+                        </View>
+                      </View>
+                    </View>
+                  ))}
+                </ScrollView>
+              ) : similarProducts.length > 0 ? (
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.relatedProductsContainer}>
+                  {similarProducts.map((similarProduct) => {
+                    const productImage = similarProduct.primary_image_url || similarProduct.image_url || 'https://via.placeholder.com/150';
+                    return (
+                      <TouchableOpacity
+                        key={similarProduct.id}
+                        style={styles.relatedProductCard}
+                        onPress={() => router.push(`/product/${similarProduct.id}`)}
+                        activeOpacity={0.7}
+                      >
+                        {productImage && productImage !== 'https://via.placeholder.com/150' ? (
+                          <Image 
+                            source={{ uri: productImage }} 
+                            style={styles.relatedProductImage}
+                            resizeMode="cover"
+                          />
+                        ) : (
+                          <View style={[styles.relatedProductImage, { justifyContent: 'center', alignItems: 'center', backgroundColor: '#f0f0f0' }]}>
+                            <Ionicons name="image-outline" size={40} color="#ccc" />
+                          </View>
+                        )}
+                        <Text style={styles.relatedProductName} numberOfLines={2}>
+                          {similarProduct.name}
+                        </Text>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginHorizontal: 8, marginBottom: 8 }}>
+                          <Text style={styles.relatedProductPrice}>
+                            {similarProduct.price.toFixed(2)} ج.م
+                          </Text>
+                          {similarProduct.original_price && similarProduct.original_price > similarProduct.price && (
+                            <Text style={styles.relatedProductOriginalPrice}>
+                              {similarProduct.original_price.toFixed(2)} ج.م
+                            </Text>
+                          )}
+                        </View>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              ) : null}
+            </View>
+          )}
+
+          {/* Related Products Section - المنتجات المرتبطة يدوياً */}
           {relatedProducts.length > 0 && (
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>منتجات مشابهة</Text>
+              <Text style={styles.sectionTitle}>منتجات مرتبطة</Text>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.relatedProductsContainer}>
-                {relatedProducts.map((relatedProduct) => (
-                  <TouchableOpacity
-                    key={relatedProduct.id}
-                    style={styles.relatedProductCard}
-                    onPress={() => router.push(`/product/${relatedProduct.id}`)}
-                  >
-                    <Image 
-                      source={{ uri: relatedProduct.image_url }} 
-                      style={styles.relatedProductImage} 
-                    />
-                    <Text style={styles.relatedProductName} numberOfLines={2}>
-                      {relatedProduct.name}
-                    </Text>
-                    <Text style={styles.relatedProductPrice}>
-                      {relatedProduct.price.toFixed(2)} ج.م
-                    </Text>
-                  </TouchableOpacity>
-                ))}
+                {relatedProducts.map((relatedProduct) => {
+                  const productImage = relatedProduct.primary_image_url || relatedProduct.image_url || 'https://via.placeholder.com/150';
+                  return (
+                    <TouchableOpacity
+                      key={relatedProduct.id}
+                      style={styles.relatedProductCard}
+                      onPress={() => router.push(`/product/${relatedProduct.id}`)}
+                      activeOpacity={0.7}
+                    >
+                      {productImage && productImage !== 'https://via.placeholder.com/150' ? (
+                        <Image 
+                          source={{ uri: productImage }} 
+                          style={styles.relatedProductImage}
+                          resizeMode="cover"
+                        />
+                      ) : (
+                        <View style={[styles.relatedProductImage, { justifyContent: 'center', alignItems: 'center', backgroundColor: '#f0f0f0' }]}>
+                          <Ionicons name="image-outline" size={40} color="#ccc" />
+                        </View>
+                      )}
+                      <Text style={styles.relatedProductName} numberOfLines={2}>
+                        {relatedProduct.name}
+                      </Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginHorizontal: 8, marginBottom: 8 }}>
+                        <Text style={styles.relatedProductPrice}>
+                          {relatedProduct.price.toFixed(2)} ج.م
+                        </Text>
+                        {relatedProduct.original_price && relatedProduct.original_price > relatedProduct.price && (
+                          <Text style={styles.relatedProductOriginalPrice}>
+                            {relatedProduct.original_price.toFixed(2)} ج.م
+                          </Text>
+                        )}
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
               </ScrollView>
             </View>
           )}
@@ -1603,8 +1970,12 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: 'bold',
     color: '#EE1C47',
-    marginHorizontal: 8,
-    marginBottom: 8,
+  },
+  relatedProductOriginalPrice: {
+    fontSize: 12,
+    color: '#9CA3AF',
+    textDecorationLine: 'line-through',
+    marginLeft: 8,
   },
 });
 

@@ -61,6 +61,19 @@ export default function TabsLayout() {
           }}
         />
         <Tabs.Screen
+          name="wishlist"
+          options={{
+            title: 'المفضلة',
+            tabBarIcon: ({ color, focused }) => (
+              <Ionicons 
+                name={focused ? "heart" : "heart-outline"} 
+                size={22} 
+                color={color} 
+              />
+            ),
+          }}
+        />
+        <Tabs.Screen
           name="cart"
           options={{
             title: 'السلة',
@@ -151,6 +164,19 @@ export default function TabsLayout() {
           tabBarIcon: ({ color, focused }) => (
             <Ionicons 
               name={focused ? "home" : "home-outline"} 
+              size={24} 
+              color={color} 
+            />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="wishlist"
+        options={{
+          title: 'المفضلة',
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons 
+              name={focused ? "heart" : "heart-outline"} 
               size={24} 
               color={color} 
             />
