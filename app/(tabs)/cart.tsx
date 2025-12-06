@@ -438,11 +438,13 @@ export default function CartScreen() {
       const orderItems = activeItems.map((item) => ({
         order_id: order.id,
         product_id: item.product.id,
+        variant_id: (item.product as any).variant_id || null, // حفظ variant_id إذا كان موجوداً
         quantity: item.quantity,
         price: item.product.price,
       }));
       
       console.log('📦 Cart: Creating order items:', orderItems.length);
+      console.log('📦 Cart: Order items with variants:', JSON.stringify(orderItems.slice(0, 2), null, 2)); // Log first 2 items for debugging
       const orderItemsResponse = await fetch(`${supabaseUrl}/rest/v1/order_items`, {
         method: 'POST',
         headers: {
@@ -633,9 +635,12 @@ export default function CartScreen() {
             const discountPercentage = item.product.discount_percentage;
             const hasDiscount = originalPrice && originalPrice > currentPrice;
             
+            // إنشاء key فريد يجمع بين product.id و variant_id
+            const uniqueKey = `${item.product.id}-${variantId || 'no-variant'}`;
+            
             return (
               <TouchableOpacity
-                key={item.product.id}
+                key={uniqueKey}
                 style={styles.cartItem}
                 onPress={() => router.push(`/product/${item.product.id}`)}
                 activeOpacity={0.7}
@@ -702,7 +707,7 @@ export default function CartScreen() {
                       style={styles.quantityButton}
                       onPress={(e) => {
                         e.stopPropagation();
-                        updateQuantity(item.product.id, item.quantity - 1);
+                        updateQuantity(item.product.id, item.quantity - 1, variantId);
                       }}
                     >
                       <Ionicons name="remove" size={20} color="#EE1C47" />
@@ -712,7 +717,7 @@ export default function CartScreen() {
                       style={styles.quantityButton}
                       onPress={(e) => {
                         e.stopPropagation();
-                        updateQuantity(item.product.id, item.quantity + 1);
+                        updateQuantity(item.product.id, item.quantity + 1, variantId);
                       }}
                     >
                       <Ionicons name="add" size={20} color="#EE1C47" />
@@ -723,7 +728,7 @@ export default function CartScreen() {
                   style={styles.removeButton}
                   onPress={(e) => {
                     e.stopPropagation();
-                    removeFromCart(item.product.id);
+                    removeFromCart(item.product.id, variantId);
                   }}
                 >
                   <Ionicons name="trash-outline" size={20} color="#ff4444" />

@@ -178,10 +178,12 @@ export interface OrderItem {
   id: string;
   order_id: string;
   product_id: string;
+  variant_id: string | null; // معرف المتغير (اللون والمقاس) المختار
   quantity: number;
   price: number;
   is_purchased: boolean; // هل تم شراء المنتج من Temu
   product?: Product;
+  variant?: ProductVariant; // معلومات المتغير (اختياري)
 }
 
 export type ShipmentStatus = 'pending' | 'shipped_from_china' | 'received_in_uae' | 'shipped_from_uae' | 'received_in_egypt' | 'in_warehouse' | 'completed';

@@ -19,7 +19,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
-import { uploadImageToCatbox } from '@/lib/catbox';
+import { uploadImageToImgbb } from '@/lib/imgbb';
 import SweetAlert from '@/components/SweetAlert';
 import { useSweetAlert } from '@/hooks/useSweetAlert';
 import { useDarkMode } from '@/contexts/DarkModeContext';
@@ -1526,9 +1526,7 @@ export default function AdminScreen() {
       const accessToken = await getAccessToken();
       
       if (activeTab === 'orders') {
-        // Add timestamp to prevent caching
-        const timestamp = Date.now();
-        const response = await fetch(`${supabaseUrl}/rest/v1/orders?select=*&order=created_at.desc&_t=${timestamp}`, {
+        const response = await fetch(`${supabaseUrl}/rest/v1/orders?select=*&order=created_at.desc`, {
           headers: {
             'apikey': supabaseKey || '',
             'Authorization': `Bearer ${accessToken}`, // Use access_token for RLS
@@ -1541,10 +1539,15 @@ export default function AdminScreen() {
         });
         if (response.ok) {
           const data = await response.json();
+          console.log('📦 Admin: Raw orders data:', data);
+          console.log('📦 Admin: Orders count:', data?.length || 0);
+          console.log('📦 Admin: Orders with source_type:', data?.filter((o: any) => o.source_type === 'external').length || 0);
           setOrders(data || []);
           console.log('✅ Admin: Orders loaded:', data?.length || 0);
         } else {
-          console.error('❌ Admin: Error loading orders:', await response.text());
+          const errorText = await response.text();
+          console.error('❌ Admin: Error loading orders:', response.status, errorText);
+          setOrders([]);
         }
       } else if (activeTab === 'shipments') {
         const response = await fetch(`${supabaseUrl}/rest/v1/shipments?select=*&order=created_at.desc`, {
@@ -1836,7 +1839,7 @@ export default function AdminScreen() {
             const avifUri = await convertToAVIF(asset.uri);
             
             console.log(`📤 Uploading AVIF/WebP image ${i + 1}/${result.assets.length}...`);
-            const imageUrl = await uploadImageToCatbox(avifUri);
+            const imageUrl = await uploadImageToImgbb(avifUri);
             console.log(`✅ Image ${i + 1} uploaded successfully:`, imageUrl);
             uploadedImages.push({ uri: asset.uri, url: imageUrl });
           } catch (error: any) {
@@ -1893,7 +1896,7 @@ export default function AdminScreen() {
         setLoading(true);
         // Convert to AVIF for better compression (fallback to WebP if not supported)
         const avifUri = await convertToAVIF(result.assets[0].uri);
-        const imageUrl = await uploadImageToCatbox(avifUri);
+        const imageUrl = await uploadImageToImgbb(avifUri);
         setNewVariant({ ...newVariant, image_url: imageUrl });
         sweetAlert.showSuccess('نجح', 'تم رفع الصورة بنجاح (AVIF/WebP)');
       } catch (error) {
@@ -4660,10 +4663,9 @@ export default function AdminScreen() {
                     style={[styles.selectionButton, { backgroundColor: '#2196F3', marginLeft: 8 }]}
                     onPress={() => {
                       const filteredOrders = orders.filter(o => {
-                        const matchesSource = o.source_type === 'external' || o.source_type === 'warehouse' || !o.source_type;
                         const matchesRegion = orderRegionFilter === 'all' || 
                           (orderRegionFilter === 'no-region' ? !o.delivery_region : o.delivery_region === orderRegionFilter);
-                        return matchesSource && matchesRegion;
+                        return matchesRegion;
                       });
                       if (selectedOrders.size === filteredOrders.length) {
                         setSelectedOrders(new Set());
@@ -4675,10 +4677,9 @@ export default function AdminScreen() {
                     <Ionicons name="checkmark-done-outline" size={18} color="#fff" />
                     <Text style={[styles.selectionButtonText, { color: '#fff' }]}>
                       {selectedOrders.size === orders.filter(o => {
-                        const matchesSource = o.source_type === 'external' || o.source_type === 'warehouse' || !o.source_type;
                         const matchesRegion = orderRegionFilter === 'all' || 
                           (orderRegionFilter === 'no-region' ? !o.delivery_region : o.delivery_region === orderRegionFilter);
-                        return matchesSource && matchesRegion;
+                        return matchesRegion;
                       }).length ? 'إلغاء الكل' : 'تحديد الكل'}
                     </Text>
                   </TouchableOpacity>
@@ -4787,10 +4788,9 @@ export default function AdminScreen() {
                     style={[styles.selectionButton, { backgroundColor: '#FF9800', marginLeft: 8 }]}
                     onPress={() => {
                       const filteredOrders = orders.filter(o => {
-                        const matchesSource = o.source_type === 'external' || o.source_type === 'warehouse' || !o.source_type;
                         const matchesRegion = orderRegionFilter === 'all' || 
                           (orderRegionFilter === 'no-region' ? !o.delivery_region : o.delivery_region === orderRegionFilter);
-                        return matchesSource && matchesRegion;
+                        return matchesRegion;
                       });
                       
                       sweetAlert.showConfirm(
@@ -4922,34 +4922,31 @@ export default function AdminScreen() {
               </ScrollView>
             </View>
 
-            {/* External Orders - الطلبات من الخارج */}
+            {/* All Orders - جميع الطلبات */}
             {orders && orders.filter(o => {
-              const matchesSource = o.source_type === 'external';
               const matchesRegion = orderRegionFilter === 'all' || 
                 (orderRegionFilter === 'no-region' ? !o.delivery_region : o.delivery_region === orderRegionFilter);
-              return matchesSource && matchesRegion;
+              return matchesRegion;
             }).length > 0 && (
               <View style={{ marginBottom: 30 }}>
                 <View style={styles.sectionHeader}>
-                  <Ionicons name="globe-outline" size={20} color="#FF9800" />
-                  <Text style={styles.sectionHeaderText}>الطلبات من الخارج</Text>
+                  <Ionicons name="list-outline" size={20} color="#EE1C47" />
+                  <Text style={styles.sectionHeaderText}>جميع الطلبات</Text>
                   <View style={styles.sectionHeaderBadge}>
                     <Text style={styles.sectionHeaderBadgeText}>
                       {orders.filter(o => {
-                        const matchesSource = o.source_type === 'external';
                         const matchesRegion = orderRegionFilter === 'all' || 
                           (orderRegionFilter === 'no-region' ? !o.delivery_region : o.delivery_region === orderRegionFilter);
-                        return matchesSource && matchesRegion;
+                        return matchesRegion;
                       }).length}
                     </Text>
                   </View>
                 </View>
             <View style={styles.gridContainer}>
                   {orders.filter(o => {
-                    const matchesSource = o.source_type === 'external';
                     const matchesRegion = orderRegionFilter === 'all' || 
                       (orderRegionFilter === 'no-region' ? !o.delivery_region : o.delivery_region === orderRegionFilter);
-                    return matchesSource && matchesRegion;
+                    return matchesRegion;
                   }).map((order) => {
                 const isEditing = editingOrderId === order.id;
                 const quickEdit = quickEditOrder[order.id] || {};

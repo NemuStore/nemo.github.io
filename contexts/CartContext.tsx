@@ -10,8 +10,8 @@ interface CartItem {
 interface CartContextType {
   cartItems: CartItem[];
   addToCart: (product: Product, quantity?: number) => void;
-  removeFromCart: (productId: string) => void;
-  updateQuantity: (productId: string, quantity: number) => void;
+  removeFromCart: (productId: string, variantId?: string | null) => void;
+  updateQuantity: (productId: string, quantity: number, variantId?: string | null) => void;
   clearCart: () => void;
   getTotal: () => number;
   getItemCount: () => number;
@@ -53,31 +53,66 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
 
   const addToCart = (product: Product, quantity: number = 1) => {
     setCartItems((prevItems) => {
-      const existingItem = prevItems.find((item) => item.product.id === product.id);
+      // التحقق من المنتج بنفس ID ونفس variant_id (لون/مقاس)
+      const productVariantId = (product as any).variant_id || null;
+      const existingItem = prevItems.find((item) => {
+        const itemVariantId = (item.product as any).variant_id || null;
+        // نفس المنتج ونفس المتغير (variant)
+        return item.product.id === product.id && itemVariantId === productVariantId;
+      });
+      
       if (existingItem) {
-        return prevItems.map((item) =>
-          item.product.id === product.id
-            ? { ...item, quantity: item.quantity + quantity }
-            : item
-        );
+        // إذا كان المنتج موجود بنفس المتغير، نزيد الكمية
+        return prevItems.map((item) => {
+          const itemVariantId = (item.product as any).variant_id || null;
+          if (item.product.id === product.id && itemVariantId === productVariantId) {
+            return { ...item, quantity: item.quantity + quantity };
+          }
+          return item;
+        });
       }
+      // إذا كان المنتج غير موجود أو بنفس المنتج بمتغير مختلف، نضيفه كعنصر جديد
       return [...prevItems, { product, quantity }];
     });
   };
 
-  const removeFromCart = (productId: string) => {
-    setCartItems((prevItems) => prevItems.filter((item) => item.product.id !== productId));
+  const removeFromCart = (productId: string, variantId?: string | null) => {
+    setCartItems((prevItems) => {
+      return prevItems.filter((item) => {
+        const itemVariantId = (item.product as any).variant_id || null;
+        // إزالة العنصر إذا كان نفس المنتج ونفس المتغير
+        if (item.product.id === productId) {
+          if (variantId === undefined) {
+            // إذا لم يتم تحديد variant_id، نزيل أول عنصر نجد له نفس product.id
+            return false;
+          }
+          return itemVariantId !== variantId;
+        }
+        return true;
+      });
+    });
   };
 
-  const updateQuantity = (productId: string, quantity: number) => {
+  const updateQuantity = (productId: string, quantity: number, variantId?: string | null) => {
     if (quantity <= 0) {
-      removeFromCart(productId);
+      removeFromCart(productId, variantId);
       return;
     }
     setCartItems((prevItems) =>
-      prevItems.map((item) =>
-        item.product.id === productId ? { ...item, quantity } : item
-      )
+      prevItems.map((item) => {
+        const itemVariantId = (item.product as any).variant_id || null;
+        // تحديث الكمية إذا كان نفس المنتج ونفس المتغير
+        if (item.product.id === productId) {
+          if (variantId === undefined) {
+            // إذا لم يتم تحديد variant_id، نحدث أول عنصر نجد له نفس product.id
+            return { ...item, quantity };
+          }
+          if (itemVariantId === variantId) {
+            return { ...item, quantity };
+          }
+        }
+        return item;
+      })
     );
   };
 

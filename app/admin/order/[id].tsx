@@ -87,9 +87,9 @@ export default function AdminOrderDetailScreen() {
       setAdminStatus((orderDataItem as any).admin_status || 'pending');
       setCustomerStatus(orderDataItem.status || 'pending');
 
-      // جلب order_items
+      // جلب order_items مع variant
       const orderItemsResponse = await fetch(
-        `${supabaseUrl}/rest/v1/order_items?order_id=eq.${id}&select=*`,
+        `${supabaseUrl}/rest/v1/order_items?order_id=eq.${id}&select=*,product_variants(*)`,
         {
           headers: {
             'apikey': supabaseKey || '',
@@ -104,6 +104,7 @@ export default function AdminOrderDetailScreen() {
       }
 
       const itemsData = await orderItemsResponse.json();
+      console.log('📦 Admin Order: Order items data:', JSON.stringify(itemsData.slice(0, 2), null, 2)); // Log first 2 items for debugging
       
       // جلب معلومات المنتجات لكل order_item
       if (itemsData.length > 0) {
@@ -128,12 +129,26 @@ export default function AdminOrderDetailScreen() {
           // ربط المنتجات مع order_items وإضافة حالة الشراء
           const itemsWithProducts = itemsData.map((item: OrderItem) => {
             const product = productsMap.get(item.product_id);
+            // Supabase PostgREST يعيد product_variants كـ object (لأنه foreign key واحد)
+            // لكن قد يعيده كـ array في بعض الحالات، لذا نتعامل مع الحالتين
+            let variant = null;
+            if ((item as any).product_variants) {
+              if (Array.isArray((item as any).product_variants)) {
+                // إذا كان array، نأخذ الأول
+                variant = (item as any).product_variants.length > 0 ? (item as any).product_variants[0] : null;
+              } else {
+                // إذا كان object، نأخذه مباشرة
+                variant = (item as any).product_variants;
+              }
+            }
+            console.log('🔍 Admin Order: Item variant:', item.variant_id, '→', variant ? `${variant.color} - ${variant.size}` : 'null');
             if ((item as any).is_purchased) {
               purchasedItems.add(item.id);
             }
             return {
               ...item,
               product: product || null,
+              variant: variant || null,
             };
           });
           
@@ -787,6 +802,26 @@ export default function AdminOrderDetailScreen() {
                         <Text style={styles.productName}>
                           {product?.name || `منتج غير معروف (ID: ${item.product_id.substring(0, 8)}...)`}
                         </Text>
+                        {/* عرض معلومات المتغير (اللون والمقاس) */}
+                        {item.variant_id && (item as any).variant && (
+                          <View style={styles.variantInfo}>
+                            {(item as any).variant.color && (
+                              <View style={styles.variantBadge}>
+                                <Text style={styles.variantBadgeText}>
+                                  اللون: {(item as any).variant.color}
+                                </Text>
+                              </View>
+                            )}
+                            {(item as any).variant.size && (
+                              <View style={styles.variantBadge}>
+                                <Text style={styles.variantBadgeText}>
+                                  المقاس: {(item as any).variant.size}
+                                  {(item as any).variant.size_unit ? ` (${(item as any).variant.size_unit})` : ''}
+                                </Text>
+                              </View>
+                            )}
+                          </View>
+                        )}
                         <View style={styles.productDetails}>
                           <Text style={styles.productQuantity}>الكمية: {item.quantity}</Text>
                           <Text style={styles.productPrice}>
@@ -1150,6 +1185,25 @@ const styles = StyleSheet.create({
   checkboxLabel: {
     fontSize: 14,
     color: '#333',
+    fontWeight: '500',
+  },
+  variantInfo: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginBottom: 8,
+  },
+  variantBadge: {
+    backgroundColor: '#F3F4F6',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  variantBadgeText: {
+    fontSize: 12,
+    color: '#666',
     fontWeight: '500',
   },
   statusSection: {
