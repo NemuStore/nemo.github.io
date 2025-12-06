@@ -41,7 +41,7 @@ export default function WishlistScreen() {
       const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
       const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
       
-      // Get user ID and access token from localStorage (faster and more reliable on web)
+      // Get session from localStorage directly (faster, no timeout on web)
       let userId: string | null = null;
       let accessToken: string | null = null;
       
@@ -56,48 +56,24 @@ export default function WishlistScreen() {
               const parsed = JSON.parse(tokenData);
               userId = parsed?.user?.id || parsed?.currentSession?.user?.id || parsed?.session?.user?.id;
               accessToken = parsed?.access_token || parsed?.currentSession?.access_token || parsed?.session?.access_token;
-              
-              if (userId) {
-                console.log('✅ Wishlist: Got user from localStorage:', userId);
-              }
             } catch (e) {
-              console.log('⚠️ Wishlist: Error parsing localStorage token');
-            }
-          }
-          
-          // Fallback: search all localStorage keys
-          if (!userId) {
-            const allKeys = Object.keys(localStorage);
-            for (const key of allKeys) {
-              if (key.includes('supabase') || key.includes('auth')) {
-                try {
-                  const data = localStorage.getItem(key);
-                  if (data) {
-                    const parsed = JSON.parse(data);
-                    userId = parsed?.user?.id || parsed?.currentSession?.user?.id || parsed?.session?.user?.id;
-                    accessToken = accessToken || parsed?.access_token || parsed?.currentSession?.access_token || parsed?.session?.access_token;
-                    if (userId) {
-                      console.log('✅ Wishlist: Got user from localStorage key:', key);
-                      break;
-                    }
-                  }
-                } catch (e) {
-                  // Continue searching
-                }
-              }
+              // Silently fail
             }
           }
         } catch (e) {
-          console.log('⚠️ Wishlist: Error reading localStorage:', e);
+          // Silently fail
         }
       }
       
-      if (!userId) {
-        console.log('⚠️ Wishlist: No user found');
+      if (!userId || !accessToken) {
+        console.log('⚠️ Wishlist: No user found - user not logged in');
+        setWishlistItems([]);
         setLoading(false);
         setRefreshing(false);
         return;
       }
+      
+      console.log('✅ Wishlist: Got session from localStorage, user:', userId);
 
       // Fetch wishlist items first
       const wishlistResponse = await fetch(
@@ -105,7 +81,7 @@ export default function WishlistScreen() {
         {
           headers: {
             'apikey': supabaseKey || '',
-            'Authorization': `Bearer ${accessToken || supabaseKey || ''}`,
+            'Authorization': `Bearer ${accessToken}`,
             'Content-Type': 'application/json',
           }
         }
@@ -128,22 +104,37 @@ export default function WishlistScreen() {
         const productIds = wishlistData.map(item => item.product_id);
         console.log('📦 Product IDs:', productIds);
 
-        // Fetch products using product IDs
-        const productIdsQuery = productIds.map((id: string) => `id.eq.${id}`).join(',');
+        if (productIds.length === 0) {
+          setWishlistItems([]);
+          setLoading(false);
+          setRefreshing(false);
+          return;
+        }
+
+        // Fetch products using product IDs - use 'in' filter for better performance
         const productsResponse = await fetch(
-          `${supabaseUrl}/rest/v1/products?or=(${productIdsQuery})&select=*`,
+          `${supabaseUrl}/rest/v1/products?id=in.(${productIds.map((id: string) => `"${id}"`).join(',')})&select=*`,
           {
             headers: {
               'apikey': supabaseKey || '',
-              'Authorization': `Bearer ${accessToken || supabaseKey || ''}`,
+              'Authorization': `Bearer ${accessToken}`,
               'Content-Type': 'application/json',
             }
           }
         );
 
+        console.log('📡 Products response status:', productsResponse.status);
+        
         if (productsResponse.ok) {
           const products: Product[] = await productsResponse.json();
           console.log('✅ Products loaded:', products.length);
+          
+          if (products.length === 0) {
+            setWishlistItems([]);
+            setLoading(false);
+            setRefreshing(false);
+            return;
+          }
           
           // Maintain the order from wishlist (most recent first)
           const productsMap = new Map(products.map(p => [p.id, p]));
@@ -151,6 +142,7 @@ export default function WishlistScreen() {
             .map(id => productsMap.get(id))
             .filter((p): p is Product => p !== undefined);
           
+          console.log('✅ Ordered products:', orderedProducts.length);
           setWishlistItems(orderedProducts);
           
           // Load product images
@@ -160,7 +152,7 @@ export default function WishlistScreen() {
         } else {
           const errorText = await productsResponse.text();
           console.error('❌ Error loading products:', productsResponse.status, errorText);
-          sweetAlert.showError('خطأ', 'فشل تحميل المنتجات');
+          sweetAlert.showError('خطأ', `فشل تحميل المنتجات: ${productsResponse.status}`);
         }
       } else {
         const errorText = await wishlistResponse.text();
@@ -216,7 +208,7 @@ export default function WishlistScreen() {
       const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
       const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
       
-      // Get user ID and access token from localStorage
+      // Get session from localStorage directly (faster, no timeout on web)
       let userId: string | null = null;
       let accessToken: string | null = null;
       
@@ -232,35 +224,15 @@ export default function WishlistScreen() {
               userId = parsed?.user?.id || parsed?.currentSession?.user?.id || parsed?.session?.user?.id;
               accessToken = parsed?.access_token || parsed?.currentSession?.access_token || parsed?.session?.access_token;
             } catch (e) {
-              console.log('⚠️ Error parsing localStorage token in removeFromWishlist');
-            }
-          }
-          
-          // Fallback: search all localStorage keys
-          if (!userId) {
-            const allKeys = Object.keys(localStorage);
-            for (const key of allKeys) {
-              if (key.includes('supabase') || key.includes('auth')) {
-                try {
-                  const data = localStorage.getItem(key);
-                  if (data) {
-                    const parsed = JSON.parse(data);
-                    userId = parsed?.user?.id || parsed?.currentSession?.user?.id || parsed?.session?.user?.id;
-                    accessToken = accessToken || parsed?.access_token || parsed?.currentSession?.access_token || parsed?.session?.access_token;
-                    if (userId) break;
-                  }
-                } catch (e) {
-                  // Continue searching
-                }
-              }
+              // Silently fail
             }
           }
         } catch (e) {
-          console.log('⚠️ Error reading localStorage in removeFromWishlist');
+          // Silently fail
         }
       }
       
-      if (!userId) {
+      if (!userId || !accessToken) {
         sweetAlert.showError('تنبيه', 'يجب تسجيل الدخول أولاً');
         return;
       }
@@ -271,7 +243,7 @@ export default function WishlistScreen() {
           method: 'DELETE',
           headers: {
             'apikey': supabaseKey || '',
-            'Authorization': `Bearer ${accessToken || supabaseKey || ''}`,
+            'Authorization': `Bearer ${accessToken}`,
             'Content-Type': 'application/json',
           }
         }

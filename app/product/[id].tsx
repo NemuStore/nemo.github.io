@@ -504,10 +504,10 @@ export default function ProductDetailScreen() {
 
   const checkWishlistStatus = async (productId: string, supabaseUrl: string, supabaseKey: string) => {
     try {
-      // Get user ID from localStorage (same method as toggleWishlist)
+      // Get session from localStorage directly (faster, no timeout on web)
       let userId: string | null = null;
       let accessToken: string | null = null;
-      
+
       if (typeof window !== 'undefined') {
         try {
           const projectRef = supabaseUrl?.split('//')[1]?.split('.')[0] || 'default';
@@ -520,37 +520,16 @@ export default function ProductDetailScreen() {
               userId = parsed?.user?.id || parsed?.currentSession?.user?.id || parsed?.session?.user?.id;
               accessToken = parsed?.access_token || parsed?.currentSession?.access_token || parsed?.session?.access_token;
             } catch (e) {
-              console.log('⚠️ Error parsing localStorage token in checkWishlistStatus');
-            }
-          }
-          
-          // Fallback: search all localStorage keys
-          if (!userId) {
-            const allKeys = Object.keys(localStorage);
-            for (const key of allKeys) {
-              if (key.includes('supabase') || key.includes('auth')) {
-                try {
-                  const data = localStorage.getItem(key);
-                  if (data) {
-                    const parsed = JSON.parse(data);
-                    userId = parsed?.user?.id || parsed?.currentSession?.user?.id || parsed?.session?.user?.id;
-                    accessToken = accessToken || parsed?.access_token || parsed?.currentSession?.access_token || parsed?.session?.access_token;
-                    if (userId) break;
-                  }
-                } catch (e) {
-                  // Continue searching
-                }
-              }
+              // Silently fail
             }
           }
         } catch (e) {
-          console.log('⚠️ Error reading localStorage in checkWishlistStatus');
+          // Silently fail
         }
       }
       
-      if (!userId) {
-        console.log('⚠️ No user found in checkWishlistStatus');
-        return;
+      if (!userId || !accessToken) {
+        return; // User not logged in, skip silently
       }
       
       console.log('🔍 Checking wishlist status for product:', productId, 'user:', userId);
@@ -701,10 +680,72 @@ export default function ProductDetailScreen() {
       console.log('❤️ Current wishlist status:', isInWishlist);
       console.log('❤️ Product ID:', id);
       
+      // Start animation immediately (before checking session)
+      // Lottie-like animation: heart beat effect with particles
+      // Reset animation values
+      heartScale.setValue(1);
+      heartOpacity.setValue(1);
+      
+      // Use useNativeDriver: false on web for compatibility
+      const useNative = Platform.OS !== 'web';
+      
+      // Start animation immediately (before API call)
+      // Create a heart beat animation sequence
+      Animated.sequence([
+        // First beat - quick scale up
+        Animated.parallel([
+          Animated.spring(heartScale, {
+            toValue: 1.4,
+            useNativeDriver: useNative,
+            tension: 300,
+            friction: 3,
+          }),
+          Animated.timing(heartOpacity, {
+            toValue: 0.8,
+            duration: 100,
+            useNativeDriver: useNative,
+          }),
+        ]),
+        // Quick scale down
+        Animated.parallel([
+          Animated.spring(heartScale, {
+            toValue: 0.9,
+            useNativeDriver: useNative,
+            tension: 300,
+            friction: 3,
+          }),
+          Animated.timing(heartOpacity, {
+            toValue: 1,
+            duration: 100,
+            useNativeDriver: useNative,
+          }),
+        ]),
+        // Second beat - smaller
+        Animated.parallel([
+          Animated.spring(heartScale, {
+            toValue: 1.2,
+            useNativeDriver: useNative,
+            tension: 300,
+            friction: 4,
+          }),
+        ]),
+        // Final settle
+        Animated.spring(heartScale, {
+          toValue: 1,
+          useNativeDriver: useNative,
+          tension: 200,
+          friction: 5,
+        }),
+      ]).start((finished) => {
+        if (finished) {
+          console.log('✅ Animation completed');
+        }
+      });
+
       const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
       const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
       
-      // Get user ID and access token from localStorage (faster and more reliable on web)
+      // Get session from localStorage directly (faster, no timeout on web)
       let userId: string | null = null;
       let accessToken: string | null = null;
       
@@ -720,102 +761,26 @@ export default function ProductDetailScreen() {
               userId = parsed?.user?.id || parsed?.currentSession?.user?.id || parsed?.session?.user?.id;
               accessToken = parsed?.access_token || parsed?.currentSession?.access_token || parsed?.session?.access_token;
               
-              if (userId) {
-                console.log('✅ Got user from localStorage:', userId);
+              if (userId && accessToken) {
+                console.log('✅ Got session from localStorage, user:', userId);
               }
             } catch (e) {
               console.log('⚠️ Error parsing localStorage token');
             }
           }
-          
-          // Fallback: search all localStorage keys
-          if (!userId) {
-            const allKeys = Object.keys(localStorage);
-            for (const key of allKeys) {
-              if (key.includes('supabase') || key.includes('auth')) {
-                try {
-                  const data = localStorage.getItem(key);
-                  if (data) {
-                    const parsed = JSON.parse(data);
-                    userId = parsed?.user?.id || parsed?.currentSession?.user?.id || parsed?.session?.user?.id;
-                    accessToken = accessToken || parsed?.access_token || parsed?.currentSession?.access_token || parsed?.session?.access_token;
-                    if (userId) {
-                      console.log('✅ Got user from localStorage key:', key);
-                      break;
-                    }
-                  }
-                } catch (e) {
-                  // Continue searching
-                }
-              }
-            }
-          }
         } catch (e) {
-          console.log('⚠️ Error reading localStorage:', e);
+          console.log('⚠️ Error reading localStorage');
         }
       }
       
-      if (!userId) {
-        console.log('⚠️ No user found, showing login message');
+      if (!userId || !accessToken) {
+        console.log('⚠️ No session found - user not logged in');
         sweetAlert.showError('تنبيه', 'يجب تسجيل الدخول أولاً');
         return;
       }
-
-      console.log('✅ User ID:', userId);
-      console.log('🔑 Access token:', accessToken ? 'Found' : 'Not found (will use anon key)');
-
-      // Lottie-like animation: heart beat effect with particles
-      // Reset animation values
-      heartScale.setValue(1);
-      heartOpacity.setValue(1);
       
-      // Create a heart beat animation sequence
-      Animated.sequence([
-        // First beat - quick scale up
-        Animated.parallel([
-          Animated.spring(heartScale, {
-            toValue: 1.4,
-            useNativeDriver: true,
-            tension: 300,
-            friction: 3,
-          }),
-          Animated.timing(heartOpacity, {
-            toValue: 0.8,
-            duration: 100,
-            useNativeDriver: true,
-          }),
-        ]),
-        // Quick scale down
-        Animated.parallel([
-          Animated.spring(heartScale, {
-            toValue: 0.9,
-            useNativeDriver: true,
-            tension: 300,
-            friction: 3,
-          }),
-          Animated.timing(heartOpacity, {
-            toValue: 1,
-            duration: 100,
-            useNativeDriver: true,
-          }),
-        ]),
-        // Second beat - smaller
-        Animated.parallel([
-          Animated.spring(heartScale, {
-            toValue: 1.2,
-            useNativeDriver: true,
-            tension: 300,
-            friction: 4,
-          }),
-        ]),
-        // Final settle
-        Animated.spring(heartScale, {
-          toValue: 1,
-          useNativeDriver: true,
-          tension: 200,
-          friction: 5,
-        }),
-      ]).start();
+      console.log('✅ User ID:', userId);
+      console.log('🔑 Access token:', accessToken ? 'Found' : 'Not found');
 
       if (isInWishlist) {
         // Remove from wishlist
@@ -826,10 +791,12 @@ export default function ProductDetailScreen() {
           method: 'DELETE',
           headers: {
             'apikey': supabaseKey || '',
-            'Authorization': `Bearer ${accessToken || supabaseKey || ''}`,
+            'Authorization': `Bearer ${accessToken}`,
             'Content-Type': 'application/json',
           }
         });
+        
+        console.log('🗑️ Delete response status:', response.status);
         
         if (response.ok) {
           setIsInWishlist(false);
@@ -844,7 +811,7 @@ export default function ProductDetailScreen() {
           method: 'POST',
           headers: {
             'apikey': supabaseKey || '',
-            'Authorization': `Bearer ${accessToken || supabaseKey || ''}`,
+            'Authorization': `Bearer ${accessToken}`,
             'Content-Type': 'application/json',
             'Prefer': 'return=representation'
           },
@@ -853,6 +820,13 @@ export default function ProductDetailScreen() {
             product_id: id,
           })
         });
+        
+        console.log('➕ Add response status:', response.status);
+        
+        if (!response.ok && response.status !== 409) {
+          const errorText = await response.text();
+          console.error('❌ Add to wishlist error:', response.status, errorText);
+        }
         
         if (response.ok || response.status === 409) {
           // 409 means already exists, which is fine

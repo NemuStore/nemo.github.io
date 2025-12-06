@@ -52,6 +52,7 @@ export default function HomeScreen() {
   const filtersHeight = useRef(new Animated.Value(1)).current;
   const filtersContainerRef = useRef<View>(null);
   const [filtersContainerHeight, setFiltersContainerHeight] = useState(0);
+  const isAnimating = useRef(false); // Prevent multiple animations
   const router = useRouter();
 
   useEffect(() => {
@@ -61,8 +62,10 @@ export default function HomeScreen() {
     loadWishlistStatus();
   }, []);
 
-  // Handle scroll to show/hide filters with smooth fade animation
+  // Handle scroll to show/hide filters with smooth fade animation (optimized to prevent lag)
   const handleScroll = (event: any) => {
+    if (isAnimating.current) return; // Skip if already animating
+    
     const currentScrollY = event.nativeEvent.contentOffset.y;
     const scrollDifference = currentScrollY - lastScrollY.current;
     
@@ -70,53 +73,64 @@ export default function HomeScreen() {
     lastScrollY.current = currentScrollY;
     scrollY.current = currentScrollY;
     
+    // Get current opacity value to avoid unnecessary animations
+    const currentOpacity = filtersOpacity._value;
+    const shouldHide = currentScrollY > 50 && scrollDifference > 10 && currentOpacity > 0.5;
+    const shouldShow = (scrollDifference < -10 || currentScrollY < 50) && currentOpacity < 0.5;
+    
     // Hide filters when scrolling down (after 50px) with fade
-    if (currentScrollY > 50 && scrollDifference > 5) {
+    if (shouldHide) {
+      isAnimating.current = true;
       // Scrolling down - fade out and collapse height
       Animated.parallel([
         Animated.timing(filtersOpacity, {
           toValue: 0,
-          duration: 250,
+          duration: 200,
           useNativeDriver: true,
           easing: Easing.out(Easing.ease),
         }),
         Animated.timing(filtersTranslateY, {
-          toValue: -100,
-          duration: 250,
+          toValue: -50,
+          duration: 200,
           useNativeDriver: true,
           easing: Easing.out(Easing.ease),
         }),
         Animated.timing(filtersHeight, {
           toValue: 0,
-          duration: 250,
-          useNativeDriver: false, // height doesn't support native driver
+          duration: 200,
+          useNativeDriver: false,
           easing: Easing.out(Easing.ease),
         }),
-      ]).start();
+      ]).start(() => {
+        isAnimating.current = false;
+      });
     } 
     // Show filters when scrolling up or near top
-    else if (scrollDifference < -5 || currentScrollY < 50) {
+    else if (shouldShow) {
+      isAnimating.current = true;
       // Scrolling up or near top - fade in and expand height
       Animated.parallel([
         Animated.timing(filtersOpacity, {
           toValue: 1,
-          duration: 250,
+          duration: 200,
           useNativeDriver: true,
           easing: Easing.out(Easing.ease),
         }),
         Animated.timing(filtersTranslateY, {
           toValue: 0,
-          duration: 250,
+          duration: 200,
           useNativeDriver: true,
           easing: Easing.out(Easing.ease),
         }),
         Animated.timing(filtersHeight, {
           toValue: 1,
-          duration: 250,
+          duration: 200,
           useNativeDriver: false,
           easing: Easing.out(Easing.ease),
         }),
-      ]).start();
+      ]).start(() => {
+        isAnimating.current = false;
+      });
     }
   };
 
@@ -334,15 +348,13 @@ export default function HomeScreen() {
 
   const loadWishlistStatus = async () => {
     try {
-      const supabaseUrl = getSupabaseUrl();
-      const supabaseKey = getSupabaseAnonKey();
-      
-      // Get user ID from localStorage
+      // Get session from localStorage directly (faster, no timeout on web)
       let userId: string | null = null;
       let accessToken: string | null = null;
       
       if (typeof window !== 'undefined') {
         try {
+          const supabaseUrl = getSupabaseUrl();
           const projectRef = supabaseUrl?.split('//')[1]?.split('.')[0] || 'default';
           const storageKey = `sb-${projectRef}-auth-token`;
           const tokenData = localStorage.getItem(storageKey);
@@ -353,37 +365,20 @@ export default function HomeScreen() {
               userId = parsed?.user?.id || parsed?.currentSession?.user?.id || parsed?.session?.user?.id;
               accessToken = parsed?.access_token || parsed?.currentSession?.access_token || parsed?.session?.access_token;
             } catch (e) {
-              // Continue
-            }
-          }
-          
-          // Fallback: search all localStorage keys
-          if (!userId) {
-            const allKeys = Object.keys(localStorage);
-            for (const key of allKeys) {
-              if (key.includes('supabase') || key.includes('auth')) {
-                try {
-                  const data = localStorage.getItem(key);
-                  if (data) {
-                    const parsed = JSON.parse(data);
-                    userId = parsed?.user?.id || parsed?.currentSession?.user?.id || parsed?.session?.user?.id;
-                    accessToken = accessToken || parsed?.access_token || parsed?.currentSession?.access_token || parsed?.session?.access_token;
-                    if (userId) break;
-                  }
-                } catch (e) {
-                  // Continue
-                }
-              }
+              // Silently fail
             }
           }
         } catch (e) {
-          // Continue
+          // Silently fail
         }
       }
       
-      if (!userId) {
-        return; // User not logged in
+      if (!userId || !accessToken) {
+        return; // User not logged in, skip silently
       }
+
+      const supabaseUrl = getSupabaseUrl();
+      const supabaseKey = getSupabaseAnonKey();
 
       // Fetch wishlist items
       const response = await fetch(
@@ -391,7 +386,7 @@ export default function HomeScreen() {
         {
           headers: {
             'apikey': supabaseKey || '',
-            'Authorization': `Bearer ${accessToken || supabaseKey || ''}`,
+            'Authorization': `Bearer ${accessToken}`,
             'Content-Type': 'application/json',
           }
         }
@@ -403,7 +398,7 @@ export default function HomeScreen() {
         setWishlistItems(productIds);
       }
     } catch (error) {
-      console.warn('⚠️ Error loading wishlist status:', error);
+      // Silently fail - user might not be logged in
     }
   };
 
@@ -413,108 +408,60 @@ export default function HomeScreen() {
       event.stopPropagation();
     }
 
-    try {
-      const supabaseUrl = getSupabaseUrl();
-      const supabaseKey = getSupabaseAnonKey();
-      
-      // Get user ID from localStorage
-      let userId: string | null = null;
-      let accessToken: string | null = null;
-      
-      if (typeof window !== 'undefined') {
-        try {
-          const projectRef = supabaseUrl?.split('//')[1]?.split('.')[0] || 'default';
-          const storageKey = `sb-${projectRef}-auth-token`;
-          const tokenData = localStorage.getItem(storageKey);
-          
-          if (tokenData) {
-            try {
-              const parsed = JSON.parse(tokenData);
-              userId = parsed?.user?.id || parsed?.currentSession?.user?.id || parsed?.session?.user?.id;
-              accessToken = parsed?.access_token || parsed?.currentSession?.access_token || parsed?.session?.access_token;
-            } catch (e) {
-              // Continue
-            }
-          }
-          
-          // Fallback: search all localStorage keys
-          if (!userId) {
-            const allKeys = Object.keys(localStorage);
-            for (const key of allKeys) {
-              if (key.includes('supabase') || key.includes('auth')) {
-                try {
-                  const data = localStorage.getItem(key);
-                  if (data) {
-                    const parsed = JSON.parse(data);
-                    userId = parsed?.user?.id || parsed?.currentSession?.user?.id || parsed?.session?.user?.id;
-                    accessToken = accessToken || parsed?.access_token || parsed?.currentSession?.access_token || parsed?.session?.access_token;
-                    if (userId) break;
-                  }
-                } catch (e) {
-                  // Continue
-                }
-              }
-            }
-          }
-        } catch (e) {
-          // Continue
-        }
-      }
-      
-      if (!userId) {
-        return; // User not logged in, silently fail
-      }
+    const isInWishlist = wishlistItems.has(productId);
 
-      const isInWishlist = wishlistItems.has(productId);
+    // Initialize animation if not exists
+    if (!wishlistAnimations.current[productId]) {
+      wishlistAnimations.current[productId] = new Animated.Value(1);
+    }
+    if (!wishlistOpacityAnimations.current[productId]) {
+      wishlistOpacityAnimations.current[productId] = new Animated.Value(1);
+    }
 
-      // Initialize animation if not exists
-      if (!wishlistAnimations.current[productId]) {
-        wishlistAnimations.current[productId] = new Animated.Value(1);
-      }
-      if (!wishlistOpacityAnimations.current[productId]) {
-        wishlistOpacityAnimations.current[productId] = new Animated.Value(1);
-      }
-
-      // Lottie-like animation: heart beat effect (same as product page)
-      // Reset animation values
-      wishlistAnimations.current[productId].setValue(1);
-      wishlistOpacityAnimations.current[productId].setValue(1);
-      
-      // Create a heart beat animation sequence (same as product page)
-      Animated.sequence([
+    // Start animation immediately (before checking session)
+    // Lottie-like animation: heart beat effect (same as product page)
+    // Reset animation values
+    wishlistAnimations.current[productId].setValue(1);
+    wishlistOpacityAnimations.current[productId].setValue(1);
+    
+    // Create a heart beat animation sequence (same as product page)
+    // Use useNativeDriver: false on web for compatibility
+    const useNative = Platform.OS !== 'web';
+    
+    Animated.sequence([
         // First beat - quick scale up
         Animated.parallel([
           Animated.spring(wishlistAnimations.current[productId], {
             toValue: 1.4,
-            useNativeDriver: true,
+            useNativeDriver: useNative,
             tension: 300,
             friction: 3,
           }),
           Animated.timing(wishlistOpacityAnimations.current[productId], {
             toValue: 0.8,
             duration: 100,
-            useNativeDriver: true,
+            useNativeDriver: useNative,
           }),
         ]),
         // Quick scale down
         Animated.parallel([
           Animated.spring(wishlistAnimations.current[productId], {
             toValue: 0.9,
-            useNativeDriver: true,
+            useNativeDriver: useNative,
             tension: 300,
             friction: 3,
           }),
           Animated.timing(wishlistOpacityAnimations.current[productId], {
             toValue: 1,
             duration: 100,
-            useNativeDriver: true,
+            useNativeDriver: useNative,
           }),
         ]),
         // Second beat - smaller
         Animated.parallel([
           Animated.spring(wishlistAnimations.current[productId], {
             toValue: 1.2,
-            useNativeDriver: true,
+            useNativeDriver: useNative,
             tension: 300,
             friction: 4,
           }),
@@ -522,11 +469,58 @@ export default function HomeScreen() {
         // Final settle
         Animated.spring(wishlistAnimations.current[productId], {
           toValue: 1,
-          useNativeDriver: true,
+          useNativeDriver: useNative,
           tension: 200,
           friction: 5,
         }),
-      ]).start();
+      ]).start((finished) => {
+        if (finished) {
+          console.log('✅ Animation completed');
+        }
+      });
+
+    // Get session from localStorage directly (faster, no timeout on web)
+    let userId: string | null = null;
+    let accessToken: string | null = null;
+    
+    if (typeof window !== 'undefined') {
+      try {
+        const supabaseUrl = getSupabaseUrl();
+        const projectRef = supabaseUrl?.split('//')[1]?.split('.')[0] || 'default';
+        const storageKey = `sb-${projectRef}-auth-token`;
+        const tokenData = localStorage.getItem(storageKey);
+        
+        if (tokenData) {
+          try {
+            const parsed = JSON.parse(tokenData);
+            userId = parsed?.user?.id || parsed?.currentSession?.user?.id || parsed?.session?.user?.id;
+            accessToken = parsed?.access_token || parsed?.currentSession?.access_token || parsed?.session?.access_token;
+            
+            if (userId && accessToken) {
+              console.log('✅ Got session from localStorage, user:', userId);
+            }
+          } catch (e) {
+            console.log('⚠️ Error parsing localStorage token');
+          }
+        }
+      } catch (e) {
+        console.log('⚠️ Error reading localStorage');
+      }
+    }
+    
+    if (!userId || !accessToken) {
+      console.log('⚠️ No session found - user not logged in');
+      // User not logged in - redirect to auth
+      router.push('/auth');
+      return;
+    }
+
+    try {
+      const supabaseUrl = getSupabaseUrl();
+      const supabaseKey = getSupabaseAnonKey();
+      
+      console.log('✅ User ID:', userId);
+      console.log('🔑 Access token:', accessToken ? 'Found' : 'Not found');
 
       if (isInWishlist) {
         // Remove from wishlist
@@ -536,11 +530,13 @@ export default function HomeScreen() {
             method: 'DELETE',
             headers: {
               'apikey': supabaseKey || '',
-              'Authorization': `Bearer ${accessToken || supabaseKey || ''}`,
+              'Authorization': `Bearer ${accessToken}`,
               'Content-Type': 'application/json',
             }
           }
         );
+        
+        console.log('🗑️ Delete response status:', response.status);
 
         if (response.ok) {
           setWishlistItems(prev => {
@@ -557,7 +553,7 @@ export default function HomeScreen() {
             method: 'POST',
             headers: {
               'apikey': supabaseKey || '',
-              'Authorization': `Bearer ${accessToken || supabaseKey || ''}`,
+              'Authorization': `Bearer ${accessToken}`,
               'Content-Type': 'application/json',
               'Prefer': 'return=representation'
             },
@@ -568,9 +564,19 @@ export default function HomeScreen() {
           }
         );
 
+        console.log('➕ Add response status:', response.status);
+        
         if (response.ok || response.status === 409) {
           // 409 means already exists, which is fine
-          setWishlistItems(prev => new Set(prev).add(productId));
+          setWishlistItems(prev => {
+            const newSet = new Set(prev);
+            newSet.add(productId);
+            return newSet;
+          });
+          console.log('✅ Added to wishlist');
+        } else {
+          const errorText = await response.text();
+          console.error('❌ Add to wishlist error:', response.status, errorText);
         }
       }
     } catch (error) {
@@ -793,7 +799,7 @@ export default function HomeScreen() {
         contentContainerStyle={styles.productsGridContainer}
         showsVerticalScrollIndicator={false}
         onScroll={handleScroll}
-        scrollEventThrottle={16}
+        scrollEventThrottle={100}
       >
         <View style={[styles.productsGrid, { maxWidth: maxContainerWidth, alignSelf: 'center', width: '100%' }]}>
           {loading ? (
