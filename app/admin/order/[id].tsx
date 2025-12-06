@@ -29,6 +29,7 @@ export default function AdminOrderDetailScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [imagesLoading, setImagesLoading] = useState(true);
   const [productImages, setProductImages] = useState<Record<string, string>>({});
+  const [variantImages, setVariantImages] = useState<Record<string, string>>({}); // variant_id -> image_url
   const [purchasedItems, setPurchasedItems] = useState<Set<string>>(new Set());
   const [updatingPurchase, setUpdatingPurchase] = useState(false);
   const [adminStatus, setAdminStatus] = useState<string>('');
@@ -158,8 +159,11 @@ export default function AdminOrderDetailScreen() {
           setOrderItems(itemsData);
         }
 
-        // جلب صور المنتجات
-        await loadProductImages(itemsData);
+        // جلب صور المنتجات وصور المتغيرات
+        await Promise.all([
+          loadProductImages(itemsData),
+          loadVariantImages(itemsData)
+        ]);
       } else {
         setOrderItems([]);
       }
@@ -213,6 +217,50 @@ export default function AdminOrderDetailScreen() {
       }
     } catch (error) {
       console.warn('⚠️ Error loading product images:', error);
+    }
+  };
+
+  const loadVariantImages = async (items: OrderItem[]) => {
+    try {
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+      const imagesMap: Record<string, string> = {};
+      
+      // Get all unique variant_ids from order items
+      const variantIds = items
+        .map(item => item.variant_id)
+        .filter((id): id is string => Boolean(id));
+      
+      if (variantIds.length === 0) {
+        return;
+      }
+      
+      // Load images for all variants at once
+      const variantIdConditions = variantIds.map(id => `variant_id.eq.${id}`).join(',');
+      const response = await fetch(
+        `${supabaseUrl}/rest/v1/product_images?or=(${variantIdConditions})&order=display_order.asc,is_primary.desc&limit=100`,
+        {
+          headers: {
+            'apikey': supabaseKey || '',
+            'Authorization': `Bearer ${supabaseKey || ''}`,
+            'Content-Type': 'application/json',
+          }
+        }
+      );
+      
+      if (response.ok) {
+        const imagesData = await response.json();
+        // Map variant_id to first image_url
+        imagesData.forEach((img: any) => {
+          if (img.variant_id && !imagesMap[img.variant_id]) {
+            imagesMap[img.variant_id] = img.image_url;
+          }
+        });
+        setVariantImages(imagesMap);
+        console.log('✅ Admin Order: Variant images loaded:', Object.keys(imagesMap).length);
+      }
+    } catch (error) {
+      console.warn('⚠️ Error loading variant images:', error);
     }
   };
 
@@ -778,7 +826,10 @@ export default function AdminOrderDetailScreen() {
             ) : (
               orderItems.map((item) => {
                 const product = item.product || (item as any).products?.[0] || null;
-                const productImage = productImages[item.product_id] || product?.image_url || product?.primary_image_url || 'https://via.placeholder.com/150';
+                const variantId = item.variant_id || null;
+                // استخدام صورة المتغير إذا كان موجوداً، وإلا صورة المنتج الأساسية
+                const variantImage = variantId ? variantImages[variantId] : null;
+                const productImage = variantImage || productImages[item.product_id] || product?.image_url || product?.primary_image_url || 'https://via.placeholder.com/150';
                 const productUrl = product?.product_url || (product as any)?.product_url;
                 const isPurchased = purchasedItems.has(item.id);
                 
