@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -14,9 +14,9 @@ import {
 } from 'react-native';
 import { supabase } from '@/lib/supabase';
 import { createClient } from '@supabase/supabase-js';
-import { Order, Shipment, Inventory, Product, User, UserRole, Category, Section, ProductVariant, CategoryColor, CategorySize } from '@/types';
+import { Order, Shipment, Inventory, Product, User, UserRole, Category, Section, ProductVariant, CategoryColor, CategorySize, Package, InternalShipment } from '@/types';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { uploadImageToImgbb } from '@/lib/imgbb';
@@ -34,11 +34,22 @@ export default function AdminScreen() {
   };
 
   const [user, setUser] = useState<any>(null);
-  const [activeTab, setActiveTab] = useState<'orders' | 'shipments' | 'inventory' | 'products' | 'users' | 'categories' | 'sections' | 'status_mappings'>('orders');
+  const [activeTab, setActiveTab] = useState<'orders' | 'shipments' | 'packages' | 'inventory' | 'products' | 'users' | 'categories' | 'sections' | 'status_mappings'>('orders');
   const [orders, setOrders] = useState<Order[]>([]);
   const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
   const [isSelectionMode, setIsSelectionMode] = useState(false);
+  const [selectedShipments, setSelectedShipments] = useState<Set<string>>(new Set());
+  const [isShipmentSelectionMode, setIsShipmentSelectionMode] = useState(false);
+  const [selectedPackages, setSelectedPackages] = useState<Set<string>>(new Set());
+  const [isPackageSelectionMode, setIsPackageSelectionMode] = useState(false);
   const [shipments, setShipments] = useState<Shipment[]>([]);
+  const [packages, setPackages] = useState<Package[]>([]);
+  const [allPackages, setAllPackages] = useState<Package[]>([]);
+  const [packageSearchQuery, setPackageSearchQuery] = useState('');
+  const [packageFilterStatus, setPackageFilterStatus] = useState<'all' | Package['status']>('all');
+  const [showPackageDetailsModal, setShowPackageDetailsModal] = useState(false);
+  const [selectedPackageForDetails, setSelectedPackageForDetails] = useState<Package | null>(null);
+  const [internalShipments, setInternalShipments] = useState<InternalShipment[]>([]);
   const [inventory, setInventory] = useState<Inventory[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [selectedProducts, setSelectedProducts] = useState<Set<string>>(new Set());
@@ -209,7 +220,34 @@ export default function AdminScreen() {
   const [newShipment, setNewShipment] = useState({
     cost: '',
     order_ids: [] as string[],
+    shipment_number: '',
+    use_manual_number: false,
   });
+  // States for shipment details modals
+  const [selectedShipment, setSelectedShipment] = useState<Shipment | null>(null);
+  const [shipmentOrders, setShipmentOrders] = useState<Order[]>([]);
+  const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
+  const [orderItems, setOrderItems] = useState<any[]>([]);
+  const [showShipmentDetailsModal, setShowShipmentDetailsModal] = useState(false);
+  const [showOrderDetailsModal, setShowOrderDetailsModal] = useState(false);
+  const [showProductsSummaryModal, setShowProductsSummaryModal] = useState(false);
+  const [showNewShipmentModal, setShowNewShipmentModal] = useState(false);
+  const [showCreatePackageModal, setShowCreatePackageModal] = useState(false);
+  const [showUnpackPackageModal, setShowUnpackPackageModal] = useState(false);
+  const [selectedPackage, setSelectedPackage] = useState<Package | null>(null);
+  const [newPackage, setNewPackage] = useState({
+    package_number: '',
+    order_ids: [] as string[],
+  });
+  const [newInternalShipment, setNewInternalShipment] = useState({
+    shipment_number: '',
+    shipping_company: '',
+    tracking_number: '',
+    cost: '',
+    order_ids: [] as string[],
+  });
+  // Store product and variant images for products summary
+  const [productsSummaryImages, setProductsSummaryImages] = useState<Map<string, string>>(new Map()); // key: productId or productId-variantId, value: image_url
   
   // Products filtering and sorting
   const [productSearchQuery, setProductSearchQuery] = useState('');
@@ -220,6 +258,14 @@ export default function AdminScreen() {
   const [productSortOrder, setProductSortOrder] = useState<'asc' | 'desc'>('desc');
   // Order filtering by region
   const [orderRegionFilter, setOrderRegionFilter] = useState<string>('all');
+  // Order filtering by purchase status
+  const [orderPurchaseFilter, setOrderPurchaseFilter] = useState<'all' | 'all_purchased'>('all');
+  // Order filtering by source type
+  const [orderSourceFilter, setOrderSourceFilter] = useState<'all' | 'external' | 'warehouse'>('all');
+  // Store order items with purchase status
+  const [orderItemsMap, setOrderItemsMap] = useState<Map<string, any[]>>(new Map());
+  // Store order IDs that are already in shipments
+  const [ordersInShipments, setOrdersInShipments] = useState<Set<string>>(new Set());
   const [productCurrentPage, setProductCurrentPage] = useState(1);
   const [productsPerPage] = useState(12);
   const [productVariantsCount, setProductVariantsCount] = useState<{ [key: string]: number }>({});
@@ -445,6 +491,19 @@ export default function AdminScreen() {
       loadData();
     }
   }, [user, activeTab]);
+
+  // Reload data when screen comes into focus (e.g., returning from order details)
+  useFocusEffect(
+    React.useCallback(() => {
+      if (user && ['admin', 'manager'].includes(user.role)) {
+        // Always reload data when screen comes into focus, especially for orders tab
+        if (activeTab === 'orders') {
+          console.log('🔄 Reloading orders data on focus...');
+          loadData();
+        }
+      }
+    }, [user, activeTab])
+  );
 
   // Reset page when filters change
   useEffect(() => {
@@ -1544,10 +1603,102 @@ export default function AdminScreen() {
           console.log('📦 Admin: Orders with source_type:', data?.filter((o: any) => o.source_type === 'external').length || 0);
           setOrders(data || []);
           console.log('✅ Admin: Orders loaded:', data?.length || 0);
+          console.log('🔍 Admin: About to load order items, data:', data);
+          
+          // Load order items with purchase status
+          try {
+            console.log('🔍 Admin: Checking if we should load order items...', { dataExists: !!data, dataLength: data?.length });
+            if (data && data.length > 0) {
+            const orderIds = data.map((o: Order) => o.id);
+            console.log('🔍 Admin: Loading order items for', orderIds.length, 'orders');
+            
+            // Build query: order_id=in.(id1,id2,id3,...)
+            // This is more efficient than using or() for multiple IDs
+            const orderIdsParam = orderIds.join(',');
+            const itemsUrl = `${supabaseUrl}/rest/v1/order_items?order_id=in.(${orderIdsParam})&select=order_id,is_purchased`;
+            console.log('🔍 Admin: Fetching order items from:', itemsUrl);
+            
+            const itemsResponse = await fetch(
+              itemsUrl,
+              {
+                headers: {
+                  'apikey': supabaseKey || '',
+                  'Authorization': `Bearer ${accessToken}`,
+                  'Content-Type': 'application/json',
+                }
+              }
+            );
+            
+            if (itemsResponse.ok) {
+              const itemsData = await itemsResponse.json();
+              const itemsMap = new Map<string, any[]>();
+              
+              itemsData.forEach((item: any) => {
+                if (!itemsMap.has(item.order_id)) {
+                  itemsMap.set(item.order_id, []);
+                }
+                itemsMap.get(item.order_id)!.push(item);
+              });
+              
+              setOrderItemsMap(itemsMap);
+              console.log('✅ Admin: Order items loaded:', itemsMap.size, 'orders with items');
+              
+              // Log fully purchased orders for debugging
+              const fullyPurchasedCount = Array.from(itemsMap.keys()).filter(orderId => {
+                const items = itemsMap.get(orderId) || [];
+                return items.length > 0 && items.every((item: any) => item.is_purchased === true);
+              }).length;
+              console.log('✅ Admin: Fully purchased orders:', fullyPurchasedCount, 'out of', itemsMap.size);
+            } else {
+              const errorText = await itemsResponse.text();
+              console.error('❌ Admin: Error loading order items:', itemsResponse.status, errorText);
+            }
+            } else {
+              // No orders, clear the map
+              setOrderItemsMap(new Map());
+            }
+          } catch (error: any) {
+            console.error('❌ Admin: Error in order items loading:', error);
+          }
+          
+          // Load shipment_orders to track which orders are already in shipments
+          try {
+            if (data && data.length > 0) {
+              const orderIds = data.map((o: Order) => o.id);
+              const orderIdsParam = orderIds.join(',');
+              const shipmentOrdersUrl = `${supabaseUrl}/rest/v1/shipment_orders?order_id=in.(${orderIdsParam})&select=order_id`;
+              
+              const shipmentOrdersResponse = await fetch(shipmentOrdersUrl, {
+                headers: {
+                  'apikey': supabaseKey || '',
+                  'Authorization': `Bearer ${accessToken}`,
+                  'Content-Type': 'application/json',
+                }
+              });
+              
+              if (shipmentOrdersResponse.ok) {
+                const shipmentOrdersData = await shipmentOrdersResponse.json();
+                const ordersInShipmentsSet = new Set<string>(
+                  shipmentOrdersData.map((so: any) => so.order_id)
+                );
+                setOrdersInShipments(ordersInShipmentsSet);
+                console.log('✅ Admin: Orders in shipments loaded:', ordersInShipmentsSet.size);
+              } else {
+                console.error('❌ Admin: Error loading shipment orders:', await shipmentOrdersResponse.text());
+                setOrdersInShipments(new Set());
+              }
+            } else {
+              setOrdersInShipments(new Set());
+            }
+          } catch (error: any) {
+            console.error('❌ Admin: Error loading shipment orders:', error);
+            setOrdersInShipments(new Set());
+          }
         } else {
           const errorText = await response.text();
           console.error('❌ Admin: Error loading orders:', response.status, errorText);
           setOrders([]);
+          setOrdersInShipments(new Set());
         }
       } else if (activeTab === 'shipments') {
         const response = await fetch(`${supabaseUrl}/rest/v1/shipments?select=*&order=created_at.desc`, {
@@ -1564,6 +1715,8 @@ export default function AdminScreen() {
         } else {
           console.error('❌ Admin: Error loading shipments:', await response.text());
         }
+      } else if (activeTab === 'packages') {
+        await loadAllPackages();
       } else if (activeTab === 'inventory') {
         const response = await fetch(`${supabaseUrl}/rest/v1/inventory?select=*,products(*)&order=created_at.desc`, {
           headers: {
@@ -4294,16 +4447,65 @@ export default function AdminScreen() {
   };
 
   const createShipment = async () => {
-    if (!newShipment.cost || newShipment.order_ids.length === 0) {
-      sweetAlert.showError('خطأ', 'يرجى إدخال التكلفة واختيار الطلبات');
+    // Check if there are any available orders (not already in shipments)
+    const availableOrders = orders.filter(o => 
+      o.source_type === 'external' && isOrderFullyPurchased(o.id) && !isOrderInShipment(o.id)
+    );
+    
+    if (availableOrders.length === 0) {
+      sweetAlert.showError('خطأ', 'لا توجد طلبات متاحة للشحن. يجب أن تكون الطلبات من الخارج وتم شراؤها بالكامل.');
+      return;
+    }
+    
+    if (!newShipment.cost || newShipment.cost.trim() === '') {
+      sweetAlert.showError('خطأ', 'يرجى إدخال التكلفة');
+      return;
+    }
+    
+    if (newShipment.order_ids.length === 0) {
+      sweetAlert.showError('خطأ', 'يرجى اختيار طلب واحد على الأقل');
+      return;
+    }
+
+    // Validate manual shipment number if used
+    if (newShipment.use_manual_number && !newShipment.shipment_number.trim()) {
+      sweetAlert.showError('خطأ', 'يرجى إدخال رقم الشحنة');
       return;
     }
 
     setLoading(true);
     try {
-      // Generate shipment number
-      const { data: shipmentNumberData } = await supabase.rpc('generate_shipment_number');
-      const shipment_number = shipmentNumberData || `SHIP-${Date.now()}`;
+      // Generate or use manual shipment number
+      let shipment_number: string;
+      if (newShipment.use_manual_number && newShipment.shipment_number.trim()) {
+        shipment_number = newShipment.shipment_number.trim();
+        // Check if shipment number already exists
+        const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+        const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+        const accessToken = await getAccessToken();
+        
+        const checkResponse = await fetch(
+          `${supabaseUrl}/rest/v1/shipments?shipment_number=eq.${encodeURIComponent(shipment_number)}&select=id`,
+          {
+            headers: {
+              'apikey': supabaseKey || '',
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json',
+              'Prefer': 'return=representation',
+            }
+          }
+        );
+        
+        if (checkResponse.ok) {
+          const existing = await checkResponse.json();
+          if (existing && existing.length > 0) {
+            throw new Error('رقم الشحنة موجود بالفعل');
+          }
+        }
+      } else {
+        const { data: shipmentNumberData } = await supabase.rpc('generate_shipment_number');
+        shipment_number = shipmentNumberData || `SHIP-${Date.now()}`;
+      }
 
       // Create shipment
       const { data: shipment, error: shipmentError } = await supabase
@@ -4336,9 +4538,17 @@ export default function AdminScreen() {
         .update({ status: 'shipped_from_china' })
         .in('id', newShipment.order_ids);
 
+      // Update ordersInShipments set to reflect the new shipment
+      setOrdersInShipments(prev => {
+        const updated = new Set(prev);
+        newShipment.order_ids.forEach(orderId => updated.add(orderId));
+        return updated;
+      });
+
       sweetAlert.showSuccess('نجح', 'تم إنشاء الشحنة بنجاح', () => {
-      setNewShipment({ cost: '', order_ids: [] });
-      loadData();
+        setNewShipment({ cost: '', order_ids: [], shipment_number: '', use_manual_number: false });
+        setShowNewShipmentModal(false);
+        loadData();
       });
     } catch (error: any) {
       sweetAlert.showError('خطأ', error.message);
@@ -4350,21 +4560,946 @@ export default function AdminScreen() {
   const updateShipmentStatus = async (shipmentId: string, status: string, cost?: number, days?: number) => {
     setLoading(true);
     try {
-      const { error } = await supabase.functions.invoke('update-shipment-status', {
-        body: {
-          shipment_id: shipmentId,
-          status,
-          cost,
-          estimated_delivery_days: days,
-        },
-      });
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+      const accessToken = await getAccessToken();
 
-      if (error) throw error;
+      const updateData: any = { status };
+
+      // Update timestamps based on status
+      if (status === 'received_in_uae') {
+        updateData.received_in_uae_at = new Date().toISOString();
+      } else if (status === 'shipped_from_uae') {
+        updateData.shipped_from_uae_at = new Date().toISOString();
+      } else if (status === 'received_in_egypt') {
+        updateData.received_in_egypt_at = new Date().toISOString();
+      } else if (status === 'in_warehouse') {
+        updateData.entered_warehouse_at = new Date().toISOString();
+        if (days) {
+          updateData.estimated_delivery_days = days;
+        }
+        
+        // Update all orders in this shipment
+        const shipmentOrdersResponse = await fetch(
+          `${supabaseUrl}/rest/v1/shipment_orders?shipment_id=eq.${shipmentId}&select=order_id`,
+          {
+            headers: {
+              'apikey': supabaseKey || '',
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json',
+            }
+          }
+        );
+
+        if (shipmentOrdersResponse.ok) {
+          const shipmentOrders = await shipmentOrdersResponse.json();
+          if (shipmentOrders && shipmentOrders.length > 0) {
+            const orderIds = shipmentOrders.map((so: any) => so.order_id);
+            
+            // Update orders status
+            await fetch(
+              `${supabaseUrl}/rest/v1/orders?id=in.(${orderIds.join(',')})`,
+              {
+                method: 'PATCH',
+                headers: {
+                  'apikey': supabaseKey || '',
+                  'Authorization': `Bearer ${accessToken}`,
+                  'Content-Type': 'application/json',
+                  'Prefer': 'return=minimal',
+                },
+                body: JSON.stringify({
+                  status: 'in_warehouse',
+                  estimated_delivery_days: days || 3
+                })
+              }
+            );
+          }
+        }
+      }
+
+      if (cost) {
+        updateData.cost = cost;
+      }
+
+      // Update shipment status
+      const response = await fetch(
+        `${supabaseUrl}/rest/v1/shipments?id=eq.${shipmentId}`,
+        {
+          method: 'PATCH',
+          headers: {
+            'apikey': supabaseKey || '',
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=representation',
+          },
+          body: JSON.stringify(updateData)
+        }
+      );
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`فشل تحديث حالة الشحنة: ${errorText}`);
+      }
+
       sweetAlert.showSuccess('نجح', 'تم تحديث حالة الشحنة', () => {
-      loadData();
+        loadData();
+      });
+    } catch (error: any) {
+      console.error('Error updating shipment status:', error);
+      sweetAlert.showError('خطأ', error.message || 'فشل تحديث حالة الشحنة');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Load shipment orders
+  const loadShipmentOrders = async (shipmentId: string) => {
+    try {
+      setLoading(true);
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+      const accessToken = await getAccessToken();
+
+      // Get shipment orders
+      const response = await fetch(
+        `${supabaseUrl}/rest/v1/shipment_orders?shipment_id=eq.${shipmentId}&select=order_id,orders(*)`,
+        {
+          headers: {
+            'apikey': supabaseKey || '',
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          }
+        }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        const orders = data.map((item: any) => item.orders).filter(Boolean);
+        setShipmentOrders(orders);
+      }
+    } catch (error: any) {
+      console.error('Error loading shipment orders:', error);
+      sweetAlert.showError('خطأ', 'فشل تحميل طلبات الشحنة');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Load order items
+  const loadOrderItems = async (orderId: string) => {
+    try {
+      setLoading(true);
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+      const accessToken = await getAccessToken();
+
+      // Get order items with products
+      const itemsResponse = await fetch(
+        `${supabaseUrl}/rest/v1/order_items?order_id=eq.${orderId}&select=*,product_variants(*),products(*)`,
+        {
+          headers: {
+            'apikey': supabaseKey || '',
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          }
+        }
+      );
+
+      if (itemsResponse.ok) {
+        const itemsData = await itemsResponse.json();
+        setOrderItems(itemsData);
+      }
+    } catch (error: any) {
+      console.error('Error loading order items:', error);
+      sweetAlert.showError('خطأ', 'فشل تحميل منتجات الطلب');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Get aggregated products from all orders in shipment
+  const getAggregatedProducts = () => {
+    const productsMap = new Map<string, {
+      product: any;
+      variant: any;
+      totalQuantity: number;
+      orderItems: any[];
+    }>();
+
+    orderItems.forEach((item: any) => {
+      const key = item.variant_id ? `${item.product_id}-${item.variant_id}` : item.product_id;
+      const existing = productsMap.get(key);
+      
+      if (existing) {
+        existing.totalQuantity += item.quantity;
+        existing.orderItems.push(item);
+      } else {
+        productsMap.set(key, {
+          product: item.products || item.product,
+          variant: item.product_variants || item.variant,
+          totalQuantity: item.quantity,
+          orderItems: [item],
+        });
+      }
+    });
+
+    return Array.from(productsMap.values());
+  };
+
+  // Handle shipment click
+  const handleShipmentClick = async (shipment: Shipment) => {
+    setSelectedShipment(shipment);
+    setShowShipmentDetailsModal(true);
+    await loadShipmentOrders(shipment.id);
+    // Load packages for this shipment
+    const shipmentPackages = await loadPackages(shipment.id);
+    setPackages(shipmentPackages);
+  };
+
+  // Handle order click
+  const handleOrderClick = async (order: Order) => {
+    setSelectedOrder(order);
+    setShowOrderDetailsModal(true);
+    await loadOrderItems(order.id);
+  };
+
+  // Check if all items in an order are purchased
+  const isOrderFullyPurchased = (orderId: string): boolean => {
+    // Find the order to check its source_type
+    const order = orders.find(o => o.id === orderId);
+    
+    // Orders from warehouse don't need purchase, so they should not be considered as "purchased"
+    if (order && order.source_type === 'warehouse') {
+      return false;
+    }
+    
+    const items = orderItemsMap.get(orderId) || [];
+    if (items.length === 0) {
+      // If no items in map, return false (order might not have items loaded yet)
+      return false;
+    }
+    // Check if all items are purchased (is_purchased === true)
+    // Only for external orders
+    const allPurchased = items.every((item: any) => item.is_purchased === true);
+    return allPurchased;
+  };
+
+  // Check if an order is already in a shipment
+  const isOrderInShipment = (orderId: string): boolean => {
+    return ordersInShipments.has(orderId);
+  };
+
+  // Handle show products summary
+  const handleShowProductsSummary = async (shipment: Shipment) => {
+    setSelectedShipment(shipment);
+    setLoading(true);
+    
+    try {
+      // Load shipment orders first
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+      const accessToken = await getAccessToken();
+
+      // Get shipment orders
+      const response = await fetch(
+        `${supabaseUrl}/rest/v1/shipment_orders?shipment_id=eq.${shipment.id}&select=order_id,orders(*)`,
+        {
+          headers: {
+            'apikey': supabaseKey || '',
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          }
+        }
+      );
+
+      if (!response.ok) throw new Error('فشل تحميل الطلبات');
+
+      const data = await response.json();
+      const orders = data.map((item: any) => item.orders).filter(Boolean);
+      setShipmentOrders(orders);
+      
+      // Load all order items from all orders
+      const allItems: any[] = [];
+      
+      for (const order of orders) {
+        const itemsResponse = await fetch(
+          `${supabaseUrl}/rest/v1/order_items?order_id=eq.${order.id}&select=*,product_variants(*),products(*)`,
+          {
+            headers: {
+              'apikey': supabaseKey || '',
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json',
+            }
+          }
+        );
+        
+        if (itemsResponse.ok) {
+          const itemsData = await itemsResponse.json();
+          allItems.push(...itemsData);
+        }
+      }
+      
+      setOrderItems(allItems);
+      
+      // Load images for products and variants
+      const imagesMap = new Map<string, string>();
+      const productIds = new Set<string>();
+      const variantIds = new Set<string>();
+      
+      allItems.forEach((item: any) => {
+        if (item.product_id) productIds.add(item.product_id);
+        if (item.variant_id) variantIds.add(item.variant_id);
+      });
+      
+      // Load primary product images
+      if (productIds.size > 0) {
+        const productIdsArray = Array.from(productIds);
+        const productIdsParam = productIdsArray.map(id => `"${id}"`).join(',');
+        const productImagesResponse = await fetch(
+          `${supabaseUrl}/rest/v1/product_images?product_id=in.(${productIdsParam})&variant_id=is.null&is_primary=eq.true&order=display_order.asc&limit=100`,
+          {
+            headers: {
+              'apikey': supabaseKey || '',
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json',
+            }
+          }
+        );
+        
+        if (productImagesResponse.ok) {
+          const productImagesData = await productImagesResponse.json();
+          productImagesData.forEach((img: any) => {
+            if (!imagesMap.has(img.product_id)) {
+              imagesMap.set(img.product_id, img.image_url);
+            }
+          });
+        }
+        
+        // If no primary image, get first available image
+        const allProductImagesResponse = await fetch(
+          `${supabaseUrl}/rest/v1/product_images?product_id=in.(${productIdsParam})&variant_id=is.null&order=display_order.asc&limit=100`,
+          {
+            headers: {
+              'apikey': supabaseKey || '',
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json',
+            }
+          }
+        );
+        
+        if (allProductImagesResponse.ok) {
+          const allProductImagesData = await allProductImagesResponse.json();
+          allProductImagesData.forEach((img: any) => {
+            if (!imagesMap.has(img.product_id)) {
+              imagesMap.set(img.product_id, img.image_url);
+            }
+          });
+        }
+      }
+      
+      // Load variant images
+      if (variantIds.size > 0) {
+        const variantIdsArray = Array.from(variantIds);
+        const variantIdConditions = variantIdsArray.map(id => `variant_id.eq.${id}`).join(',');
+        const variantImagesResponse = await fetch(
+          `${supabaseUrl}/rest/v1/product_images?or=(${variantIdConditions})&order=display_order.asc,is_primary.desc&limit=100`,
+          {
+            headers: {
+              'apikey': supabaseKey || '',
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json',
+            }
+          }
+        );
+        
+        if (variantImagesResponse.ok) {
+          const variantImagesData = await variantImagesResponse.json();
+          variantImagesData.forEach((img: any) => {
+            if (img.variant_id) {
+              const key = `${img.product_id}-${img.variant_id}`;
+              if (!imagesMap.has(key)) {
+                imagesMap.set(key, img.image_url);
+              }
+            }
+          });
+        }
+      }
+      
+      setProductsSummaryImages(imagesMap);
+      setShowProductsSummaryModal(true);
+    } catch (error: any) {
+      console.error('Error loading products summary:', error);
+      sweetAlert.showError('خطأ', error.message || 'فشل تحميل المنتجات');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Load all packages
+  const loadAllPackages = async () => {
+    try {
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+      const accessToken = await getAccessToken();
+
+      const response = await fetch(
+        `${supabaseUrl}/rest/v1/packages?select=*,shipment:shipments(*),package_orders(order_id,orders(*))&order=created_at.desc`,
+        {
+          headers: {
+            'apikey': supabaseKey || '',
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          }
+        }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        // Transform the data to include orders array
+        const packagesWithOrders = data.map((pkg: any) => ({
+          ...pkg,
+          orders: pkg.package_orders?.map((po: any) => po.orders).filter(Boolean) || [],
+        }));
+        setAllPackages(packagesWithOrders);
+        console.log('✅ Admin: All packages loaded:', packagesWithOrders.length);
+      } else {
+        console.error('❌ Admin: Error loading all packages:', await response.text());
+        setAllPackages([]);
+      }
+    } catch (error) {
+      console.error('Error loading all packages:', error);
+      setAllPackages([]);
+    }
+  };
+
+  // Load packages for a shipment
+  const loadPackages = async (shipmentId: string) => {
+    try {
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+      const accessToken = await getAccessToken();
+
+      const response = await fetch(
+        `${supabaseUrl}/rest/v1/packages?shipment_id=eq.${shipmentId}&select=*,package_orders(order_id,orders(*))&order=created_at.desc`,
+        {
+          headers: {
+            'apikey': supabaseKey || '',
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          }
+        }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        // Transform the data to include orders array
+        const packagesWithOrders = data.map((pkg: any) => ({
+          ...pkg,
+          orders: pkg.package_orders?.map((po: any) => po.orders).filter(Boolean) || [],
+        }));
+        return packagesWithOrders;
+      }
+      return [];
+    } catch (error) {
+      console.error('Error loading packages:', error);
+      return [];
+    }
+  };
+
+  // Create package from shipment
+  const createPackage = async (shipmentId: string) => {
+    // Validate package number
+    const packageNumber = newPackage.package_number?.trim();
+    if (!packageNumber || packageNumber.length === 0) {
+      sweetAlert.showError('خطأ', 'يرجى إدخال رقم الطرد');
+      return;
+    }
+
+    // Validate orders selection
+    if (!newPackage.order_ids || newPackage.order_ids.length === 0) {
+      sweetAlert.showError('خطأ', 'يرجى اختيار طلب واحد على الأقل');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+      const accessToken = await getAccessToken();
+
+      // Check if package number already exists
+      const checkResponse = await fetch(
+        `${supabaseUrl}/rest/v1/packages?package_number=eq.${encodeURIComponent(packageNumber)}&select=id`,
+        {
+          headers: {
+            'apikey': supabaseKey || '',
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          }
+        }
+      );
+
+      if (checkResponse.ok) {
+        const existing = await checkResponse.json();
+        if (existing && existing.length > 0) {
+          setLoading(false);
+          sweetAlert.showError('خطأ', 'رقم الطرد موجود بالفعل');
+          return;
+        }
+      } else {
+        // If check fails, log but continue (database constraint will catch duplicates)
+        console.warn('⚠️ Failed to check package number existence:', await checkResponse.text());
+      }
+
+      // Create package
+      const { data: packageData, error: packageError } = await supabase
+        .from('packages')
+        .insert({
+          package_number: packageNumber,
+          shipment_id: shipmentId,
+          status: 'created',
+          created_by: user?.id || null,
+        })
+        .select()
+        .single();
+
+      if (packageError) throw packageError;
+
+      // Link orders to package
+      const packageOrders = newPackage.order_ids.map((order_id) => ({
+        package_id: packageData.id,
+        order_id,
+      }));
+
+      const { error: linkError } = await supabase
+        .from('package_orders')
+        .insert(packageOrders);
+
+      if (linkError) throw linkError;
+
+      sweetAlert.showSuccess('نجح', 'تم إنشاء الطرد بنجاح', () => {
+        setNewPackage({ package_number: '', order_ids: [] });
+        setShowCreatePackageModal(false);
+        loadData();
       });
     } catch (error: any) {
       sweetAlert.showError('خطأ', error.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Unpack package and create internal shipment
+  const unpackPackage = async (packageId: string) => {
+    if (!newInternalShipment.shipment_number.trim()) {
+      sweetAlert.showError('خطأ', 'يرجى إدخال رقم الشحنة الداخلية');
+      return;
+    }
+
+    if (newInternalShipment.order_ids.length === 0) {
+      sweetAlert.showError('خطأ', 'يرجى اختيار طلب واحد على الأقل');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+      const accessToken = await getAccessToken();
+
+      // Check if internal shipment number already exists
+      const checkResponse = await fetch(
+        `${supabaseUrl}/rest/v1/internal_shipments?shipment_number=eq.${encodeURIComponent(newInternalShipment.shipment_number.trim())}&select=id`,
+        {
+          headers: {
+            'apikey': supabaseKey || '',
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          }
+        }
+      );
+
+      if (checkResponse.ok) {
+        const existing = await checkResponse.json();
+        if (existing && existing.length > 0) {
+          throw new Error('رقم الشحنة الداخلية موجود بالفعل');
+        }
+      }
+
+      // Create internal shipment
+      const { data: internalShipmentData, error: shipmentError } = await supabase
+        .from('internal_shipments')
+        .insert({
+          shipment_number: newInternalShipment.shipment_number.trim(),
+          status: 'pending',
+          shipping_company: newInternalShipment.shipping_company.trim() || null,
+          tracking_number: newInternalShipment.tracking_number.trim() || null,
+          cost: parseFloat(newInternalShipment.cost) || 0,
+        })
+        .select()
+        .single();
+
+      if (shipmentError) throw shipmentError;
+
+      // Link orders to internal shipment
+      const internalShipmentOrders = newInternalShipment.order_ids.map((order_id) => ({
+        internal_shipment_id: internalShipmentData.id,
+        order_id,
+      }));
+
+      const { error: linkError } = await supabase
+        .from('internal_shipment_orders')
+        .insert(internalShipmentOrders);
+
+      if (linkError) throw linkError;
+
+      // Link package to internal shipment
+      const { error: packageLinkError } = await supabase
+        .from('package_internal_shipments')
+        .insert({
+          package_id: packageId,
+          internal_shipment_id: internalShipmentData.id,
+        });
+
+      if (packageLinkError) throw packageLinkError;
+
+      // Update package status to unpacked
+      const { error: updateError } = await supabase
+        .from('packages')
+        .update({
+          status: 'unpacked',
+          unpacked_at: new Date().toISOString(),
+        })
+        .eq('id', packageId);
+
+      if (updateError) throw updateError;
+
+      sweetAlert.showSuccess('نجح', 'تم تفكيك الطرد وإنشاء الشحنة الداخلية بنجاح', () => {
+        setNewInternalShipment({ shipment_number: '', shipping_company: '', tracking_number: '', cost: '', order_ids: [] });
+        setShowUnpackPackageModal(false);
+        setSelectedPackage(null);
+        loadData();
+      });
+    } catch (error: any) {
+      sweetAlert.showError('خطأ', error.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Delete shipment
+  const deleteShipment = async (shipmentId: string, shipmentNumber: string) => {
+    setLoading(true);
+    try {
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+      const accessToken = await getAccessToken();
+
+      // حذف shipment_orders أولاً (CASCADE سيتولى ذلك تلقائياً، لكن للتأكد)
+      const shipmentOrdersResponse = await fetch(
+        `${supabaseUrl}/rest/v1/shipment_orders?shipment_id=eq.${shipmentId}`,
+        {
+          method: 'DELETE',
+          headers: {
+            'apikey': supabaseKey || '',
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=minimal',
+          }
+        }
+      );
+
+      // حذف الشحنة (CASCADE سيحذف shipment_orders تلقائياً)
+      const deleteResponse = await fetch(
+        `${supabaseUrl}/rest/v1/shipments?id=eq.${shipmentId}`,
+        {
+          method: 'DELETE',
+          headers: {
+            'apikey': supabaseKey || '',
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=minimal',
+          }
+        }
+      );
+
+      if (deleteResponse.ok) {
+        // Remove from state immediately
+        setShipments(prevShipments => prevShipments.filter(s => s.id !== shipmentId));
+        setTimeout(() => {
+          loadData();
+        }, 500);
+        sweetAlert.showSuccess('نجح', `تم حذف الشحنة #${shipmentNumber} بنجاح`);
+      } else {
+        const errorText = await deleteResponse.text();
+        throw new Error(errorText || 'فشل حذف الشحنة');
+      }
+    } catch (error: any) {
+      sweetAlert.showError('خطأ', error.message || 'فشل حذف الشحنة');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Delete multiple shipments
+  const deleteSelectedShipments = async () => {
+    setLoading(true);
+    try {
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+      const accessToken = await getAccessToken();
+
+      const shipmentIds = Array.from(selectedShipments);
+      const shipmentIdConditions = shipmentIds.map(id => `id.eq.${id}`).join(',');
+
+      // حذف الشحنات (CASCADE سيحذف shipment_orders تلقائياً)
+      const deleteResponse = await fetch(
+        `${supabaseUrl}/rest/v1/shipments?or=(${shipmentIdConditions})`,
+        {
+          method: 'DELETE',
+          headers: {
+            'apikey': supabaseKey || '',
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=minimal',
+          }
+        }
+      );
+
+      if (deleteResponse.ok) {
+        const deletedCount = selectedShipments.size;
+        setSelectedShipments(new Set());
+        setIsShipmentSelectionMode(false);
+        setShipments(prevShipments => prevShipments.filter(s => !shipmentIds.includes(s.id)));
+        setTimeout(() => {
+          loadData();
+        }, 500);
+        sweetAlert.showSuccess('نجح', `تم حذف ${deletedCount} شحنة بنجاح`);
+      } else {
+        const errorText = await deleteResponse.text();
+        throw new Error(errorText || 'فشل حذف الشحنات');
+      }
+    } catch (error: any) {
+      sweetAlert.showError('خطأ', error.message || 'فشل حذف الشحنات');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Delete multiple packages
+  const deleteSelectedPackages = async () => {
+    setLoading(true);
+    try {
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+      const accessToken = await getAccessToken();
+
+      const packageIds = Array.from(selectedPackages);
+      const packageIdConditions = packageIds.map(id => `id.eq.${id}`).join(',');
+
+      // حذف الطرود (CASCADE سيحذف package_orders تلقائياً)
+      const deleteResponse = await fetch(
+        `${supabaseUrl}/rest/v1/packages?or=(${packageIdConditions})`,
+        {
+          method: 'DELETE',
+          headers: {
+            'apikey': supabaseKey || '',
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=minimal',
+          }
+        }
+      );
+
+      if (deleteResponse.ok) {
+        const deletedCount = selectedPackages.size;
+        setSelectedPackages(new Set());
+        setIsPackageSelectionMode(false);
+        setAllPackages(prevPackages => prevPackages.filter(p => !packageIds.includes(p.id)));
+        setTimeout(() => {
+          loadAllPackages();
+        }, 500);
+        sweetAlert.showSuccess('نجح', `تم حذف ${deletedCount} طرد بنجاح`);
+      } else {
+        const errorText = await deleteResponse.text();
+        throw new Error(errorText || 'فشل حذف الطرود');
+      }
+    } catch (error: any) {
+      sweetAlert.showError('خطأ', error.message || 'فشل حذف الطرود');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Delete package
+  const deletePackage = async (packageId: string, packageNumber: string) => {
+    setLoading(true);
+    try {
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+      const accessToken = await getAccessToken();
+
+      // حذف package_orders أولاً (CASCADE سيتولى ذلك تلقائياً)
+      const packageOrdersResponse = await fetch(
+        `${supabaseUrl}/rest/v1/package_orders?package_id=eq.${packageId}`,
+        {
+          method: 'DELETE',
+          headers: {
+            'apikey': supabaseKey || '',
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=minimal',
+          }
+        }
+      );
+
+      // حذف الطرد (CASCADE سيحذف package_orders تلقائياً)
+      const deleteResponse = await fetch(
+        `${supabaseUrl}/rest/v1/packages?id=eq.${packageId}`,
+        {
+          method: 'DELETE',
+          headers: {
+            'apikey': supabaseKey || '',
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=minimal',
+          }
+        }
+      );
+
+      if (deleteResponse.ok) {
+        // Remove from state immediately
+        setAllPackages(prevPackages => prevPackages.filter(p => p.id !== packageId));
+        setTimeout(() => {
+          loadAllPackages();
+        }, 500);
+        sweetAlert.showSuccess('نجح', `تم حذف الطرد #${packageNumber} بنجاح`);
+      } else {
+        const errorText = await deleteResponse.text();
+        throw new Error(errorText || 'فشل حذف الطرد');
+      }
+    } catch (error: any) {
+      sweetAlert.showError('خطأ', error.message || 'فشل حذف الطرد');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Update package status
+  const updatePackageStatus = async (packageId: string, status: Package['status']) => {
+    setLoading(true);
+    try {
+      const updateData: any = { status };
+      
+      if (status === 'shipped_to_egypt') {
+        updateData.shipped_to_egypt_at = new Date().toISOString();
+      } else if (status === 'received_in_egypt') {
+        updateData.received_in_egypt_at = new Date().toISOString();
+      }
+
+      // Update package status
+      const { error: packageError } = await supabase
+        .from('packages')
+        .update(updateData)
+        .eq('id', packageId);
+
+      if (packageError) throw packageError;
+
+      // Get package with orders using fetch (same method as loadAllPackages)
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+      const accessToken = await getAccessToken();
+
+      const packageResponse = await fetch(
+        `${supabaseUrl}/rest/v1/packages?id=eq.${packageId}&select=*,package_orders(order_id,orders(id,order_number,user_id,status))&limit=1`,
+        {
+          headers: {
+            'apikey': supabaseKey || '',
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          }
+        }
+      );
+
+      if (!packageResponse.ok) {
+        throw new Error('فشل جلب بيانات الطرد');
+      }
+
+      const packageDataArray = await packageResponse.json();
+      const packageData = packageDataArray[0];
+
+      if (!packageData) {
+        throw new Error('الطرد غير موجود');
+      }
+
+      // Extract orders from the response
+      const orders = packageData?.package_orders?.map((po: any) => po.orders).filter(Boolean) || [];
+      const orderIds = orders.map((order: any) => order.id);
+
+      if (orderIds.length > 0) {
+        // Update orders status based on package status
+        let newOrderStatus: string | null = null;
+        let notifications: any[] = [];
+
+        if (status === 'shipped_to_egypt') {
+          // Update orders to shipped_from_uae status
+          newOrderStatus = 'shipped_from_uae';
+          
+          // Create notifications for customers
+          notifications = orders.map((order: any) => ({
+            user_id: order.user_id,
+            title: 'تم شحن طلبك',
+            message: `تم شحن طلبك ${order.order_number} من الإمارات إلى مصر في الطرد #${packageData.package_number}`,
+            type: 'shipment' as const,
+          }));
+        } else if (status === 'received_in_egypt') {
+          // Update orders to received_in_egypt status
+          newOrderStatus = 'received_in_egypt';
+          
+          // Create notifications for customers
+          notifications = orders.map((order: any) => ({
+            user_id: order.user_id,
+            title: 'وصل طلبك إلى مصر',
+            message: `وصل طلبك ${order.order_number} إلى مصر في الطرد #${packageData.package_number}. سيتم تفكيك الطرد قريباً`,
+            type: 'shipment' as const,
+          }));
+        }
+
+        // Update orders status if needed
+        if (newOrderStatus) {
+          const { error: ordersError } = await supabase
+            .from('orders')
+            .update({ status: newOrderStatus })
+            .in('id', orderIds);
+
+          if (ordersError) throw ordersError;
+        }
+
+        // Create notifications for customers
+        if (notifications.length > 0) {
+          const { error: notificationsError } = await supabase
+            .from('notifications')
+            .insert(notifications);
+
+          if (notificationsError) {
+            console.error('Error creating notifications:', notificationsError);
+            // Don't throw error for notifications, just log it
+          }
+        }
+      }
+
+      const successMessage = status === 'shipped_to_egypt' 
+        ? `تم تحديث حالة الطرد وتم شحن ${orderIds.length} طلب إلى مصر`
+        : status === 'received_in_egypt'
+        ? `تم تحديث حالة الطرد وتم استلام ${orderIds.length} طلب في مصر`
+        : 'تم تحديث حالة الطرد';
+
+      sweetAlert.showSuccess('نجح', successMessage, () => {
+        loadData();
+      });
+    } catch (error: any) {
+      console.error('Error updating package status:', error);
+      sweetAlert.showError('خطأ', error.message || 'فشل تحديث حالة الطرد');
     } finally {
       setLoading(false);
     }
@@ -4383,6 +5518,11 @@ export default function AdminScreen() {
       delivered: 'تم التسليم',
       cancelled: 'ملغاة',
       completed: 'مكتملة',
+      // Package statuses
+      created: 'تم الإنشاء',
+      shipped_to_egypt: 'شُحن إلى مصر',
+      received_in_egypt: 'وصل مصر',
+      unpacked: 'تم التفكيك',
     };
     return statusMap[status] || status;
   };
@@ -4400,6 +5540,11 @@ export default function AdminScreen() {
       delivered: { backgroundColor: '#10B981' },
       cancelled: { backgroundColor: '#EF4444' },
       completed: { backgroundColor: '#10B981' },
+      // Package statuses
+      created: { backgroundColor: '#3B82F6' },
+      shipped_to_egypt: { backgroundColor: '#8B5CF6' },
+      received_in_egypt: { backgroundColor: '#10B981' },
+      unpacked: { backgroundColor: '#6B7280' },
     };
     return colorMap[status] || { backgroundColor: '#6B7280' };
   };
@@ -4554,6 +5699,19 @@ export default function AdminScreen() {
             activeTab === 'shipments' && isDarkMode && styles.activeTabTextDark
           ]}>
             الشحنات
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.tab, activeTab === 'packages' && styles.activeTab]}
+          onPress={() => setActiveTab('packages')}
+        >
+          <Text style={[
+            styles.tabText, 
+            isDarkMode && styles.tabTextDark,
+            activeTab === 'packages' && styles.activeTabText,
+            activeTab === 'packages' && isDarkMode && styles.activeTabTextDark
+          ]}>
+            الطرود
           </Text>
         </TouchableOpacity>
         <TouchableOpacity
@@ -4922,22 +6080,83 @@ export default function AdminScreen() {
               </ScrollView>
             </View>
 
-            {/* All Orders - جميع الطلبات */}
+            {/* Source Type Filter - فلتر حسب المصدر */}
+            <View style={styles.filterSection}>
+              <Text style={styles.filterLabel}>فلتر حسب المصدر:</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.regionFilterContainer}>
+                <TouchableOpacity
+                  style={[styles.regionFilterButton, orderSourceFilter === 'all' && styles.regionFilterButtonActive]}
+                  onPress={() => setOrderSourceFilter('all')}
+                >
+                  <Text style={[styles.regionFilterText, orderSourceFilter === 'all' && styles.regionFilterTextActive]}>
+                    الكل ({orders.length})
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.regionFilterButton, orderSourceFilter === 'external' && styles.regionFilterButtonActive]}
+                  onPress={() => setOrderSourceFilter('external')}
+                >
+                  <Text style={[styles.regionFilterText, orderSourceFilter === 'external' && styles.regionFilterTextActive]}>
+                    من الخارج ({orders.filter(o => o.source_type === 'external').length})
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.regionFilterButton, orderSourceFilter === 'warehouse' && styles.regionFilterButtonActive]}
+                  onPress={() => setOrderSourceFilter('warehouse')}
+                >
+                  <Text style={[styles.regionFilterText, orderSourceFilter === 'warehouse' && styles.regionFilterTextActive]}>
+                    من المخزون ({orders.filter(o => o.source_type === 'warehouse').length})
+                  </Text>
+                </TouchableOpacity>
+              </ScrollView>
+            </View>
+
+            {/* Purchase Status Filter - فلتر حسب حالة الشراء */}
+            <View style={styles.filterSection}>
+              <Text style={styles.filterLabel}>فلتر حسب حالة الشراء:</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.regionFilterContainer}>
+                <TouchableOpacity
+                  style={[styles.regionFilterButton, orderPurchaseFilter === 'all' && styles.regionFilterButtonActive]}
+                  onPress={() => setOrderPurchaseFilter('all')}
+                >
+                  <Text style={[styles.regionFilterText, orderPurchaseFilter === 'all' && styles.regionFilterTextActive]}>
+                    الكل ({orders.length})
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.regionFilterButton, orderPurchaseFilter === 'all_purchased' && styles.regionFilterButtonActive, { backgroundColor: orderPurchaseFilter === 'all_purchased' ? '#10B981' : '#F5F5F5' }]}
+                  onPress={() => setOrderPurchaseFilter('all_purchased')}
+                >
+                  <Ionicons name="checkmark-circle" size={16} color={orderPurchaseFilter === 'all_purchased' ? '#fff' : '#10B981'} style={{ marginRight: 4 }} />
+                  <Text style={[styles.regionFilterText, orderPurchaseFilter === 'all_purchased' && styles.regionFilterTextActive]}>
+                    تم شراؤها كلها ({orders.filter(o => isOrderFullyPurchased(o.id)).length})
+                  </Text>
+                </TouchableOpacity>
+              </ScrollView>
+            </View>
+
+            {/* Orders - الطلبات */}
             {orders && orders.filter(o => {
               const matchesRegion = orderRegionFilter === 'all' || 
                 (orderRegionFilter === 'no-region' ? !o.delivery_region : o.delivery_region === orderRegionFilter);
-              return matchesRegion;
+              const matchesSource = orderSourceFilter === 'all' || o.source_type === orderSourceFilter;
+              const matchesPurchase = orderPurchaseFilter === 'all' || 
+                (orderPurchaseFilter === 'all_purchased' && isOrderFullyPurchased(o.id));
+              return matchesRegion && matchesSource && matchesPurchase;
             }).length > 0 && (
               <View style={{ marginBottom: 30 }}>
                 <View style={styles.sectionHeader}>
                   <Ionicons name="list-outline" size={20} color="#EE1C47" />
-                  <Text style={styles.sectionHeaderText}>جميع الطلبات</Text>
+                  <Text style={styles.sectionHeaderText}>الطلبات</Text>
                   <View style={styles.sectionHeaderBadge}>
                     <Text style={styles.sectionHeaderBadgeText}>
                       {orders.filter(o => {
                         const matchesRegion = orderRegionFilter === 'all' || 
                           (orderRegionFilter === 'no-region' ? !o.delivery_region : o.delivery_region === orderRegionFilter);
-                        return matchesRegion;
+                        const matchesSource = orderSourceFilter === 'all' || o.source_type === orderSourceFilter;
+                        const matchesPurchase = orderPurchaseFilter === 'all' || 
+                          (orderPurchaseFilter === 'all_purchased' && isOrderFullyPurchased(o.id));
+                        return matchesRegion && matchesSource && matchesPurchase;
                       }).length}
                     </Text>
                   </View>
@@ -4946,18 +6165,27 @@ export default function AdminScreen() {
                   {orders.filter(o => {
                     const matchesRegion = orderRegionFilter === 'all' || 
                       (orderRegionFilter === 'no-region' ? !o.delivery_region : o.delivery_region === orderRegionFilter);
-                    return matchesRegion;
+                    const matchesSource = orderSourceFilter === 'all' || o.source_type === orderSourceFilter;
+                    const matchesPurchase = orderPurchaseFilter === 'all' || 
+                      (orderPurchaseFilter === 'all_purchased' && isOrderFullyPurchased(o.id));
+                    return matchesRegion && matchesSource && matchesPurchase;
                   }).map((order) => {
                 const isEditing = editingOrderId === order.id;
                 const quickEdit = quickEditOrder[order.id] || {};
                 const displayStatus = isEditing ? (quickEdit.status || order.status) : order.status;
 
                 const isSelected = selectedOrders.has(order.id);
+                const isFullyPurchased = isOrderFullyPurchased(order.id);
+                const isInShipment = isOrderInShipment(order.id);
                 
                 return (
                   <TouchableOpacity 
                     key={order.id} 
-                    style={[styles.gridCard, isSelected && styles.gridCardSelected]}
+                    style={[
+                      styles.gridCard, 
+                      isSelected && styles.gridCardSelected,
+                      isFullyPurchased && styles.gridCardPurchased
+                    ]}
                     onPress={() => {
                       if (isSelectionMode) {
                         const newSelected = new Set(selectedOrders);
@@ -4982,7 +6210,21 @@ export default function AdminScreen() {
                     )}
                     <View style={styles.cardHeader}>
                       <View style={{ flex: 1 }}>
-                        <Text style={styles.gridCardTitle}>#{order.order_number}</Text>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                          <Text style={styles.gridCardTitle}>#{order.order_number}</Text>
+                          {isFullyPurchased && (
+                            <View style={styles.purchasedBadge}>
+                              <Ionicons name="checkmark-circle" size={14} color="#10B981" />
+                              <Text style={styles.purchasedBadgeText}>تم الشراء</Text>
+                            </View>
+                          )}
+                          {isInShipment && (
+                            <View style={[styles.purchasedBadge, { backgroundColor: '#3B82F6' }]}>
+                              <Ionicons name="cube" size={14} color="#fff" />
+                              <Text style={[styles.purchasedBadgeText, { color: '#fff' }]}>في شحنة</Text>
+                            </View>
+                          )}
+                        </View>
                         <Text style={styles.gridCardMetaText}>
                           {new Date(order.created_at).toLocaleDateString('ar-EG')}
                         </Text>
@@ -5106,225 +6348,6 @@ export default function AdminScreen() {
               </View>
             )}
 
-            {/* Warehouse Orders - الطلبات من المخزون الداخلي */}
-            {orders && orders.filter(o => {
-              const matchesSource = o.source_type === 'warehouse' || !o.source_type;
-              const matchesRegion = orderRegionFilter === 'all' || 
-                (orderRegionFilter === 'no-region' ? !o.delivery_region : o.delivery_region === orderRegionFilter);
-              return matchesSource && matchesRegion;
-            }).length > 0 && (
-              <View style={{ marginBottom: 30 }}>
-                <View style={styles.sectionHeader}>
-                  <Ionicons name="cube-outline" size={20} color="#10B981" />
-                  <Text style={styles.sectionHeaderText}>الطلبات من المخزون الداخلي</Text>
-                  <View style={styles.sectionHeaderBadge}>
-                    <Text style={styles.sectionHeaderBadgeText}>
-                      {orders.filter(o => {
-                        const matchesSource = o.source_type === 'warehouse' || !o.source_type;
-                        const matchesRegion = orderRegionFilter === 'all' || 
-                          (orderRegionFilter === 'no-region' ? !o.delivery_region : o.delivery_region === orderRegionFilter);
-                        return matchesSource && matchesRegion;
-                      }).length}
-                    </Text>
-                  </View>
-                </View>
-                <View style={styles.gridContainer}>
-                  {orders.filter(o => {
-                    const matchesSource = o.source_type === 'warehouse' || !o.source_type;
-                    const matchesRegion = orderRegionFilter === 'all' || 
-                      (orderRegionFilter === 'no-region' ? !o.delivery_region : o.delivery_region === orderRegionFilter);
-                    return matchesSource && matchesRegion;
-                  }).map((order) => {
-                const isEditing = editingOrderId === order.id;
-                const quickEdit = quickEditOrder[order.id] || {};
-                const displayStatus = isEditing ? (quickEdit.status || order.status) : order.status;
-
-                const isSelected = selectedOrders.has(order.id);
-                
-                return (
-                  <TouchableOpacity
-                    key={order.id}
-                    style={[styles.gridCard, isSelected && styles.gridCardSelected]}
-                    onPress={() => {
-                      if (isSelectionMode) {
-                        const newSelected = new Set(selectedOrders);
-                        if (isSelected) {
-                          newSelected.delete(order.id);
-                        } else {
-                          newSelected.add(order.id);
-                        }
-                        setSelectedOrders(newSelected);
-                      }
-                    }}
-                    activeOpacity={0.7}
-                  >
-                    {isSelectionMode && (
-                      <View style={styles.checkboxContainer}>
-                        <View style={[styles.checkbox, isSelected && styles.checkboxChecked]}>
-                          {isSelected && <Ionicons name="checkmark" size={16} color="#fff" />}
-                        </View>
-                      </View>
-                    )}
-                    <View style={styles.cardHeader}>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.gridCardTitle}>#{order.order_number}</Text>
-                        <Text style={styles.gridCardMetaText}>
-                          {new Date(order.created_at).toLocaleDateString('ar-EG')}
-                        </Text>
-                      </View>
-                      {!isSelectionMode && (
-                        <TouchableOpacity
-                          style={styles.cardMenuButton}
-                          onPress={() => {
-                            if (isEditing) {
-                              setEditingOrderId(null);
-                              setQuickEditOrder({});
-                            } else {
-                              setEditingOrderId(order.id);
-                              setQuickEditOrder({ [order.id]: {} });
-                            }
-                          }}
-                        >
-                          <Ionicons name={isEditing ? "checkmark" : "create-outline"} size={18} color={isEditing ? "#10B981" : "#666"} />
-                        </TouchableOpacity>
-                      )}
-                    </View>
-
-                    <View style={styles.gridProductPrice}>
-                      <Text style={styles.gridPrice}>{formatPrice(order.total_amount)} ج.م</Text>
-                    </View>
-
-                    {/* العنوان والمنطقة */}
-                    <View style={styles.orderAddressSection}>
-                      <Text style={styles.orderAddressText} numberOfLines={2}>
-                        {order.shipping_address}
-                      </Text>
-                      {order.delivery_region && (
-                        <View style={styles.regionBadge}>
-                          <Ionicons name="location" size={12} color="#EE1C47" />
-                          <Text style={styles.regionBadgeText}>{order.delivery_region}</Text>
-                        </View>
-                      )}
-                      {order.delivery_notes && (
-                        <View style={styles.notesBadge}>
-                          <Ionicons name="pricetag" size={12} color="#666" />
-                          <Text style={styles.notesBadgeText}>{order.delivery_notes}</Text>
-                        </View>
-                      )}
-                    </View>
-
-                    <View style={styles.gridCardMeta}>
-                      {isEditing ? (
-                        <View style={{ flex: 1 }}>
-                          <Text style={styles.gridCardMetaText}>الحالة:</Text>
-                          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ maxHeight: 120 }}>
-                            <View style={styles.statusPicker}>
-                              {['pending', 'confirmed', 'shipped_from_china', 'received_in_uae', 'shipped_from_uae', 'received_in_egypt', 'in_warehouse', 'out_for_delivery', 'delivered', 'cancelled'].map((status) => (
-                                <TouchableOpacity
-                                  key={status}
-                                  style={[
-                                    styles.statusOption,
-                                    displayStatus === status && styles.statusOptionActive
-                                  ]}
-                                  onPress={() => setQuickEditOrder({ ...quickEditOrder, [order.id]: { ...quickEdit, status: status as any } })}
-                                >
-                                  <Text style={[styles.statusOptionText, displayStatus === status && styles.statusOptionTextActive]}>
-                                    {getStatusText(status)}
-                                  </Text>
-                                </TouchableOpacity>
-                              ))}
-                            </View>
-                          </ScrollView>
-                          
-                          {/* تعديل المنطقة والملاحظات */}
-                          <View style={{ marginTop: 12 }}>
-                            <Text style={styles.gridCardMetaText}>المنطقة:</Text>
-                            <TextInput
-                              style={styles.quickEditInput}
-                              placeholder="مثل: القاهرة، الجيزة، الإسكندرية..."
-                              value={quickEdit.delivery_region || order.delivery_region || ''}
-                              onChangeText={(text) => setQuickEditOrder({ ...quickEditOrder, [order.id]: { ...quickEdit, delivery_region: text } })}
-                            />
-                          </View>
-                          
-                          <View style={{ marginTop: 12 }}>
-                            <Text style={styles.gridCardMetaText}>ملاحظة / علامة مميزة:</Text>
-                            <TextInput
-                              style={styles.quickEditInput}
-                              placeholder="ملاحظات التوصيل..."
-                              value={quickEdit.delivery_notes || order.delivery_notes || ''}
-                              onChangeText={(text) => setQuickEditOrder({ ...quickEditOrder, [order.id]: { ...quickEdit, delivery_notes: text } })}
-                            />
-                          </View>
-                        </View>
-                      ) : (
-                        <View style={[styles.statusBadgeSmall, getStatusBadgeColor(order.status)]}>
-                          <Text style={styles.statusBadgeTextSmall}>{getStatusText(order.status)}</Text>
-                        </View>
-                      )}
-                    </View>
-
-                    {isEditing && (
-                      <View style={styles.quickEditActions}>
-                        <TouchableOpacity
-                          style={[styles.quickEditButton, styles.saveButton]}
-                          onPress={async () => {
-                            const updates = quickEditOrder[order.id];
-                            if (updates && Object.keys(updates).length > 0) {
-                              setLoading(true);
-                              try {
-                                const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
-                                const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-                                const accessToken = await getAccessToken();
-
-                                await fetch(`${supabaseUrl}/rest/v1/orders?id=eq.${order.id}`, {
-                                  method: 'PATCH',
-                                  headers: {
-                                    'apikey': supabaseKey || '',
-                                    'Authorization': `Bearer ${accessToken}`,
-                                    'Content-Type': 'application/json',
-                                  },
-                                  body: JSON.stringify(updates)
-                                });
-
-                                sweetAlert.showSuccess('نجح', 'تم التحديث بنجاح', () => {
-                                  setEditingOrderId(null);
-                                  setQuickEditOrder({});
-                                  loadData();
-                                });
-                              } catch (error: any) {
-                                sweetAlert.showError('خطأ', error.message || 'فشل التحديث');
-                              } finally {
-                                setLoading(false);
-                              }
-                            } else {
-                              setEditingOrderId(null);
-                              setQuickEditOrder({});
-                            }
-                          }}
-                        >
-                          <Ionicons name="checkmark" size={14} color="#fff" />
-                          <Text style={styles.quickEditButtonText}>حفظ</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          style={[styles.quickEditButton, styles.cancelQuickEditButton]}
-                          onPress={() => {
-                            setEditingOrderId(null);
-                            setQuickEditOrder({});
-                          }}
-                        >
-                          <Ionicons name="close" size={14} color="#fff" />
-                          <Text style={styles.quickEditButtonText}>إلغاء</Text>
-                        </TouchableOpacity>
-                      </View>
-                    )}
-                  </TouchableOpacity>
-                );
-              })}
-                </View>
-              </View>
-            )}
-
             {/* No Orders Message */}
             {orders && orders.length === 0 && (
                 <View style={{ padding: 20, alignItems: 'center', width: '100%' }}>
@@ -5334,11 +6357,440 @@ export default function AdminScreen() {
           </View>
         )}
 
+        {activeTab === 'packages' && (
+          <View>
+            {/* Selection Mode Controls */}
+            <View style={styles.selectionControls}>
+              <TouchableOpacity
+                style={[styles.selectionButton, isPackageSelectionMode && styles.selectionButtonActive]}
+                onPress={() => {
+                  setIsPackageSelectionMode(!isPackageSelectionMode);
+                  if (!isPackageSelectionMode) {
+                    setSelectedPackages(new Set());
+                  }
+                }}
+              >
+                <Ionicons name={isPackageSelectionMode ? "checkbox-outline" : "square-outline"} size={18} color={isPackageSelectionMode ? "#EE1C47" : "#666"} />
+                <Text style={[styles.selectionButtonText, isPackageSelectionMode && styles.selectionButtonTextActive]}>
+                  {isPackageSelectionMode ? 'إلغاء وضع الاختيار' : 'تحديد الطرود'}
+                </Text>
+              </TouchableOpacity>
+              
+              {isPackageSelectionMode && (
+                <>
+                  <TouchableOpacity
+                    style={[styles.selectionButton, { backgroundColor: '#2196F3', marginLeft: 8 }]}
+                    onPress={() => {
+                      if (selectedPackages.size === allPackages.length) {
+                        setSelectedPackages(new Set());
+                      } else {
+                        setSelectedPackages(new Set(allPackages.map(p => p.id)));
+                      }
+                    }}
+                  >
+                    <Ionicons name="checkmark-done-outline" size={18} color="#fff" />
+                    <Text style={[styles.selectionButtonText, { color: '#fff' }]}>
+                      {selectedPackages.size === allPackages.length ? 'إلغاء الكل' : 'تحديد الكل'}
+                    </Text>
+                  </TouchableOpacity>
+                  
+                  {selectedPackages.size > 0 && (
+                    <TouchableOpacity
+                      style={[styles.selectionButton, { backgroundColor: '#f44336', marginLeft: 8 }]}
+                      onPress={() => {
+                        sweetAlert.showConfirm(
+                          'تأكيد الحذف',
+                          `هل أنت متأكد من حذف ${selectedPackages.size} طرد؟\n\nهذا الإجراء لا يمكن التراجع عنه.`,
+                          () => deleteSelectedPackages()
+                        );
+                      }}
+                    >
+                      <Ionicons name="trash-outline" size={18} color="#fff" />
+                      <Text style={[styles.selectionButtonText, { color: '#fff' }]}>
+                        حذف المحدد ({selectedPackages.size})
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+                </>
+              )}
+            </View>
+
+            {/* Search and Filter */}
+            {!isPackageSelectionMode && (
+              <View style={[styles.searchContainer, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+                <Ionicons name="search-outline" size={20} color={colors.text} style={styles.searchIcon} />
+                <TextInput
+                  style={[styles.searchInput, { color: colors.text }]}
+                  placeholder="ابحث عن طرد (رقم الطرد، رقم الشحنة)..."
+                  placeholderTextColor={colors.placeholder}
+                  value={packageSearchQuery}
+                  onChangeText={setPackageSearchQuery}
+                />
+                {packageSearchQuery.length > 0 && (
+                  <TouchableOpacity onPress={() => setPackageSearchQuery('')}>
+                    <Ionicons name="close-circle" size={20} color={colors.text} />
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
+
+            {/* Status Filter */}
+            {!isPackageSelectionMode && (
+            <ScrollView 
+              horizontal 
+              showsHorizontalScrollIndicator={false}
+              style={{ marginVertical: 10, paddingHorizontal: 10 }}
+              contentContainerStyle={{ gap: 8 }}
+            >
+              <TouchableOpacity
+                style={[
+                  styles.filterButton,
+                  packageFilterStatus === 'all' && styles.filterButtonActive,
+                  { backgroundColor: packageFilterStatus === 'all' ? '#EE1C47' : colors.surface, borderColor: colors.border }
+                ]}
+                onPress={() => setPackageFilterStatus('all')}
+              >
+                <Text style={[
+                  styles.filterText,
+                  packageFilterStatus === 'all' && styles.filterTextActive,
+                  { color: packageFilterStatus === 'all' ? '#fff' : colors.text }
+                ]}>
+                  الكل ({allPackages.length})
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.filterButton,
+                  packageFilterStatus === 'created' && styles.filterButtonActive,
+                  { backgroundColor: packageFilterStatus === 'created' ? '#EE1C47' : colors.surface, borderColor: colors.border }
+                ]}
+                onPress={() => setPackageFilterStatus('created')}
+              >
+                <Text style={[
+                  styles.filterText,
+                  packageFilterStatus === 'created' && styles.filterTextActive,
+                  { color: packageFilterStatus === 'created' ? '#fff' : colors.text }
+                ]}>
+                  تم الإنشاء ({allPackages.filter(p => p.status === 'created').length})
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.filterButton,
+                  packageFilterStatus === 'shipped_to_egypt' && styles.filterButtonActive,
+                  { backgroundColor: packageFilterStatus === 'shipped_to_egypt' ? '#EE1C47' : colors.surface, borderColor: colors.border }
+                ]}
+                onPress={() => setPackageFilterStatus('shipped_to_egypt')}
+              >
+                <Text style={[
+                  styles.filterText,
+                  packageFilterStatus === 'shipped_to_egypt' && styles.filterTextActive,
+                  { color: packageFilterStatus === 'shipped_to_egypt' ? '#fff' : colors.text }
+                ]}>
+                  شُحن إلى مصر ({allPackages.filter(p => p.status === 'shipped_to_egypt').length})
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.filterButton,
+                  packageFilterStatus === 'received_in_egypt' && styles.filterButtonActive,
+                  { backgroundColor: packageFilterStatus === 'received_in_egypt' ? '#EE1C47' : colors.surface, borderColor: colors.border }
+                ]}
+                onPress={() => setPackageFilterStatus('received_in_egypt')}
+              >
+                <Text style={[
+                  styles.filterText,
+                  packageFilterStatus === 'received_in_egypt' && styles.filterTextActive,
+                  { color: packageFilterStatus === 'received_in_egypt' ? '#fff' : colors.text }
+                ]}>
+                  وصل مصر ({allPackages.filter(p => p.status === 'received_in_egypt').length})
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.filterButton,
+                  packageFilterStatus === 'unpacked' && styles.filterButtonActive,
+                  { backgroundColor: packageFilterStatus === 'unpacked' ? '#EE1C47' : colors.surface, borderColor: colors.border }
+                ]}
+                onPress={() => setPackageFilterStatus('unpacked')}
+              >
+                <Text style={[
+                  styles.filterText,
+                  packageFilterStatus === 'unpacked' && styles.filterTextActive,
+                  { color: packageFilterStatus === 'unpacked' ? '#fff' : colors.text }
+                ]}>
+                  تم التفكيك ({allPackages.filter(p => p.status === 'unpacked').length})
+                </Text>
+              </TouchableOpacity>
+            </ScrollView>
+            )}
+
+            <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
+              {(() => {
+                // Filter packages
+                let filteredPackages = allPackages;
+                
+                // Filter by status
+                if (packageFilterStatus !== 'all') {
+                  filteredPackages = filteredPackages.filter(p => p.status === packageFilterStatus);
+                }
+                
+                // Filter by search query
+                if (packageSearchQuery.trim()) {
+                  const query = packageSearchQuery.toLowerCase().trim();
+                  filteredPackages = filteredPackages.filter(p => 
+                    p.package_number.toLowerCase().includes(query) ||
+                    p.shipment?.shipment_number?.toLowerCase().includes(query) ||
+                    p.orders?.some(o => o.order_number?.toLowerCase().includes(query))
+                  );
+                }
+
+                if (filteredPackages.length === 0) {
+                  return (
+                    <View style={styles.emptyContainer}>
+                      <Ionicons name="cube-outline" size={80} color="#ccc" />
+                      <Text style={[styles.emptyText, { color: colors.text }]}>
+                        {packageSearchQuery || packageFilterStatus !== 'all' 
+                          ? 'لا توجد نتائج' 
+                          : 'لا توجد طرود'}
+                      </Text>
+                    </View>
+                  );
+                }
+
+                return (
+                  <View style={styles.gridContainer}>
+                    {filteredPackages.map((pkg) => {
+                      const isSelected = selectedPackages.has(pkg.id);
+                      return (
+                    <TouchableOpacity
+                      key={pkg.id}
+                      style={[styles.gridCard, { backgroundColor: colors.background, borderColor: colors.border }, isSelected && styles.gridCardSelected]}
+                      onPress={() => {
+                        if (isPackageSelectionMode) {
+                          const newSelected = new Set(selectedPackages);
+                          if (isSelected) {
+                            newSelected.delete(pkg.id);
+                          } else {
+                            newSelected.add(pkg.id);
+                          }
+                          setSelectedPackages(newSelected);
+                        } else {
+                          setSelectedPackageForDetails(pkg);
+                          setShowPackageDetailsModal(true);
+                        }
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      {isPackageSelectionMode && (
+                        <View style={styles.checkboxContainer}>
+                          <View style={[styles.checkbox, isSelected && styles.checkboxChecked]}>
+                            {isSelected && <Ionicons name="checkmark" size={16} color="#fff" />}
+                          </View>
+                        </View>
+                      )}
+                      <View style={styles.cardHeader}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={[styles.gridCardTitle, { color: colors.text }]}>طرد #{pkg.package_number}</Text>
+                          {pkg.shipment && (
+                            <Text style={[styles.gridCardMetaText, { color: colors.text }]}>
+                              الشحنة: #{pkg.shipment.shipment_number}
+                            </Text>
+                          )}
+                          <Text style={[styles.gridCardMetaText, { color: colors.text }]}>
+                            {new Date(pkg.created_at).toLocaleDateString('ar-EG')}
+                          </Text>
+                        </View>
+                        <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+                          <View style={[styles.statusBadgeSmall, getStatusBadgeColor(pkg.status)]}>
+                            <Text style={styles.statusBadgeTextSmall}>{getStatusText(pkg.status)}</Text>
+                          </View>
+                          {!isPackageSelectionMode && (
+                            <TouchableOpacity
+                              onPress={(e) => {
+                                e.stopPropagation();
+                                sweetAlert.showConfirm(
+                                  'تأكيد الحذف',
+                                  `هل أنت متأكد من حذف الطرد #${pkg.package_number}؟\n\nهذا الإجراء لا يمكن التراجع عنه.`,
+                                  () => deletePackage(pkg.id, pkg.package_number)
+                                );
+                              }}
+                              style={{ padding: 4 }}
+                            >
+                              <Ionicons name="trash-outline" size={20} color="#EF4444" />
+                            </TouchableOpacity>
+                          )}
+                        </View>
+                      </View>
+
+                      <View style={styles.gridCardMeta}>
+                        <Text style={[styles.gridCardMetaText, { color: colors.text }]}>
+                          عدد الطلبات: {pkg.orders?.length || 0}
+                        </Text>
+                      </View>
+
+                      {pkg.orders && pkg.orders.length > 0 && (
+                        <View style={{ marginTop: 8, marginBottom: 8 }}>
+                          <Text style={[styles.gridCardMetaText, { color: colors.text, fontSize: 12, fontWeight: '600', marginBottom: 4 }]}>
+                            الطلبات:
+                          </Text>
+                          {pkg.orders.slice(0, 3).map((order) => (
+                            <Text key={order.id} style={[styles.gridCardMetaText, { color: colors.text, fontSize: 11 }]}>
+                              • #{order.order_number}
+                            </Text>
+                          ))}
+                          {pkg.orders.length > 3 && (
+                            <Text style={[styles.gridCardMetaText, { color: colors.text, fontSize: 11 }]}>
+                              ... و {pkg.orders.length - 3} طلب آخر
+                            </Text>
+                          )}
+                        </View>
+                      )}
+
+                      <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
+                        {pkg.status === 'created' && (
+                          <TouchableOpacity
+                            style={[styles.quickEditButton, { backgroundColor: '#3B82F6', flex: 1 }]}
+                            onPress={() => updatePackageStatus(pkg.id, 'shipped_to_egypt')}
+                          >
+                            <Ionicons name="send-outline" size={14} color="#fff" />
+                            <Text style={styles.quickEditButtonText}>شُحن إلى مصر</Text>
+                          </TouchableOpacity>
+                        )}
+                        {pkg.status === 'shipped_to_egypt' && (
+                          <TouchableOpacity
+                            style={[styles.quickEditButton, { backgroundColor: '#10B981', flex: 1 }]}
+                            onPress={() => updatePackageStatus(pkg.id, 'received_in_egypt')}
+                          >
+                            <Ionicons name="checkmark-circle-outline" size={14} color="#fff" />
+                            <Text style={styles.quickEditButtonText}>وصل مصر</Text>
+                          </TouchableOpacity>
+                        )}
+                        {pkg.status === 'received_in_egypt' && (
+                          <TouchableOpacity
+                            style={[styles.quickEditButton, { backgroundColor: '#8B5CF6', flex: 1 }]}
+                            onPress={() => {
+                              setSelectedPackage(pkg);
+                              setNewInternalShipment({ shipment_number: '', shipping_company: '', tracking_number: '', cost: '', order_ids: pkg.orders?.map(o => o.id) || [] });
+                              setShowUnpackPackageModal(true);
+                            }}
+                          >
+                            <Ionicons name="cube-outline" size={14} color="#fff" />
+                            <Text style={styles.quickEditButtonText}>تفكيك الطرد</Text>
+                          </TouchableOpacity>
+                        )}
+                      </View>
+                    </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                );
+              })()}
+            </ScrollView>
+          </View>
+        )}
+
         {activeTab === 'shipments' && (
           <View>
+            {/* Selection Mode Controls */}
+            <View style={styles.selectionControls}>
+              <TouchableOpacity
+                style={[styles.selectionButton, isShipmentSelectionMode && styles.selectionButtonActive]}
+                onPress={() => {
+                  setIsShipmentSelectionMode(!isShipmentSelectionMode);
+                  if (!isShipmentSelectionMode) {
+                    setSelectedShipments(new Set());
+                  }
+                }}
+              >
+                <Ionicons name={isShipmentSelectionMode ? "checkbox-outline" : "square-outline"} size={18} color={isShipmentSelectionMode ? "#EE1C47" : "#666"} />
+                <Text style={[styles.selectionButtonText, isShipmentSelectionMode && styles.selectionButtonTextActive]}>
+                  {isShipmentSelectionMode ? 'إلغاء وضع الاختيار' : 'تحديد الشحنات'}
+                </Text>
+              </TouchableOpacity>
+              
+              {isShipmentSelectionMode && (
+                <>
+                  <TouchableOpacity
+                    style={[styles.selectionButton, { backgroundColor: '#2196F3', marginLeft: 8 }]}
+                    onPress={() => {
+                      if (selectedShipments.size === shipments.length) {
+                        setSelectedShipments(new Set());
+                      } else {
+                        setSelectedShipments(new Set(shipments.map(s => s.id)));
+                      }
+                    }}
+                  >
+                    <Ionicons name="checkmark-done-outline" size={18} color="#fff" />
+                    <Text style={[styles.selectionButtonText, { color: '#fff' }]}>
+                      {selectedShipments.size === shipments.length ? 'إلغاء الكل' : 'تحديد الكل'}
+                    </Text>
+                  </TouchableOpacity>
+                  
+                  {selectedShipments.size > 0 && (
+                    <TouchableOpacity
+                      style={[styles.selectionButton, { backgroundColor: '#f44336', marginLeft: 8 }]}
+                      onPress={() => {
+                        sweetAlert.showConfirm(
+                          'تأكيد الحذف',
+                          `هل أنت متأكد من حذف ${selectedShipments.size} شحنة؟\n\nهذا الإجراء لا يمكن التراجع عنه.`,
+                          () => deleteSelectedShipments()
+                        );
+                      }}
+                    >
+                      <Ionicons name="trash-outline" size={18} color="#fff" />
+                      <Text style={[styles.selectionButtonText, { color: '#fff' }]}>
+                        حذف المحدد ({selectedShipments.size})
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+                </>
+              )}
+            </View>
+
+            {/* Add Shipment Button */}
+            {!isShipmentSelectionMode && (
+              <TouchableOpacity
+                style={[styles.addButton, { backgroundColor: '#EE1C47' }]}
+                onPress={() => {
+                  setNewShipment({ cost: '', order_ids: [], shipment_number: '', use_manual_number: false });
+                  setShowNewShipmentModal(true);
+                }}
+              >
+                <Ionicons name="add-circle-outline" size={20} color="#fff" />
+                <Text style={styles.addButtonText}>إضافة شحنة جديدة</Text>
+              </TouchableOpacity>
+            )}
+
             <View style={styles.gridContainer}>
-              {shipments.map((shipment) => (
-                <View key={shipment.id} style={styles.gridCard}>
+              {shipments.map((shipment) => {
+                const isSelected = selectedShipments.has(shipment.id);
+                return (
+                <TouchableOpacity
+                  key={shipment.id}
+                  style={[styles.gridCard, isSelected && styles.gridCardSelected]}
+                  onPress={() => {
+                    if (isShipmentSelectionMode) {
+                      const newSelected = new Set(selectedShipments);
+                      if (isSelected) {
+                        newSelected.delete(shipment.id);
+                      } else {
+                        newSelected.add(shipment.id);
+                      }
+                      setSelectedShipments(newSelected);
+                    } else {
+                      handleShipmentClick(shipment);
+                    }
+                  }}
+                  activeOpacity={0.7}
+                >
+                  {isShipmentSelectionMode && (
+                    <View style={styles.checkboxContainer}>
+                      <View style={[styles.checkbox, isSelected && styles.checkboxChecked]}>
+                        {isSelected && <Ionicons name="checkmark" size={16} color="#fff" />}
+                      </View>
+                    </View>
+                  )}
                   <View style={styles.cardHeader}>
                     <View style={{ flex: 1 }}>
                       <Text style={styles.gridCardTitle}>#{shipment.shipment_number}</Text>
@@ -5346,6 +6798,33 @@ export default function AdminScreen() {
                         {new Date(shipment.created_at).toLocaleDateString('ar-EG')}
                       </Text>
                     </View>
+                    {!isShipmentSelectionMode && (
+                      <View style={{ flexDirection: 'row', gap: 8 }}>
+                        <TouchableOpacity
+                          onPress={(e) => {
+                            e.stopPropagation();
+                            handleShowProductsSummary(shipment);
+                          }}
+                          style={styles.summaryButton}
+                        >
+                          <Ionicons name="list-outline" size={18} color="#10B981" />
+                          <Text style={styles.summaryButtonText}>ملخص المنتجات</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          onPress={(e) => {
+                            e.stopPropagation();
+                            sweetAlert.showConfirm(
+                              'تأكيد الحذف',
+                              `هل أنت متأكد من حذف الشحنة #${shipment.shipment_number}؟\n\nهذا الإجراء لا يمكن التراجع عنه.`,
+                              () => deleteShipment(shipment.id, shipment.shipment_number)
+                            );
+                          }}
+                          style={[styles.summaryButton, { backgroundColor: '#FEF2F2' }]}
+                        >
+                          <Ionicons name="trash-outline" size={18} color="#EF4444" />
+                        </TouchableOpacity>
+                      </View>
+                    )}
                   </View>
 
                   <View style={styles.gridProductPrice}>
@@ -5377,107 +6856,19 @@ export default function AdminScreen() {
                         <Text style={styles.quickEditButtonText}>وصلت الإمارات</Text>
                       </TouchableOpacity>
                     )}
+                    {/* الشحنة تنتهي عند وصولها للإمارات - بعد ذلك يتم إنشاء الطرود */}
                     {shipment.status === 'received_in_uae' && (
-                      <TouchableOpacity
-                        style={[styles.quickEditButton, styles.saveButton]}
-                        onPress={() => {
-                          sweetAlert.showConfirm(
-                            'تكلفة الشحن',
-                            'أدخل تكلفة الشحن من الإمارات لمصر:',
-                            () => {
-                              // Use a simple prompt for cost
-                              if (Platform.OS === 'web') {
-                                const cost = window.prompt('أدخل تكلفة الشحن:', '0');
-                                if (cost) {
-                                  updateShipmentStatus(shipment.id, 'shipped_from_uae', parseFloat(cost));
-                                }
-                              } else {
-                                Alert.prompt(
-                                  'تكلفة الشحن',
-                                  'أدخل تكلفة الشحن من الإمارات لمصر:',
-                                  [
-                                    { text: 'إلغاء', style: 'cancel' },
-                                    {
-                                      text: 'موافق',
-                                      onPress: (cost) => {
-                                        if (cost) {
-                                          updateShipmentStatus(shipment.id, 'shipped_from_uae', parseFloat(cost));
-                                        }
-                                      },
-                                    },
-                                  ],
-                                  'plain-text',
-                                  '',
-                                  'numeric'
-                                );
-                              }
-                            },
-                            undefined,
-                            'موافق',
-                            'إلغاء'
-                          );
-                        }}
-                      >
-                        <Ionicons name="send-outline" size={14} color="#fff" />
-                        <Text style={styles.quickEditButtonText}>شُحنت من الإمارات</Text>
-                      </TouchableOpacity>
-                    )}
-                    {shipment.status === 'shipped_from_uae' && (
-                      <TouchableOpacity
-                        style={[styles.quickEditButton, styles.saveButton]}
-                        onPress={() => updateShipmentStatus(shipment.id, 'received_in_egypt')}
-                      >
-                        <Ionicons name="checkmark-circle-outline" size={14} color="#fff" />
-                        <Text style={styles.quickEditButtonText}>وصلت مصر</Text>
-                      </TouchableOpacity>
-                    )}
-                    {shipment.status === 'received_in_egypt' && (
-                      <TouchableOpacity
-                        style={[styles.quickEditButton, styles.saveButton]}
-                        onPress={() => {
-                          if (Platform.OS === 'web') {
-                            const days = window.prompt('كم يوم متوقع للوصول؟', '3');
-                            if (days) {
-                              updateShipmentStatus(shipment.id, 'in_warehouse', undefined, parseInt(days));
-                            }
-                          } else {
-                            Alert.prompt(
-                              'أيام التوصيل',
-                              'كم يوم متوقع للوصول؟',
-                              [
-                                { text: 'إلغاء', style: 'cancel' },
-                                {
-                                  text: 'موافق',
-                                  onPress: (days) => {
-                                    if (days) {
-                                      updateShipmentStatus(shipment.id, 'in_warehouse', undefined, parseInt(days));
-                                    }
-                                  },
-                                },
-                              ],
-                              'plain-text',
-                              '3',
-                              'numeric'
-                            );
-                          }
-                        }}
-                      >
-                        <Ionicons name="cube-outline" size={14} color="#fff" />
-                        <Text style={styles.quickEditButtonText}>دخلت المخزن</Text>
-                      </TouchableOpacity>
-                    )}
-                    {shipment.status === 'in_warehouse' && (
-                      <TouchableOpacity
-                        style={[styles.quickEditButton, styles.saveButton]}
-                        onPress={() => updateShipmentStatus(shipment.id, 'completed')}
-                      >
-                        <Ionicons name="checkmark-done-outline" size={14} color="#fff" />
-                        <Text style={styles.quickEditButtonText}>مكتملة</Text>
-                      </TouchableOpacity>
+                      <View style={{ flexDirection: 'row', gap: 8, flex: 1 }}>
+                        <View style={[styles.statusBadgeSmall, { backgroundColor: '#10B981', flex: 1, justifyContent: 'center', alignItems: 'center', paddingVertical: 8 }]}>
+                          <Ionicons name="checkmark-circle" size={16} color="#fff" />
+                          <Text style={[styles.statusBadgeTextSmall, { marginTop: 4, textAlign: 'center' }]}>تم الوصول - جاهزة للتفكيك وإنشاء الطرود</Text>
+                        </View>
+                      </View>
                     )}
                   </View>
-                </View>
-              ))}
+                </TouchableOpacity>
+                );
+              })}
             </View>
           </View>
         )}
@@ -9064,6 +10455,906 @@ export default function AdminScreen() {
         />
       )}
 
+      {/* New Shipment Modal */}
+      {showNewShipmentModal && (
+        <TouchableOpacity 
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setShowNewShipmentModal(false)}
+        >
+          <TouchableOpacity 
+            activeOpacity={1}
+            onPress={(e) => e.stopPropagation()}
+          >
+            <View style={[styles.modalContent, { backgroundColor: colors.surface }]}>
+            <View style={styles.modalHeader}>
+              <Text style={[styles.modalTitle, { color: colors.text }]}>إضافة شحنة جديدة</Text>
+              <TouchableOpacity onPress={() => setShowNewShipmentModal(false)}>
+                <Ionicons name="close" size={24} color={colors.text} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={styles.modalBody}>
+              {/* Shipment Number Option */}
+              <View style={styles.formGroup}>
+                <TouchableOpacity
+                  style={styles.checkboxRow}
+                  onPress={() => setNewShipment({ ...newShipment, use_manual_number: !newShipment.use_manual_number })}
+                >
+                  <View style={[styles.checkbox, newShipment.use_manual_number && styles.checkboxChecked]}>
+                    {newShipment.use_manual_number && <Ionicons name="checkmark" size={16} color="#fff" />}
+                  </View>
+                  <Text style={[styles.checkboxLabel, { color: colors.text }]}>استخدام رقم يدوي</Text>
+                </TouchableOpacity>
+
+                {newShipment.use_manual_number && (
+                  <TextInput
+                    style={[styles.input, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border }]}
+                    placeholder="رقم الشحنة"
+                    value={newShipment.shipment_number}
+                    onChangeText={(text) => setNewShipment({ ...newShipment, shipment_number: text })}
+                  />
+                )}
+              </View>
+
+              {/* Cost */}
+              <View style={styles.formGroup}>
+                <Text style={[styles.label, { color: colors.text }]}>التكلفة (ج.م) *</Text>
+                <TextInput
+                  style={[styles.input, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border }]}
+                  placeholder="0.00"
+                  value={newShipment.cost}
+                  onChangeText={(text) => setNewShipment({ ...newShipment, cost: text })}
+                  keyboardType="numeric"
+                />
+              </View>
+
+              {/* Select Orders */}
+              <View style={styles.formGroup}>
+                <Text style={[styles.label, { color: colors.text }]}>اختر الطلبات *</Text>
+                <Text style={[styles.helperText, { color: colors.text }]}>
+                  {newShipment.order_ids.length} طلب محدد
+                </Text>
+                <ScrollView style={{ maxHeight: 300 }}>
+                  {orders.filter(o => {
+                    // Show only external orders that are fully purchased and NOT already in a shipment
+                    return o.source_type === 'external' && isOrderFullyPurchased(o.id) && !isOrderInShipment(o.id);
+                  }).length === 0 ? (
+                    <View style={{ padding: 20, alignItems: 'center' }}>
+                      <Text style={[styles.helperText, { color: colors.text, textAlign: 'center' }]}>
+                        لا توجد طلبات متاحة للشحن{'\n'}
+                        يجب أن تكون الطلبات من الخارج وتم شراؤها بالكامل ولم يتم إضافتها لشحنة من قبل
+                      </Text>
+                    </View>
+                  ) : (
+                    orders.filter(o => {
+                      // Show only external orders that are fully purchased and NOT already in a shipment
+                      return o.source_type === 'external' && isOrderFullyPurchased(o.id) && !isOrderInShipment(o.id);
+                    }).map((order) => {
+                    const isSelected = newShipment.order_ids.includes(order.id);
+                    return (
+                      <TouchableOpacity
+                        key={order.id}
+                        style={[styles.orderSelectItem, isSelected && styles.orderSelectItemSelected]}
+                        onPress={() => {
+                          if (isSelected) {
+                            setNewShipment({
+                              ...newShipment,
+                              order_ids: newShipment.order_ids.filter(id => id !== order.id)
+                            });
+                          } else {
+                            setNewShipment({
+                              ...newShipment,
+                              order_ids: [...newShipment.order_ids, order.id]
+                            });
+                          }
+                        }}
+                      >
+                        <View style={[styles.checkbox, isSelected && styles.checkboxChecked]}>
+                          {isSelected && <Ionicons name="checkmark" size={16} color="#fff" />}
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={[styles.orderSelectText, { color: colors.text }]}>#{order.order_number}</Text>
+                          <Text style={[styles.orderSelectMeta, { color: colors.text }]}>
+                            {formatPrice(order.total_amount)} ج.م
+                          </Text>
+                        </View>
+                      </TouchableOpacity>
+                    );
+                  })
+                  )}
+                </ScrollView>
+              </View>
+
+              <View style={styles.modalActions}>
+                <TouchableOpacity
+                  style={[styles.modalButton, styles.modalButtonPrimary]}
+                  onPress={createShipment}
+                  disabled={loading}
+                >
+                  {loading ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Text style={styles.modalButtonText}>إنشاء</Text>
+                  )}
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.modalButton, styles.modalButtonSecondary]}
+                  onPress={() => setShowNewShipmentModal(false)}
+                >
+                  <Text style={[styles.modalButtonText, { color: colors.text }]}>إلغاء</Text>
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+            </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      )}
+
+      {/* Shipment Details Modal */}
+      {showShipmentDetailsModal && selectedShipment && (
+        <TouchableOpacity 
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => {
+            setShowShipmentDetailsModal(false);
+            setSelectedShipment(null);
+            setShipmentOrders([]);
+          }}
+        >
+          <TouchableOpacity 
+            activeOpacity={1}
+            onPress={(e) => e.stopPropagation()}
+          >
+            <View style={[styles.modalContent, { backgroundColor: colors.surface }]}>
+            <View style={styles.modalHeader}>
+              <Text style={[styles.modalTitle, { color: colors.text }]}>
+                شحنة #{selectedShipment.shipment_number}
+              </Text>
+              <TouchableOpacity onPress={() => {
+                setShowShipmentDetailsModal(false);
+                setSelectedShipment(null);
+                setShipmentOrders([]);
+                setPackages([]);
+              }}>
+                <Ionicons name="close" size={24} color={colors.text} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={styles.modalBody}>
+              <View style={styles.shipmentInfo}>
+                <Text style={[styles.infoLabel, { color: colors.text }]}>التكلفة:</Text>
+                <Text style={[styles.infoValue, { color: colors.text }]}>{formatPrice(selectedShipment.cost)} ج.م</Text>
+              </View>
+              <View style={styles.shipmentInfo}>
+                <Text style={[styles.infoLabel, { color: colors.text }]}>الحالة:</Text>
+                <View style={[styles.statusBadgeSmall, getStatusBadgeColor(selectedShipment.status)]}>
+                  <Text style={styles.statusBadgeTextSmall}>{getStatusText(selectedShipment.status)}</Text>
+                </View>
+              </View>
+
+              <Text style={[styles.sectionTitle, { color: colors.text }]}>الطلبات ({shipmentOrders.length})</Text>
+              {shipmentOrders.length === 0 ? (
+                <Text style={[styles.emptyText, { color: colors.text }]}>لا توجد طلبات</Text>
+              ) : (
+                shipmentOrders.map((order) => (
+                  <TouchableOpacity
+                    key={order.id}
+                    style={[styles.orderCard, { backgroundColor: colors.background, borderColor: colors.border }]}
+                    onPress={() => handleOrderClick(order)}
+                  >
+                    <Text style={[styles.orderCardTitle, { color: colors.text }]}>#{order.order_number}</Text>
+                    <Text style={[styles.orderCardMeta, { color: colors.text }]}>
+                      {formatPrice(order.total_amount)} ج.م
+                    </Text>
+                    <View style={[styles.statusBadgeSmall, getStatusBadgeColor(order.status)]}>
+                      <Text style={styles.statusBadgeTextSmall}>{getStatusText(order.status)}</Text>
+                    </View>
+                  </TouchableOpacity>
+                ))
+              )}
+
+              {/* Packages Section - فقط إذا وصلت الشحنة للإمارات */}
+              {selectedShipment.status === 'received_in_uae' && (
+                <>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 20 }}>
+                    <Text style={[styles.sectionTitle, { color: colors.text }]}>الطرود ({packages.length})</Text>
+                    <TouchableOpacity
+                      style={[styles.addButton, { backgroundColor: '#10B981', paddingHorizontal: 12, paddingVertical: 6 }]}
+                      onPress={() => {
+                        setNewPackage({ package_number: '', order_ids: [] });
+                        setShowCreatePackageModal(true);
+                      }}
+                    >
+                      <Ionicons name="add-circle-outline" size={16} color="#fff" />
+                      <Text style={{ color: '#fff', fontSize: 12, marginLeft: 4 }}>إضافة طرد</Text>
+                    </TouchableOpacity>
+                  </View>
+                  {packages.length === 0 ? (
+                    <Text style={[styles.emptyText, { color: colors.text }]}>لا توجد طرود</Text>
+                  ) : (
+                    packages.map((pkg) => (
+                      <View
+                        key={pkg.id}
+                        style={[styles.orderCard, { backgroundColor: colors.background, borderColor: colors.border, marginBottom: 12 }]}
+                      >
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                          <Text style={[styles.orderCardTitle, { color: colors.text }]}>طرد #{pkg.package_number}</Text>
+                          <View style={[styles.statusBadgeSmall, getStatusBadgeColor(pkg.status)]}>
+                            <Text style={styles.statusBadgeTextSmall}>{getStatusText(pkg.status)}</Text>
+                          </View>
+                        </View>
+                        <Text style={[styles.orderCardMeta, { color: colors.text, marginBottom: 8 }]}>
+                          عدد الطلبات: {pkg.orders?.length || 0}
+                        </Text>
+                        {pkg.orders && pkg.orders.length > 0 && (
+                          <View style={{ marginTop: 8 }}>
+                            {pkg.orders.map((order) => (
+                              <Text key={order.id} style={[styles.orderCardMeta, { color: colors.text, fontSize: 12 }]}>
+                                • #{order.order_number}
+                              </Text>
+                            ))}
+                          </View>
+                        )}
+                        <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
+                          {pkg.status === 'created' && (
+                            <TouchableOpacity
+                              style={[styles.quickEditButton, { backgroundColor: '#3B82F6', flex: 1 }]}
+                              onPress={() => updatePackageStatus(pkg.id, 'shipped_to_egypt')}
+                            >
+                              <Ionicons name="send-outline" size={14} color="#fff" />
+                              <Text style={styles.quickEditButtonText}>شُحن إلى مصر</Text>
+                            </TouchableOpacity>
+                          )}
+                          {pkg.status === 'shipped_to_egypt' && (
+                            <TouchableOpacity
+                              style={[styles.quickEditButton, { backgroundColor: '#10B981', flex: 1 }]}
+                              onPress={() => updatePackageStatus(pkg.id, 'received_in_egypt')}
+                            >
+                              <Ionicons name="checkmark-circle-outline" size={14} color="#fff" />
+                              <Text style={styles.quickEditButtonText}>وصل مصر</Text>
+                            </TouchableOpacity>
+                          )}
+                          {pkg.status === 'received_in_egypt' && (
+                            <TouchableOpacity
+                              style={[styles.quickEditButton, { backgroundColor: '#8B5CF6', flex: 1 }]}
+                              onPress={() => {
+                                setSelectedPackage(pkg);
+                                setNewInternalShipment({ shipment_number: '', shipping_company: '', tracking_number: '', cost: '', order_ids: pkg.orders?.map(o => o.id) || [] });
+                                setShowUnpackPackageModal(true);
+                              }}
+                            >
+                              <Ionicons name="cube-outline" size={14} color="#fff" />
+                              <Text style={styles.quickEditButtonText}>تفكيك الطرد</Text>
+                            </TouchableOpacity>
+                          )}
+                        </View>
+                      </View>
+                    ))
+                  )}
+                </>
+              )}
+            </ScrollView>
+            </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      )}
+
+      {/* Order Details Modal */}
+      {showOrderDetailsModal && selectedOrder && (
+        <TouchableOpacity 
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => {
+            setShowOrderDetailsModal(false);
+            setSelectedOrder(null);
+            setOrderItems([]);
+          }}
+        >
+          <TouchableOpacity 
+            activeOpacity={1}
+            onPress={(e) => e.stopPropagation()}
+          >
+            <View style={[styles.modalContent, { backgroundColor: colors.surface }]}>
+            <View style={styles.modalHeader}>
+              <Text style={[styles.modalTitle, { color: colors.text }]}>
+                طلب #{selectedOrder.order_number}
+              </Text>
+              <TouchableOpacity onPress={() => {
+                setShowOrderDetailsModal(false);
+                setSelectedOrder(null);
+                setOrderItems([]);
+              }}>
+                <Ionicons name="close" size={24} color={colors.text} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={styles.modalBody}>
+              <Text style={[styles.sectionTitle, { color: colors.text }]}>المنتجات ({orderItems.length})</Text>
+              {orderItems.length === 0 ? (
+                <Text style={[styles.emptyText, { color: colors.text }]}>لا توجد منتجات</Text>
+              ) : (
+                orderItems.map((item: any) => {
+                  const product = item.products || item.product;
+                  const variant = item.product_variants || item.variant;
+                  return (
+                    <View
+                      key={item.id}
+                      style={[styles.productCard, { backgroundColor: colors.background, borderColor: colors.border }]}
+                    >
+                      {product?.image_url && (
+                        <Image
+                          source={{ uri: product.image_url }}
+                          style={styles.productCardImage}
+                          resizeMode="cover"
+                        />
+                      )}
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.productCardTitle, { color: colors.text }]}>{product?.name || 'منتج غير معروف'}</Text>
+                        {variant && (
+                          <Text style={[styles.productCardMeta, { color: colors.text }]}>
+                            {variant.color} - {variant.size} {variant.size_unit || ''}
+                          </Text>
+                        )}
+                        <Text style={[styles.productCardMeta, { color: colors.text }]}>
+                          الكمية: {item.quantity} × {formatPrice(item.price)} ج.م
+                        </Text>
+                        <Text style={[styles.productCardPrice, { color: colors.text }]}>
+                          الإجمالي: {formatPrice(item.quantity * item.price)} ج.م
+                        </Text>
+                      </View>
+                    </View>
+                  );
+                })
+              )}
+            </ScrollView>
+            </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      )}
+
+      {/* Products Summary Modal */}
+      {showProductsSummaryModal && selectedShipment && (
+        <TouchableOpacity 
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => {
+            setShowProductsSummaryModal(false);
+            setSelectedShipment(null);
+            setOrderItems([]);
+          }}
+        >
+          <TouchableOpacity 
+            activeOpacity={1}
+            onPress={(e) => e.stopPropagation()}
+          >
+            <View style={[styles.modalContent, { backgroundColor: colors.surface }]}>
+            <View style={styles.modalHeader}>
+              <Text style={[styles.modalTitle, { color: colors.text }]}>
+                ملخص المنتجات - شحنة #{selectedShipment.shipment_number}
+              </Text>
+              <TouchableOpacity onPress={() => {
+                setShowProductsSummaryModal(false);
+                setSelectedShipment(null);
+                setOrderItems([]);
+                setProductsSummaryImages(new Map());
+              }}>
+                <Ionicons name="close" size={24} color={colors.text} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={styles.modalBody}>
+              <Text style={[styles.sectionTitle, { color: colors.text }]}>
+                المنتجات المجمعة ({getAggregatedProducts().length})
+              </Text>
+              {getAggregatedProducts().length === 0 ? (
+                <Text style={[styles.emptyText, { color: colors.text }]}>لا توجد منتجات</Text>
+              ) : (
+                getAggregatedProducts().map((item, index) => {
+                  const product = item.product;
+                  const variant = item.variant;
+                  
+                  // Get image: variant image first, then product image
+                  let displayImage: string | null = null;
+                  if (variant && product?.id) {
+                    const variantImageKey = `${product.id}-${variant.id}`;
+                    displayImage = productsSummaryImages.get(variantImageKey) || null;
+                  }
+                  if (!displayImage && product?.id) {
+                    displayImage = productsSummaryImages.get(product.id) || null;
+                  }
+                  // Fallback to product.image_url if no image found in map
+                  if (!displayImage && product?.image_url) {
+                    displayImage = product.image_url;
+                  }
+                  
+                  return (
+                    <View
+                      key={index}
+                      style={[styles.productCard, { backgroundColor: colors.background, borderColor: colors.border, flexDirection: 'row', alignItems: 'center', gap: 12 }]}
+                    >
+                      {displayImage ? (
+                        <Image
+                          source={{ uri: displayImage }}
+                          style={styles.productCardImage}
+                          resizeMode="cover"
+                        />
+                      ) : (
+                        <View style={[styles.productCardImage, { backgroundColor: '#E5E7EB', justifyContent: 'center', alignItems: 'center' }]}>
+                          <Ionicons name="image-outline" size={32} color="#9CA3AF" />
+                        </View>
+                      )}
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.productCardTitle, { color: colors.text, marginBottom: 4 }]}>{product?.name || 'منتج غير معروف'}</Text>
+                        {variant && (
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4, flexWrap: 'wrap' }}>
+                            {variant.color && (
+                              <View style={{ backgroundColor: '#EE1C47', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 }}>
+                                <Text style={{ color: '#fff', fontSize: 12, fontWeight: '600' }}>{variant.color}</Text>
+                              </View>
+                            )}
+                            {variant.size && (
+                              <View style={{ backgroundColor: '#F3F4F6', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 }}>
+                                <Text style={{ color: '#374151', fontSize: 12, fontWeight: '600' }}>
+                                  {variant.size} {variant.size_unit || ''}
+                                </Text>
+                              </View>
+                            )}
+                          </View>
+                        )}
+                        <Text style={[styles.productCardPrice, { color: '#10B981', fontWeight: 'bold', marginTop: 4 }]}>
+                          إجمالي الكمية في الشحنة: {item.totalQuantity} قطعة
+                        </Text>
+                      </View>
+                    </View>
+                  );
+                })
+              )}
+            </ScrollView>
+            </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      )}
+
+      {/* Create Package Modal */}
+      {showCreatePackageModal && selectedShipment && (
+        <TouchableOpacity 
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => {
+            setShowCreatePackageModal(false);
+            setNewPackage({ package_number: '', order_ids: [] });
+          }}
+        >
+          <TouchableOpacity 
+            activeOpacity={1}
+            onPress={(e) => e.stopPropagation()}
+          >
+            <View style={[styles.modalContent, { backgroundColor: colors.surface }]}>
+              <View style={styles.modalHeader}>
+                <Text style={[styles.modalTitle, { color: colors.text }]}>إنشاء طرد جديد</Text>
+                <TouchableOpacity onPress={() => {
+                  setShowCreatePackageModal(false);
+                  setNewPackage({ package_number: '', order_ids: [] });
+                }}>
+                  <Ionicons name="close" size={24} color={colors.text} />
+                </TouchableOpacity>
+              </View>
+
+              <ScrollView style={styles.modalBody}>
+                <View style={styles.formGroup}>
+                  <Text style={[styles.label, { color: colors.text }]}>رقم الطرد *</Text>
+                  <TextInput
+                    style={[styles.input, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border }]}
+                    placeholder="أدخل رقم الطرد"
+                    value={newPackage.package_number}
+                    onChangeText={(text) => setNewPackage({ ...newPackage, package_number: text })}
+                  />
+                </View>
+
+                <View style={styles.formGroup}>
+                  <Text style={[styles.label, { color: colors.text }]}>اختر الطلبات *</Text>
+                  <Text style={[styles.helperText, { color: colors.text }]}>
+                    {newPackage.order_ids.length} طلب محدد
+                  </Text>
+                  <ScrollView style={{ maxHeight: 300 }}>
+                    {shipmentOrders.length === 0 ? (
+                      <Text style={[styles.emptyText, { color: colors.text }]}>لا توجد طلبات متاحة</Text>
+                    ) : (
+                      shipmentOrders.map((order) => {
+                        const isSelected = newPackage.order_ids.includes(order.id);
+                        return (
+                          <TouchableOpacity
+                            key={order.id}
+                            style={[styles.orderSelectItem, isSelected && styles.orderSelectItemSelected]}
+                            onPress={() => {
+                              if (isSelected) {
+                                setNewPackage({
+                                  ...newPackage,
+                                  order_ids: newPackage.order_ids.filter(id => id !== order.id)
+                                });
+                              } else {
+                                setNewPackage({
+                                  ...newPackage,
+                                  order_ids: [...newPackage.order_ids, order.id]
+                                });
+                              }
+                            }}
+                          >
+                            <View style={[styles.checkbox, isSelected && styles.checkboxChecked]}>
+                              {isSelected && <Ionicons name="checkmark" size={16} color="#fff" />}
+                            </View>
+                            <View style={{ flex: 1 }}>
+                              <Text style={[styles.orderSelectText, { color: colors.text }]}>#{order.order_number}</Text>
+                              <Text style={[styles.orderSelectMeta, { color: colors.text }]}>
+                                {formatPrice(order.total_amount)} ج.م
+                              </Text>
+                            </View>
+                          </TouchableOpacity>
+                        );
+                      })
+                    )}
+                  </ScrollView>
+                </View>
+
+                <View style={styles.modalActions}>
+                  <TouchableOpacity
+                    style={[styles.modalButton, styles.modalButtonPrimary]}
+                    onPress={() => createPackage(selectedShipment.id)}
+                    disabled={loading}
+                  >
+                    {loading ? (
+                      <ActivityIndicator size="small" color="#fff" />
+                    ) : (
+                      <Text style={styles.modalButtonText}>إنشاء</Text>
+                    )}
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.modalButton, styles.modalButtonSecondary]}
+                    onPress={() => {
+                      setShowCreatePackageModal(false);
+                      setNewPackage({ package_number: '', order_ids: [] });
+                    }}
+                  >
+                    <Text style={[styles.modalButtonText, { color: colors.text }]}>إلغاء</Text>
+                  </TouchableOpacity>
+                </View>
+              </ScrollView>
+            </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      )}
+
+      {/* Package Details Modal */}
+      {showPackageDetailsModal && selectedPackageForDetails && (
+        <TouchableOpacity 
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => {
+            setShowPackageDetailsModal(false);
+            setSelectedPackageForDetails(null);
+          }}
+        >
+          <TouchableOpacity 
+            activeOpacity={1}
+            onPress={(e) => e.stopPropagation()}
+          >
+            <View style={[styles.modalContent, { backgroundColor: colors.surface, maxHeight: '90%' }]}>
+              <View style={styles.modalHeader}>
+                <Text style={[styles.modalTitle, { color: colors.text }]}>تفاصيل الطرد #{selectedPackageForDetails.package_number}</Text>
+                <TouchableOpacity onPress={() => {
+                  setShowPackageDetailsModal(false);
+                  setSelectedPackageForDetails(null);
+                }}>
+                  <Ionicons name="close" size={24} color={colors.text} />
+                </TouchableOpacity>
+              </View>
+
+              <ScrollView style={styles.modalBody}>
+                {/* Package Info */}
+                <View style={styles.shipmentInfo}>
+                  <Text style={[styles.infoLabel, { color: colors.text }]}>رقم الطرد:</Text>
+                  <Text style={[styles.infoValue, { color: colors.text }]}>#{selectedPackageForDetails.package_number}</Text>
+                </View>
+
+                {selectedPackageForDetails.shipment && (
+                  <View style={styles.shipmentInfo}>
+                    <Text style={[styles.infoLabel, { color: colors.text }]}>الشحنة الأصلية:</Text>
+                    <Text style={[styles.infoValue, { color: colors.text }]}>#{selectedPackageForDetails.shipment.shipment_number}</Text>
+                  </View>
+                )}
+
+                <View style={styles.shipmentInfo}>
+                  <Text style={[styles.infoLabel, { color: colors.text }]}>الحالة:</Text>
+                  <View style={[styles.statusBadgeSmall, getStatusBadgeColor(selectedPackageForDetails.status)]}>
+                    <Text style={styles.statusBadgeTextSmall}>{getStatusText(selectedPackageForDetails.status)}</Text>
+                  </View>
+                </View>
+
+                <View style={styles.shipmentInfo}>
+                  <Text style={[styles.infoLabel, { color: colors.text }]}>تاريخ الإنشاء:</Text>
+                  <Text style={[styles.infoValue, { color: colors.text }]}>
+                    {new Date(selectedPackageForDetails.created_at).toLocaleDateString('ar-EG', {
+                      year: 'numeric',
+                      month: 'long',
+                      day: 'numeric',
+                      hour: '2-digit',
+                      minute: '2-digit'
+                    })}
+                  </Text>
+                </View>
+
+                {selectedPackageForDetails.shipped_to_egypt_at && (
+                  <View style={styles.shipmentInfo}>
+                    <Text style={[styles.infoLabel, { color: colors.text }]}>تاريخ الشحن إلى مصر:</Text>
+                    <Text style={[styles.infoValue, { color: colors.text }]}>
+                      {new Date(selectedPackageForDetails.shipped_to_egypt_at).toLocaleDateString('ar-EG', {
+                        year: 'numeric',
+                        month: 'long',
+                        day: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit'
+                      })}
+                    </Text>
+                  </View>
+                )}
+
+                {selectedPackageForDetails.received_in_egypt_at && (
+                  <View style={styles.shipmentInfo}>
+                    <Text style={[styles.infoLabel, { color: colors.text }]}>تاريخ الوصول إلى مصر:</Text>
+                    <Text style={[styles.infoValue, { color: colors.text }]}>
+                      {new Date(selectedPackageForDetails.received_in_egypt_at).toLocaleDateString('ar-EG', {
+                        year: 'numeric',
+                        month: 'long',
+                        day: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit'
+                      })}
+                    </Text>
+                  </View>
+                )}
+
+                {selectedPackageForDetails.notes && (
+                  <View style={styles.shipmentInfo}>
+                    <Text style={[styles.infoLabel, { color: colors.text }]}>ملاحظات:</Text>
+                    <Text style={[styles.infoValue, { color: colors.text }]}>{selectedPackageForDetails.notes}</Text>
+                  </View>
+                )}
+
+                {/* Orders */}
+                <Text style={[styles.sectionTitle, { color: colors.text, marginTop: 20 }]}>
+                  الطلبات ({selectedPackageForDetails.orders?.length || 0})
+                </Text>
+                {selectedPackageForDetails.orders && selectedPackageForDetails.orders.length > 0 ? (
+                  selectedPackageForDetails.orders.map((order) => (
+                    <TouchableOpacity
+                      key={order.id}
+                      style={[styles.orderCard, { backgroundColor: colors.background, borderColor: colors.border, marginBottom: 12 }]}
+                      onPress={() => {
+                        setShowPackageDetailsModal(false);
+                        setSelectedPackageForDetails(null);
+                        router.push(`/admin/order/${order.id}`);
+                      }}
+                    >
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={[styles.orderCardTitle, { color: colors.text }]}>#{order.order_number}</Text>
+                          <Text style={[styles.orderCardMeta, { color: colors.text }]}>
+                            {formatPrice(order.total_amount)} ج.م
+                          </Text>
+                          <Text style={[styles.orderCardMeta, { color: colors.text, fontSize: 12 }]}>
+                            {new Date(order.created_at).toLocaleDateString('ar-EG')}
+                          </Text>
+                        </View>
+                        <View style={[styles.statusBadgeSmall, getStatusBadgeColor(order.status)]}>
+                          <Text style={styles.statusBadgeTextSmall}>{getStatusText(order.status)}</Text>
+                        </View>
+                      </View>
+                    </TouchableOpacity>
+                  ))
+                ) : (
+                  <Text style={[styles.emptyText, { color: colors.text }]}>لا توجد طلبات</Text>
+                )}
+
+                {/* Actions */}
+                <View style={{ flexDirection: 'row', gap: 8, marginTop: 20 }}>
+                  {selectedPackageForDetails.status === 'created' && (
+                    <TouchableOpacity
+                      style={[styles.quickEditButton, { backgroundColor: '#3B82F6', flex: 1 }]}
+                      onPress={() => {
+                        setShowPackageDetailsModal(false);
+                        setSelectedPackageForDetails(null);
+                        updatePackageStatus(selectedPackageForDetails.id, 'shipped_to_egypt');
+                      }}
+                    >
+                      <Ionicons name="send-outline" size={16} color="#fff" />
+                      <Text style={styles.quickEditButtonText}>شُحن إلى مصر</Text>
+                    </TouchableOpacity>
+                  )}
+                  {selectedPackageForDetails.status === 'shipped_to_egypt' && (
+                    <TouchableOpacity
+                      style={[styles.quickEditButton, { backgroundColor: '#10B981', flex: 1 }]}
+                      onPress={() => {
+                        setShowPackageDetailsModal(false);
+                        setSelectedPackageForDetails(null);
+                        updatePackageStatus(selectedPackageForDetails.id, 'received_in_egypt');
+                      }}
+                    >
+                      <Ionicons name="checkmark-circle-outline" size={16} color="#fff" />
+                      <Text style={styles.quickEditButtonText}>وصل مصر</Text>
+                    </TouchableOpacity>
+                  )}
+                  {selectedPackageForDetails.status === 'received_in_egypt' && (
+                    <TouchableOpacity
+                      style={[styles.quickEditButton, { backgroundColor: '#8B5CF6', flex: 1 }]}
+                      onPress={() => {
+                        setShowPackageDetailsModal(false);
+                        setSelectedPackageForDetails(null);
+                        setSelectedPackage(selectedPackageForDetails);
+                        setNewInternalShipment({ 
+                          shipment_number: '', 
+                          shipping_company: '', 
+                          tracking_number: '', 
+                          cost: '', 
+                          order_ids: selectedPackageForDetails.orders?.map(o => o.id) || [] 
+                        });
+                        setShowUnpackPackageModal(true);
+                      }}
+                    >
+                      <Ionicons name="cube-outline" size={16} color="#fff" />
+                      <Text style={styles.quickEditButtonText}>تفكيك الطرد</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              </ScrollView>
+            </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      )}
+
+      {/* Unpack Package Modal */}
+      {showUnpackPackageModal && selectedPackage && (
+        <TouchableOpacity 
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => {
+            setShowUnpackPackageModal(false);
+            setSelectedPackage(null);
+            setNewInternalShipment({ shipment_number: '', shipping_company: '', tracking_number: '', cost: '', order_ids: [] });
+          }}
+        >
+          <TouchableOpacity 
+            activeOpacity={1}
+            onPress={(e) => e.stopPropagation()}
+          >
+            <View style={[styles.modalContent, { backgroundColor: colors.surface }]}>
+              <View style={styles.modalHeader}>
+                <Text style={[styles.modalTitle, { color: colors.text }]}>تفكيك الطرد #{selectedPackage.package_number}</Text>
+                <TouchableOpacity onPress={() => {
+                  setShowUnpackPackageModal(false);
+                  setSelectedPackage(null);
+                  setNewInternalShipment({ shipment_number: '', shipping_company: '', tracking_number: '', cost: '', order_ids: [] });
+                }}>
+                  <Ionicons name="close" size={24} color={colors.text} />
+                </TouchableOpacity>
+              </View>
+
+              <ScrollView style={styles.modalBody}>
+                <View style={styles.formGroup}>
+                  <Text style={[styles.label, { color: colors.text }]}>رقم الشحنة الداخلية *</Text>
+                  <TextInput
+                    style={[styles.input, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border }]}
+                    placeholder="أدخل رقم الشحنة"
+                    value={newInternalShipment.shipment_number}
+                    onChangeText={(text) => setNewInternalShipment({ ...newInternalShipment, shipment_number: text })}
+                  />
+                </View>
+
+                <View style={styles.formGroup}>
+                  <Text style={[styles.label, { color: colors.text }]}>شركة الشحن</Text>
+                  <TextInput
+                    style={[styles.input, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border }]}
+                    placeholder="اسم شركة الشحن"
+                    value={newInternalShipment.shipping_company}
+                    onChangeText={(text) => setNewInternalShipment({ ...newInternalShipment, shipping_company: text })}
+                  />
+                </View>
+
+                <View style={styles.formGroup}>
+                  <Text style={[styles.label, { color: colors.text }]}>رقم التتبع</Text>
+                  <TextInput
+                    style={[styles.input, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border }]}
+                    placeholder="رقم التتبع"
+                    value={newInternalShipment.tracking_number}
+                    onChangeText={(text) => setNewInternalShipment({ ...newInternalShipment, tracking_number: text })}
+                  />
+                </View>
+
+                <View style={styles.formGroup}>
+                  <Text style={[styles.label, { color: colors.text }]}>التكلفة (ج.م)</Text>
+                  <TextInput
+                    style={[styles.input, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border }]}
+                    placeholder="0.00"
+                    value={newInternalShipment.cost}
+                    onChangeText={(text) => setNewInternalShipment({ ...newInternalShipment, cost: text })}
+                    keyboardType="numeric"
+                  />
+                </View>
+
+                <View style={styles.formGroup}>
+                  <Text style={[styles.label, { color: colors.text }]}>اختر الطلبات *</Text>
+                  <Text style={[styles.helperText, { color: colors.text }]}>
+                    {newInternalShipment.order_ids.length} طلب محدد
+                  </Text>
+                  <ScrollView style={{ maxHeight: 300 }}>
+                    {selectedPackage.orders && selectedPackage.orders.length === 0 ? (
+                      <Text style={[styles.emptyText, { color: colors.text }]}>لا توجد طلبات متاحة</Text>
+                    ) : (
+                      selectedPackage.orders?.map((order) => {
+                        const isSelected = newInternalShipment.order_ids.includes(order.id);
+                        return (
+                          <TouchableOpacity
+                            key={order.id}
+                            style={[styles.orderSelectItem, isSelected && styles.orderSelectItemSelected]}
+                            onPress={() => {
+                              if (isSelected) {
+                                setNewInternalShipment({
+                                  ...newInternalShipment,
+                                  order_ids: newInternalShipment.order_ids.filter(id => id !== order.id)
+                                });
+                              } else {
+                                setNewInternalShipment({
+                                  ...newInternalShipment,
+                                  order_ids: [...newInternalShipment.order_ids, order.id]
+                                });
+                              }
+                            }}
+                          >
+                            <View style={[styles.checkbox, isSelected && styles.checkboxChecked]}>
+                              {isSelected && <Ionicons name="checkmark" size={16} color="#fff" />}
+                            </View>
+                            <View style={{ flex: 1 }}>
+                              <Text style={[styles.orderSelectText, { color: colors.text }]}>#{order.order_number}</Text>
+                              <Text style={[styles.orderSelectMeta, { color: colors.text }]}>
+                                {formatPrice(order.total_amount)} ج.م
+                              </Text>
+                            </View>
+                          </TouchableOpacity>
+                        );
+                      })
+                    )}
+                  </ScrollView>
+                </View>
+
+                <View style={styles.modalActions}>
+                  <TouchableOpacity
+                    style={[styles.modalButton, styles.modalButtonPrimary]}
+                    onPress={() => unpackPackage(selectedPackage.id)}
+                    disabled={loading}
+                  >
+                    {loading ? (
+                      <ActivityIndicator size="small" color="#fff" />
+                    ) : (
+                      <Text style={styles.modalButtonText}>تفكيك وإنشاء شحنة</Text>
+                    )}
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.modalButton, styles.modalButtonSecondary]}
+                    onPress={() => {
+                      setShowUnpackPackageModal(false);
+                      setSelectedPackage(null);
+                      setNewInternalShipment({ shipment_number: '', shipping_company: '', tracking_number: '', cost: '', order_ids: [] });
+                    }}
+                  >
+                    <Text style={[styles.modalButtonText, { color: colors.text }]}>إلغاء</Text>
+                  </TouchableOpacity>
+                </View>
+              </ScrollView>
+            </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      )}
+
       {/* SweetAlert */}
       {sweetAlert.alert.options && (
         <SweetAlert
@@ -9199,16 +11490,35 @@ const styles = StyleSheet.create({
     padding: 15,
     borderRadius: 12,
     marginBottom: 10,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 4,
+      },
+      android: {
+        elevation: 3,
+      },
+      web: {
+        boxShadow: '0 2px 4px rgba(0, 0, 0, 0.1)',
+      },
+    }),
   },
   cardDark: {
     backgroundColor: '#1E1E1E',
-    shadowColor: '#000',
-    shadowOpacity: 0.3,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOpacity: 0.3,
+      },
+      android: {
+        elevation: 3,
+      },
+      web: {
+        boxShadow: '0 2px 4px rgba(0, 0, 0, 0.3)',
+      },
+    }),
   },
   gridContainer: {
     flexDirection: 'row',
@@ -9254,11 +11564,20 @@ const styles = StyleSheet.create({
       : (Dimensions.get('window').width - 40) / 2 - 6,
     minWidth: Platform.OS === 'web' ? 280 : 150,
     maxWidth: Platform.OS === 'web' ? 400 : undefined,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 4,
+      },
+      android: {
+        elevation: 3,
+      },
+      web: {
+        boxShadow: '0 2px 4px rgba(0, 0, 0, 0.1)',
+      },
+    }),
     position: 'relative',
     borderWidth: 1,
     borderColor: '#E5E7EB',
@@ -11012,6 +13331,204 @@ const styles = StyleSheet.create({
   statusesRow: {
     flexDirection: 'row',
     gap: 12,
+  },
+  addButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 12,
+    margin: 16,
+    borderRadius: 8,
+    gap: 8,
+  },
+  addButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  summaryButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    padding: 6,
+    borderRadius: 6,
+    backgroundColor: '#F0FDF4',
+  },
+  summaryButtonText: {
+    color: '#10B981',
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  filterButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    marginRight: 8,
+  },
+  filterButtonActive: {
+    backgroundColor: '#EE1C47',
+    borderColor: '#EE1C47',
+  },
+  filterText: {
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  filterTextActive: {
+    color: '#fff',
+    fontWeight: '600',
+  },
+  formGroup: {
+    marginBottom: 16,
+  },
+  label: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 8,
+  },
+  helperText: {
+    fontSize: 12,
+    marginBottom: 8,
+    opacity: 0.7,
+  },
+  checkboxRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  checkboxLabel: {
+    marginLeft: 8,
+    fontSize: 14,
+  },
+  orderSelectItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    marginBottom: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    backgroundColor: '#F9FAFB',
+  },
+  orderSelectItemSelected: {
+    backgroundColor: '#EEF2FF',
+    borderColor: '#6366F1',
+  },
+  orderSelectText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  orderSelectMeta: {
+    fontSize: 12,
+    marginTop: 4,
+    opacity: 0.7,
+  },
+  modalActions: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 20,
+  },
+  modalButton: {
+    flex: 1,
+    padding: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalButtonPrimary: {
+    backgroundColor: '#EE1C47',
+  },
+  modalButtonSecondary: {
+    backgroundColor: '#F3F4F6',
+  },
+  modalButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  shipmentInfo: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 12,
+    marginBottom: 12,
+    borderRadius: 8,
+    backgroundColor: '#F9FAFB',
+  },
+  infoLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  infoValue: {
+    fontSize: 14,
+  },
+  orderCard: {
+    padding: 12,
+    marginBottom: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  orderCardTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  orderCardMeta: {
+    fontSize: 14,
+    marginBottom: 8,
+  },
+  productCard: {
+    flexDirection: 'row',
+    padding: 12,
+    marginBottom: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    gap: 12,
+  },
+  productCardImage: {
+    width: 80,
+    height: 80,
+    borderRadius: 8,
+  },
+  productCardTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  productCardMeta: {
+    fontSize: 12,
+    marginBottom: 4,
+    opacity: 0.7,
+  },
+  productCardPrice: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginTop: 4,
+  },
+  emptyText: {
+    textAlign: 'center',
+    padding: 20,
+    fontSize: 14,
+    opacity: 0.6,
+  },
+  gridCardPurchased: {
+    backgroundColor: '#F0FDF4',
+    borderColor: '#10B981',
+    borderWidth: 2,
+  },
+  purchasedBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#D1FAE5',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 12,
+  },
+  purchasedBadgeText: {
+    fontSize: 10,
+    color: '#10B981',
+    fontWeight: '600',
   },
 });
 

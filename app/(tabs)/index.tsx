@@ -8,7 +8,6 @@ import {
   TouchableOpacity,
   Image,
   Platform,
-  Dimensions,
   ActivityIndicator,
   Animated,
   Easing,
@@ -23,17 +22,15 @@ import { useDarkMode } from '@/contexts/DarkModeContext';
 import { ProductCardSkeleton } from '@/components/ProductCardSkeleton';
 import { getCardImageUrl } from '@/utils/imageUtils';
 import { getSupabaseUrl, getSupabaseAnonKey } from '@/utils/env';
-
-const { width } = Dimensions.get('window');
-const isWeb = Platform.OS === 'web';
-// Responsive item width: Web gets more columns (5-6 like Temu), mobile gets 2 columns
-const itemWidth = isWeb 
-  ? Math.min(220, Math.floor((Math.min(width, 1600) - 80) / 6)) // Max 6 columns on web (like Temu)
-  : Math.floor((width - 24) / 2); // 2 columns on mobile with 8px padding on each side and 8px gap
-const maxContainerWidth = isWeb ? 1600 : width; // Max width for web container (wider like Temu)
+import { useResponsive, useItemWidth } from '@/hooks/useResponsive';
 
 export default function HomeScreen() {
   const { colors, isDarkMode } = useDarkMode();
+  const responsive = useResponsive();
+  const { isWeb, columns, maxContentWidth, padding } = responsive;
+  
+  // Calculate item width based on responsive columns
+  const itemWidth = useItemWidth(columns, 12, padding * 2);
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [sections, setSections] = useState<Section[]>([]);
@@ -634,7 +631,15 @@ export default function HomeScreen() {
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       {/* Search Bar */}
-      <View style={[styles.searchContainer, { backgroundColor: colors.surface }]}>
+      <View style={[
+        styles.searchContainer, 
+        { 
+          backgroundColor: colors.surface,
+          maxWidth: isWeb ? Math.min(maxContentWidth, 800) : undefined,
+          marginHorizontal: isWeb ? 'auto' : padding,
+          paddingHorizontal: isWeb ? 20 : padding,
+        }
+      ]}>
         <Ionicons name="search" size={20} color={colors.textSecondary} style={styles.searchIcon} />
         <TextInput
           style={[styles.searchInput, { color: colors.text }]}
@@ -796,12 +801,24 @@ export default function HomeScreen() {
       {/* Products Grid */}
       <ScrollView
         style={styles.scrollView}
-        contentContainerStyle={styles.productsGridContainer}
+        contentContainerStyle={[
+          styles.productsGridContainer,
+          { padding: padding }
+        ]}
         showsVerticalScrollIndicator={false}
         onScroll={handleScroll}
         scrollEventThrottle={100}
       >
-        <View style={[styles.productsGrid, { maxWidth: maxContainerWidth, alignSelf: 'center', width: '100%' }]}>
+        <View style={[
+          styles.productsGrid, 
+          { 
+            maxWidth: maxContentWidth, 
+            alignSelf: 'center', 
+            width: '100%',
+            gap: isWeb ? 12 : 0,
+            justifyContent: isWeb ? 'flex-start' : 'space-between',
+          }
+        ]}>
           {loading ? (
             <ProductCardSkeleton count={8} />
           ) : error ? (
@@ -849,7 +866,14 @@ export default function HomeScreen() {
               return (
                 <TouchableOpacity
                   key={product.id}
-                  style={[styles.productCard, { backgroundColor: colors.card }]}
+                  style={[
+                    styles.productCard, 
+                    { 
+                      backgroundColor: colors.card,
+                      width: itemWidth,
+                      marginHorizontal: isWeb ? 0 : 4,
+                    }
+                  ]}
                   onPress={() => handleProductPress(product.id)}
                 >
                   {/* Discount Badge */}
@@ -889,7 +913,7 @@ export default function HomeScreen() {
                   
                   <Image
                     source={{ uri: getCardImageUrl(product.primary_image_url || product.image_url, 250, 50) }} // Optimized for cards: 250px, quality 50
-                    style={styles.productImage}
+                    style={[styles.productImage, { height: itemWidth * (isWeb ? 1.15 : 1.2) }]}
                     resizeMode="contain"
                   />
                   <View style={styles.productInfo}>

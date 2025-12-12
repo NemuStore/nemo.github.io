@@ -12,6 +12,8 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 
+const isWeb = Platform.OS === 'web';
+
 const { width } = Dimensions.get('window');
 
 export type AlertType = 'success' | 'error' | 'warning' | 'info' | 'confirm';
@@ -65,30 +67,17 @@ export default function SweetAlert({
   }, [visible]);
 
   const handleConfirm = () => {
-    console.log('✅ SweetAlert: handleConfirm called, onConfirm exists:', !!onConfirm);
-    console.log('🔍 SweetAlert: onConfirm type:', typeof onConfirm);
-    console.log('🔍 SweetAlert: onConfirm function:', onConfirm);
-    console.log('🔍 SweetAlert: onConfirm name:', onConfirm?.name || 'anonymous');
-    console.log('🔍 SweetAlert: type:', type, 'message:', message);
-    
-    // استدعاء الـ callback أولاً
+    // استدعاء الـ callback إذا كان موجوداً
     if (onConfirm) {
       try {
-        console.log('🔄 SweetAlert: Calling onConfirm callback...');
-        console.log('🔄 SweetAlert: onConfirm.toString():', onConfirm.toString().substring(0, 200));
-        const result = onConfirm();
-        console.log('✅ SweetAlert: onConfirm callback executed successfully, result:', result);
+        onConfirm();
       } catch (error) {
         console.error('❌ SweetAlert: Error in onConfirm callback:', error);
-        console.error('❌ SweetAlert: Error stack:', error instanceof Error ? error.stack : 'No stack');
       }
-    } else {
-      console.warn('⚠️ SweetAlert: onConfirm is not defined!');
     }
     
     // حل بديل: إذا كان success و message يحتوي على "تم إنشاء الطلب"، ننفذ التنقل مباشرة
     if (type === 'success' && message && message.includes('تم إنشاء الطلب')) {
-      console.log('🚀 SweetAlert: Fallback navigation - redirecting to /orders');
       setTimeout(() => {
         if (Platform.OS === 'web' && typeof window !== 'undefined') {
           window.location.href = '/orders';
@@ -100,7 +89,6 @@ export default function SweetAlert({
     
     // إغلاق الـ alert بعد تنفيذ الـ callback
     setTimeout(() => {
-      console.log('🔒 SweetAlert: Closing alert...');
       onClose();
     }, 200);
   };
@@ -218,11 +206,20 @@ const styles = StyleSheet.create({
     padding: 24,
     width: Math.min(width - 40, 400),
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.3,
-    shadowRadius: 20,
-    elevation: 10,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 10 },
+        shadowOpacity: 0.3,
+        shadowRadius: 20,
+      },
+      android: {
+        elevation: 10,
+      },
+      web: {
+        boxShadow: '0 10px 20px rgba(0, 0, 0, 0.3)',
+      },
+    }),
   },
   iconContainer: {
     width: 100,

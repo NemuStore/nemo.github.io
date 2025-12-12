@@ -84,11 +84,17 @@ CREATE POLICY "Admins can update orders" ON public.orders
 
 -- Order items policies
 DROP POLICY IF EXISTS "Admins can view all order items" ON public.order_items;
+DROP POLICY IF EXISTS "Admins can update all order items" ON public.order_items;
 
 CREATE POLICY "Admins can view all order items" ON public.order_items
   FOR SELECT USING (
     EXISTS (SELECT 1 FROM public.orders WHERE id = order_id AND user_id = auth.uid())
     OR public.is_admin_or_manager(auth.uid())
+  );
+
+CREATE POLICY "Admins can update all order items" ON public.order_items
+  FOR UPDATE USING (
+    public.is_admin_or_manager(auth.uid())
   );
 
 -- Shipments policies

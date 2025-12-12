@@ -239,6 +239,11 @@ CREATE POLICY "Admins can view all order items" ON public.order_items
     EXISTS (SELECT 1 FROM public.users WHERE id = auth.uid() AND role IN ('admin', 'manager', 'employee'))
   );
 
+CREATE POLICY "Admins can update all order items" ON public.order_items
+  FOR UPDATE USING (
+    EXISTS (SELECT 1 FROM public.users WHERE id = auth.uid() AND role IN ('admin', 'manager', 'employee'))
+  );
+
 -- Shipments policies
 CREATE POLICY "Admins can view all shipments" ON public.shipments
   FOR SELECT USING (

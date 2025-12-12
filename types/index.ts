@@ -297,3 +297,69 @@ export interface ProductImage {
   updated_at: string;
 }
 
+// Package Status (حالة الطرد)
+export type PackageStatus = 'created' | 'shipped_to_egypt' | 'received_in_egypt' | 'unpacked';
+
+// Package (الطرد - يتم إنشاؤه من الشحنة عند وصولها للإمارات)
+export interface Package {
+  id: string;
+  package_number: string; // رقم يدوي للطرد
+  shipment_id: string; // الشحنة الأصلية
+  status: PackageStatus;
+  created_at: string;
+  shipped_to_egypt_at: string | null;
+  received_in_egypt_at: string | null;
+  unpacked_at: string | null;
+  notes: string | null; // ملاحظات إضافية
+  created_by: string | null; // من أنشأ الطرد
+  updated_at: string;
+  shipment?: Shipment; // Joined shipment data
+  orders?: Order[]; // Joined orders data
+  internal_shipments?: InternalShipment[]; // الشحنات الداخلية الناتجة عن تفكيك الطرد
+}
+
+// Package Order (ربط الطرود بالطلبات)
+export interface PackageOrder {
+  id: string;
+  package_id: string;
+  order_id: string;
+  created_at: string;
+  order?: Order; // Joined order data
+}
+
+// Internal Shipment Status (حالة الشحنة الداخلية)
+export type InternalShipmentStatus = 'pending' | 'out_for_delivery' | 'delivered' | 'cancelled';
+
+// Internal Shipment (الشحنة الداخلية - للشحن داخل مصر بعد تفكيك الطرود)
+export interface InternalShipment {
+  id: string;
+  shipment_number: string; // رقم الشحنة الداخلية
+  status: InternalShipmentStatus;
+  shipping_company: string | null; // اسم شركة الشحن
+  tracking_number: string | null; // رقم التتبع
+  cost: number;
+  created_at: string;
+  shipped_at: string | null;
+  delivered_at: string | null;
+  updated_at: string;
+  orders?: Order[]; // Joined orders data
+  packages?: Package[]; // الطرود التي تم تفكيكها لهذه الشحنة
+}
+
+// Internal Shipment Order (ربط الشحنات الداخلية بالطلبات)
+export interface InternalShipmentOrder {
+  id: string;
+  internal_shipment_id: string;
+  order_id: string;
+  created_at: string;
+  order?: Order; // Joined order data
+}
+
+// Package Internal Shipment (ربط الطرود بالشحنات الداخلية)
+export interface PackageInternalShipment {
+  id: string;
+  package_id: string;
+  internal_shipment_id: string;
+  created_at: string;
+}
+

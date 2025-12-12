@@ -21,12 +21,6 @@ export function useSweetAlert() {
   });
 
   const showAlert = useCallback((options: AlertOptions) => {
-    console.log('🔔 useSweetAlert: showAlert called', { visible: true, options });
-    console.log('🔍 useSweetAlert: onConfirm type:', typeof options.onConfirm);
-    console.log('🔍 useSweetAlert: onConfirm exists:', !!options.onConfirm);
-    if (options.onConfirm) {
-      console.log('🔍 useSweetAlert: onConfirm function name:', options.onConfirm.name || 'anonymous');
-    }
     setAlert({
       visible: true,
       options,
@@ -49,7 +43,6 @@ export function useSweetAlert() {
 
   const showSuccess = useCallback(
     (title: string, message?: string, onConfirm?: () => void) => {
-      console.log('🎉 useSweetAlert: showSuccess called', { title, message, hasOnConfirm: !!onConfirm });
       showAlert({
         type: 'success',
         title,

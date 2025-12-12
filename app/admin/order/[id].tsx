@@ -349,6 +349,7 @@ export default function AdminOrderDetailScreen() {
             'apikey': supabaseKey || '',
             'Authorization': `Bearer ${accessToken}`,
             'Content-Type': 'application/json',
+            'Prefer': 'return=representation',
           },
           body: JSON.stringify({
             is_purchased: isPurchased,
@@ -357,6 +358,10 @@ export default function AdminOrderDetailScreen() {
       );
 
       if (response.ok) {
+        const updatedData = await response.json();
+        console.log('✅ Updated order item:', updatedData);
+        
+        // Update local state
         const newPurchasedItems = new Set(purchasedItems);
         if (isPurchased) {
           newPurchasedItems.add(itemId);
@@ -364,8 +369,21 @@ export default function AdminOrderDetailScreen() {
           newPurchasedItems.delete(itemId);
         }
         setPurchasedItems(newPurchasedItems);
+        
+        // Update orderItems state to reflect the change
+        setOrderItems(prevItems => 
+          prevItems.map(item => 
+            item.id === itemId 
+              ? { ...item, is_purchased: isPurchased }
+              : item
+          )
+        );
+        
+        sweetAlert.showSuccess('نجح', isPurchased ? 'تم تحديد المنتج كمشترى' : 'تم إلغاء تحديد المنتج كمشترى');
       } else {
-        throw new Error('فشل تحديث حالة الشراء');
+        const errorText = await response.text();
+        console.error('❌ Failed to update order item:', errorText);
+        throw new Error(errorText || 'فشل تحديث حالة الشراء');
       }
     } catch (error: any) {
       sweetAlert.showError('خطأ', error.message || 'فشل تحديث حالة الشراء');
@@ -583,23 +601,38 @@ export default function AdminOrderDetailScreen() {
       }));
 
       // تحديث كل منتج على حدة
-      await Promise.all(
-        updates.map(update =>
-          fetch(`${supabaseUrl}/rest/v1/order_items?id=eq.${update.id}`, {
-            method: 'PATCH',
-            headers: {
-              'apikey': supabaseKey || '',
-              'Authorization': `Bearer ${accessToken}`,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              is_purchased: update.is_purchased,
-            })
+      const updatePromises = updates.map(update =>
+        fetch(`${supabaseUrl}/rest/v1/order_items?id=eq.${update.id}`, {
+          method: 'PATCH',
+          headers: {
+            'apikey': supabaseKey || '',
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=representation',
+          },
+          body: JSON.stringify({
+            is_purchased: update.is_purchased,
           })
-        )
+        })
       );
 
+      const responses = await Promise.all(updatePromises);
+      const failedUpdates = responses.filter(r => !r.ok);
+      
+      if (failedUpdates.length > 0) {
+        const errorTexts = await Promise.all(failedUpdates.map(r => r.text()));
+        console.error('❌ Failed to update some items:', errorTexts);
+        throw new Error('فشل تحديث بعض المنتجات');
+      }
+
+      // Update local state
       setPurchasedItems(new Set(newPurchasedState ? itemIds : []));
+      
+      // Update orderItems state
+      setOrderItems(prevItems => 
+        prevItems.map(item => ({ ...item, is_purchased: newPurchasedState }))
+      );
+      
       sweetAlert.showSuccess('نجح', newPurchasedState ? 'تم تحديد جميع المنتجات كتم الشراء' : 'تم إلغاء تحديد جميع المنتجات');
     } catch (error: any) {
       sweetAlert.showError('خطأ', error.message || 'فشل تحديث حالة الشراء');
@@ -805,7 +838,7 @@ export default function AdminOrderDetailScreen() {
           <View style={styles.productsSection}>
             <View style={styles.productsHeader}>
               <Text style={styles.sectionTitle}>المنتجات ({orderItems.length})</Text>
-              {orderItems.length > 0 && (
+              {orderItems.length > 0 && order?.source_type === 'external' && (
                 <TouchableOpacity
                   style={styles.selectAllButton}
                   onPress={handleSelectAll}
@@ -909,17 +942,27 @@ export default function AdminOrderDetailScreen() {
                       </View>
                     </View>
                     
-                    {/* Checkbox تم الشراء */}
-                    <View style={styles.purchaseCheckboxContainer}>
-                      <TouchableOpacity
-                        style={[styles.checkbox, isPurchased && styles.checkboxChecked]}
-                        onPress={() => handleTogglePurchase(item.id, !isPurchased)}
-                        disabled={updatingPurchase}
-                      >
-                        {isPurchased && <Ionicons name="checkmark" size={16} color="#fff" />}
-                      </TouchableOpacity>
-                      <Text style={styles.checkboxLabel}>تم الشراء</Text>
-                    </View>
+                    {/* Checkbox تم الشراء - فقط للطلبات من الخارج */}
+                    {order?.source_type === 'external' && (
+                      <View style={styles.purchaseCheckboxContainer}>
+                        <TouchableOpacity
+                          style={[styles.checkbox, isPurchased && styles.checkboxChecked]}
+                          onPress={() => handleTogglePurchase(item.id, !isPurchased)}
+                          disabled={updatingPurchase}
+                        >
+                          {isPurchased && <Ionicons name="checkmark" size={16} color="#fff" />}
+                        </TouchableOpacity>
+                        <Text style={styles.checkboxLabel}>تم الشراء</Text>
+                      </View>
+                    )}
+                    {order?.source_type === 'warehouse' && (
+                      <View style={styles.purchaseCheckboxContainer}>
+                        <View style={[styles.checkbox, { backgroundColor: '#E0E0E0', borderColor: '#BDBDBD' }]}>
+                          <Ionicons name="checkmark" size={16} color="#999" />
+                        </View>
+                        <Text style={[styles.checkboxLabel, { color: '#999' }]}>من المخزون (لا يحتاج شراء)</Text>
+                      </View>
+                    )}
                   </View>
                 );
               })
