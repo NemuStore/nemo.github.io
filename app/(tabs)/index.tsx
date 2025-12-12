@@ -977,6 +977,8 @@ export default function HomeScreen() {
   );
 }
 
+const isWebPlatform = Platform.OS === 'web';
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -986,14 +988,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#fff',
-    marginTop: isWeb ? 16 : 6,
-    marginBottom: isWeb ? 16 : 4,
-    marginHorizontal: isWeb ? 'auto' : 8,
-    paddingHorizontal: isWeb ? 20 : 12,
-    borderRadius: isWeb ? 30 : 24,
-    height: isWeb ? 48 : 44,
-    maxWidth: isWeb ? 800 : undefined,
-    width: isWeb ? '100%' : undefined,
+    marginTop: isWebPlatform ? 16 : 6,
+    marginBottom: isWebPlatform ? 16 : 4,
+    marginHorizontal: isWebPlatform ? 'auto' : 8,
+    paddingHorizontal: isWebPlatform ? 20 : 12,
+    borderRadius: isWebPlatform ? 30 : 24,
+    height: isWebPlatform ? 48 : 44,
+    maxWidth: isWebPlatform ? 800 : undefined,
+    width: isWebPlatform ? '100%' : undefined,
     borderWidth: 1,
     borderColor: '#E5E7EB',
     shadowColor: '#000',
@@ -1014,23 +1016,21 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   productsGridContainer: {
-    padding: isWeb ? 16 : 8,
-    paddingTop: isWeb ? 16 : 4,
-    paddingBottom: isWeb ? 40 : 20,
+    padding: isWebPlatform ? 16 : 8,
+    paddingTop: isWebPlatform ? 16 : 4,
+    paddingBottom: isWebPlatform ? 40 : 20,
   },
   productsGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    justifyContent: isWeb ? 'flex-start' : 'space-between',
-    gap: isWeb ? 12 : 0,
+    justifyContent: isWebPlatform ? 'flex-start' : 'space-between',
+    gap: isWebPlatform ? 12 : 0,
     padding: 0,
   },
   productCard: {
-    width: isWeb ? itemWidth : itemWidth,
     backgroundColor: '#fff',
-    borderRadius: isWeb ? 8 : 12,
-    marginBottom: isWeb ? 20 : 12,
-    marginHorizontal: isWeb ? 0 : 4,
+    borderRadius: isWebPlatform ? 8 : 12,
+    marginBottom: isWebPlatform ? 20 : 12,
     overflow: 'hidden',
     borderWidth: 1,
     borderColor: '#F3F4F6',
@@ -1040,19 +1040,19 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 2,
     position: 'relative',
-    ...(isWeb && {
+    ...(isWebPlatform && {
       transition: 'all 0.2s ease',
       cursor: 'pointer',
     }),
   },
   discountBadge: {
     position: 'absolute',
-    top: isWeb ? 6 : 6,
-    right: isWeb ? 6 : 6,
+    top: isWebPlatform ? 6 : 6,
+    right: isWebPlatform ? 6 : 6,
     backgroundColor: '#EE1C47', // Temu red
-    paddingHorizontal: isWeb ? 10 : 8,
-    paddingVertical: isWeb ? 5 : 4,
-    borderRadius: isWeb ? 4 : 6,
+    paddingHorizontal: isWebPlatform ? 10 : 8,
+    paddingVertical: isWebPlatform ? 5 : 4,
+    borderRadius: isWebPlatform ? 4 : 6,
     zIndex: 10,
     shadowColor: '#EE1C47',
     shadowOffset: { width: 0, height: 1 },
@@ -1062,8 +1062,8 @@ const styles = StyleSheet.create({
   },
   wishlistButton: {
     position: 'absolute',
-    top: isWeb ? 6 : 6,
-    left: isWeb ? 6 : 6,
+    top: isWebPlatform ? 6 : 6,
+    left: isWebPlatform ? 6 : 6,
     backgroundColor: 'rgba(255, 255, 255, 0.95)',
     borderRadius: 20,
     width: 36,
@@ -1104,13 +1104,13 @@ const styles = StyleSheet.create({
   },
   dealsBanner: {
     backgroundColor: '#FEF2F2', // Light red background like Temu
-    paddingVertical: isWeb ? 14 : 8,
-    paddingHorizontal: isWeb ? 24 : 12,
-    marginHorizontal: isWeb ? 'auto' : 8,
-    marginTop: isWeb ? 12 : 0,
-    marginBottom: isWeb ? 16 : 4,
-    borderRadius: isWeb ? 6 : 8,
-    maxWidth: isWeb ? 1600 : undefined,
+    paddingVertical: isWebPlatform ? 14 : 8,
+    paddingHorizontal: isWebPlatform ? 24 : 12,
+    marginHorizontal: isWebPlatform ? 'auto' : 8,
+    marginTop: isWebPlatform ? 12 : 0,
+    marginBottom: isWebPlatform ? 16 : 4,
+    borderRadius: isWebPlatform ? 6 : 8,
+    maxWidth: isWebPlatform ? 1600 : undefined,
     borderLeftWidth: 3,
     borderLeftColor: '#EE1C47', // Temu red
   },
@@ -1122,36 +1122,36 @@ const styles = StyleSheet.create({
   },
   dealsBannerText: {
     color: '#EE1C47', // Temu red
-    fontSize: isWeb ? 15 : 13,
+    fontSize: isWebPlatform ? 15 : 13,
     fontWeight: '600',
   },
   categoriesContainer: {
-    marginTop: isWeb ? 10 : 1,
-    marginBottom: isWeb ? 10 : 1,
-    marginHorizontal: isWeb ? 'auto' : 8,
-    maxWidth: isWeb ? 1400 : undefined,
+    marginTop: isWebPlatform ? 10 : 1,
+    marginBottom: isWebPlatform ? 10 : 1,
+    marginHorizontal: isWebPlatform ? 'auto' : 8,
+    maxWidth: isWebPlatform ? 1400 : undefined,
   },
   sectionTitle: {
-    fontSize: isWeb ? 18 : 13,
+    fontSize: isWebPlatform ? 18 : 13,
     fontWeight: '700',
     color: '#1F2937',
-    marginBottom: isWeb ? 12 : 3,
-    paddingHorizontal: isWeb ? 16 : 8,
+    marginBottom: isWebPlatform ? 12 : 3,
+    paddingHorizontal: isWebPlatform ? 16 : 8,
   },
   categoriesScroll: {
-    paddingHorizontal: isWeb ? 20 : 8,
-    gap: isWeb ? 10 : 5,
-    paddingBottom: isWeb ? 0 : 2,
+    paddingHorizontal: isWebPlatform ? 20 : 8,
+    gap: isWebPlatform ? 10 : 5,
+    paddingBottom: isWebPlatform ? 0 : 2,
   },
   categoryChip: {
-    paddingHorizontal: isWeb ? 18 : 10,
-    paddingVertical: isWeb ? 9 : 5,
-    borderRadius: isWeb ? 20 : 14,
+    paddingHorizontal: isWebPlatform ? 18 : 10,
+    paddingVertical: isWebPlatform ? 9 : 5,
+    borderRadius: isWebPlatform ? 20 : 14,
     backgroundColor: '#fff',
     borderWidth: 1,
     borderColor: '#E5E7EB',
-    marginRight: isWeb ? 10 : 5,
-    ...(isWeb && {
+    marginRight: isWebPlatform ? 10 : 5,
+    ...(isWebPlatform && {
       transition: 'all 0.2s ease',
       cursor: 'pointer',
     }),
@@ -1161,7 +1161,7 @@ const styles = StyleSheet.create({
     borderColor: '#EE1C47',
   },
   categoryChipText: {
-    fontSize: isWeb ? 14 : 12,
+    fontSize: isWebPlatform ? 14 : 12,
     color: '#666',
     fontWeight: '500',
   },
@@ -1171,23 +1171,22 @@ const styles = StyleSheet.create({
   },
   productImage: {
     width: '100%',
-    height: isWeb ? itemWidth * 1.15 : itemWidth * 1.2,
     backgroundColor: '#FAFAFA',
     objectFit: 'contain', // For web compatibility - shows full image
   },
   productInfo: {
-    padding: isWeb ? 12 : 10,
-    paddingTop: isWeb ? 10 : 8,
-    paddingBottom: isWeb ? 12 : 10,
+    padding: isWebPlatform ? 12 : 10,
+    paddingTop: isWebPlatform ? 10 : 8,
+    paddingBottom: isWebPlatform ? 12 : 10,
   },
   productName: {
-    fontSize: isWeb ? 13 : 12,
+    fontSize: isWebPlatform ? 13 : 12,
     fontWeight: '500',
     color: '#1F2937',
-    marginBottom: isWeb ? 8 : 6,
-    minHeight: isWeb ? 36 : 32,
-    maxHeight: isWeb ? 36 : 32,
-    lineHeight: isWeb ? 18 : 16,
+    marginBottom: isWebPlatform ? 8 : 6,
+    minHeight: isWebPlatform ? 36 : 32,
+    maxHeight: isWebPlatform ? 36 : 32,
+    lineHeight: isWebPlatform ? 18 : 16,
     textAlign: 'right',
   },
   priceContainer: {
@@ -1209,13 +1208,13 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   productPrice: {
-    fontSize: isWeb ? 16 : 15,
+    fontSize: isWebPlatform ? 16 : 15,
     fontWeight: '700',
     color: '#EE1C47', // Temu red
     textAlign: 'right',
   },
   originalPrice: {
-    fontSize: isWeb ? 12 : 11,
+    fontSize: isWebPlatform ? 12 : 11,
     color: '#9CA3AF',
     textDecorationLine: 'line-through',
     marginLeft: 4,
@@ -1223,16 +1222,16 @@ const styles = StyleSheet.create({
   },
   discountBadgeSmall: {
     backgroundColor: '#EE1C47', // Temu red
-    paddingHorizontal: isWeb ? 7 : 5,
-    paddingVertical: isWeb ? 4 : 2,
-    borderRadius: isWeb ? 3 : 4,
-    minWidth: isWeb ? 32 : 28,
+    paddingHorizontal: isWebPlatform ? 7 : 5,
+    paddingVertical: isWebPlatform ? 4 : 2,
+    borderRadius: isWebPlatform ? 3 : 4,
+    minWidth: isWebPlatform ? 32 : 28,
     alignItems: 'center',
     justifyContent: 'center',
   },
   discountBadgeSmallText: {
     color: '#fff',
-    fontSize: isWeb ? 10 : 9,
+    fontSize: isWebPlatform ? 10 : 9,
     fontWeight: 'bold',
   },
   outOfStock: {
