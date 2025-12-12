@@ -44,12 +44,15 @@ export default function HomeScreen() {
   const wishlistOpacityAnimations = useRef<Record<string, Animated.Value>>({}); // Animation values for opacity
   const scrollY = useRef(0);
   const lastScrollY = useRef(0);
-  const filtersOpacity = useRef(new Animated.Value(1)).current;
-  const filtersTranslateY = useRef(new Animated.Value(0)).current;
-  const filtersHeight = useRef(new Animated.Value(1)).current;
-  const filtersContainerRef = useRef<View>(null);
-  const [filtersContainerHeight, setFiltersContainerHeight] = useState(0);
+  
+  // Combined search bar and filters animation (like Temu - one unit)
+  const headerOpacity = useRef(new Animated.Value(1)).current;
+  const headerTranslateY = useRef(new Animated.Value(0)).current;
+  const headerHeight = useRef(new Animated.Value(1)).current;
+  const headerContainerRef = useRef<View>(null);
+  const [headerContainerHeight, setHeaderContainerHeight] = useState(0);
   const isAnimating = useRef(false); // Prevent multiple animations
+  
   const router = useRouter();
 
   useEffect(() => {
@@ -59,10 +62,8 @@ export default function HomeScreen() {
     loadWishlistStatus();
   }, []);
 
-  // Handle scroll to show/hide filters with smooth fade animation (optimized to prevent lag)
+  // Handle scroll to show/hide search bar and filters together (like Temu - one unit)
   const handleScroll = (event: any) => {
-    if (isAnimating.current) return; // Skip if already animating
-    
     const currentScrollY = event.nativeEvent.contentOffset.y;
     const scrollDifference = currentScrollY - lastScrollY.current;
     
@@ -70,64 +71,69 @@ export default function HomeScreen() {
     lastScrollY.current = currentScrollY;
     scrollY.current = currentScrollY;
     
-    // Get current opacity value to avoid unnecessary animations
-    const currentOpacity = filtersOpacity._value;
-    const shouldHide = currentScrollY > 50 && scrollDifference > 10 && currentOpacity > 0.5;
-    const shouldShow = (scrollDifference < -10 || currentScrollY < 50) && currentOpacity < 0.5;
+    // Threshold for hiding/showing (like Temu - hides quickly)
+    const hideThreshold = 20; // Hide after scrolling 20px down
+    const scrollSpeedThreshold = 2; // Minimum scroll speed to trigger hide
     
-    // Hide filters when scrolling down (after 50px) with fade
-    if (shouldHide) {
-      isAnimating.current = true;
-      // Scrolling down - fade out and collapse height
-      Animated.parallel([
-        Animated.timing(filtersOpacity, {
-          toValue: 0,
-          duration: 200,
-          useNativeDriver: true,
-          easing: Easing.out(Easing.ease),
-        }),
-        Animated.timing(filtersTranslateY, {
-          toValue: -50,
-          duration: 200,
-          useNativeDriver: true,
-          easing: Easing.out(Easing.ease),
-        }),
-        Animated.timing(filtersHeight, {
-          toValue: 0,
-          duration: 200,
-          useNativeDriver: false,
-          easing: Easing.out(Easing.ease),
-        }),
-      ]).start(() => {
-        isAnimating.current = false;
-      });
-    } 
-    // Show filters when scrolling up or near top
-    else if (shouldShow) {
-      isAnimating.current = true;
-      // Scrolling up or near top - fade in and expand height
-      Animated.parallel([
-        Animated.timing(filtersOpacity, {
-          toValue: 1,
-          duration: 200,
-          useNativeDriver: true,
-          easing: Easing.out(Easing.ease),
-        }),
-        Animated.timing(filtersTranslateY, {
-          toValue: 0,
-          duration: 200,
-          useNativeDriver: true,
-          easing: Easing.out(Easing.ease),
-        }),
-        Animated.timing(filtersHeight, {
-          toValue: 1,
-          duration: 200,
-          useNativeDriver: false,
-          easing: Easing.out(Easing.ease),
-        }),
-      ]).start(() => {
-        isAnimating.current = false;
-      });
+    // Get current opacity value
+    const currentOpacity = headerOpacity._value;
+    
+    // Determine if we should hide (scrolling down)
+    const shouldHide = currentScrollY > hideThreshold && scrollDifference > scrollSpeedThreshold;
+    // Determine if we should show (scrolling up or near top)
+    const shouldShow = scrollDifference < -scrollSpeedThreshold || currentScrollY <= hideThreshold;
+    
+    // Animate search bar and filters together as one unit
+    if (!isAnimating.current) {
+      if (shouldHide && currentOpacity > 0.1) {
+        isAnimating.current = true;
+        Animated.parallel([
+          Animated.timing(headerOpacity, {
+            toValue: 0,
+            duration: 200,
+            useNativeDriver: true,
+            easing: Easing.out(Easing.ease),
+          }),
+          Animated.timing(headerTranslateY, {
+            toValue: -100,
+            duration: 200,
+            useNativeDriver: true,
+            easing: Easing.out(Easing.ease),
+          }),
+          Animated.timing(headerHeight, {
+            toValue: 0,
+            duration: 200,
+            useNativeDriver: false,
+            easing: Easing.out(Easing.ease),
+          }),
+        ]).start(() => {
+          isAnimating.current = false;
+        });
+      } else if (shouldShow && currentOpacity < 0.9) {
+        isAnimating.current = true;
+        Animated.parallel([
+          Animated.timing(headerOpacity, {
+            toValue: 1,
+            duration: 200,
+            useNativeDriver: true,
+            easing: Easing.out(Easing.ease),
+          }),
+          Animated.timing(headerTranslateY, {
+            toValue: 0,
+            duration: 200,
+            useNativeDriver: true,
+            easing: Easing.out(Easing.ease),
+          }),
+          Animated.timing(headerHeight, {
+            toValue: 1,
+            duration: 200,
+            useNativeDriver: false,
+            easing: Easing.out(Easing.ease),
+          }),
+        ]).start(() => {
+          isAnimating.current = false;
+        });
+      }
     }
   };
 
@@ -630,49 +636,50 @@ export default function HomeScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      {/* Search Bar */}
-      <View style={[
-        styles.searchContainer, 
-        { 
-          backgroundColor: colors.surface,
-          maxWidth: isWeb ? Math.min(maxContentWidth, 800) : undefined,
-          marginHorizontal: isWeb ? 'auto' : padding,
-          paddingHorizontal: isWeb ? 20 : padding,
-        }
-      ]}>
-        <Ionicons name="search" size={20} color={colors.textSecondary} style={styles.searchIcon} />
-        <TextInput
-          style={[styles.searchInput, { color: colors.text }]}
-          placeholder="ابحث عن منتج..."
-          placeholderTextColor={colors.textSecondary}
-          value={searchQuery}
-          onChangeText={setSearchQuery}
-        />
-      </View>
-
-      {/* Filters Container - Animated with Fade */}
+      {/* Search Bar and Filters - Combined Animated Container (like Temu - one unit) */}
       <Animated.View
-        ref={filtersContainerRef}
+        ref={headerContainerRef}
         onLayout={(event) => {
           const { height } = event.nativeEvent.layout;
-          if (height > 0 && filtersContainerHeight === 0) {
-            setFiltersContainerHeight(height);
+          if (height > 0 && headerContainerHeight === 0) {
+            setHeaderContainerHeight(height);
           }
         }}
         style={{
-          opacity: filtersOpacity,
-          transform: [{ translateY: filtersTranslateY }],
-          height: filtersContainerHeight > 0 
-            ? filtersHeight.interpolate({
+          opacity: headerOpacity,
+          transform: [{ translateY: headerTranslateY }],
+          height: headerContainerHeight > 0 
+            ? headerHeight.interpolate({
                 inputRange: [0, 1],
-                outputRange: [0, filtersContainerHeight],
+                outputRange: [0, headerContainerHeight],
               })
             : undefined,
           overflow: 'hidden',
           position: 'relative',
-          zIndex: 100,
+          zIndex: 200,
         }}
       >
+        {/* Search Bar */}
+        <View style={[
+          styles.searchContainer, 
+          { 
+            backgroundColor: colors.surface,
+            maxWidth: isWeb ? Math.min(maxContentWidth, 800) : undefined,
+            marginHorizontal: isWeb ? 'auto' : padding,
+            paddingHorizontal: isWeb ? 20 : padding,
+          }
+        ]}>
+          <Ionicons name="search" size={20} color={colors.textSecondary} style={styles.searchIcon} />
+          <TextInput
+            style={[styles.searchInput, { color: colors.text }]}
+            placeholder="ابحث عن منتج..."
+            placeholderTextColor={colors.textSecondary}
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+          />
+        </View>
+
+        {/* Filters Container */}
         {/* Lightning Deals Banner (inspired by Temu) */}
         {filteredProducts.length > 0 && !loading && (
           <View style={[styles.dealsBanner, { backgroundColor: isDarkMode ? '#2D1B0E' : '#FFF3E0' }]}>
@@ -746,7 +753,7 @@ export default function HomeScreen() {
         )}
 
         {/* Categories Section (inspired by Temu) */}
-        {filteredCategories.length > 0 && !loading && (
+        {categories.length > 0 && !loading && (
           <View style={styles.categoriesContainer}>
             <Text style={[styles.sectionTitle, { color: colors.text }]}>الفئات</Text>
             <ScrollView
@@ -807,7 +814,7 @@ export default function HomeScreen() {
         ]}
         showsVerticalScrollIndicator={false}
         onScroll={handleScroll}
-        scrollEventThrottle={100}
+        scrollEventThrottle={16}
       >
         <View style={[
           styles.productsGrid, 
@@ -989,7 +996,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: '#fff',
     marginTop: isWebPlatform ? 16 : 6,
-    marginBottom: isWebPlatform ? 16 : 4,
+    marginBottom: isWebPlatform ? 8 : 2,
     marginHorizontal: isWebPlatform ? 'auto' : 8,
     paddingHorizontal: isWebPlatform ? 20 : 12,
     borderRadius: isWebPlatform ? 30 : 24,
@@ -1107,8 +1114,8 @@ const styles = StyleSheet.create({
     paddingVertical: isWebPlatform ? 14 : 8,
     paddingHorizontal: isWebPlatform ? 24 : 12,
     marginHorizontal: isWebPlatform ? 'auto' : 8,
-    marginTop: isWebPlatform ? 12 : 0,
-    marginBottom: isWebPlatform ? 16 : 4,
+    marginTop: isWebPlatform ? 4 : 0,
+    marginBottom: isWebPlatform ? 8 : 2,
     borderRadius: isWebPlatform ? 6 : 8,
     maxWidth: isWebPlatform ? 1600 : undefined,
     borderLeftWidth: 3,
@@ -1126,8 +1133,8 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   categoriesContainer: {
-    marginTop: isWebPlatform ? 10 : 1,
-    marginBottom: isWebPlatform ? 10 : 1,
+    marginTop: isWebPlatform ? 0 : 0,
+    marginBottom: isWebPlatform ? 2 : 0,
     marginHorizontal: isWebPlatform ? 'auto' : 8,
     maxWidth: isWebPlatform ? 1400 : undefined,
   },
@@ -1135,7 +1142,7 @@ const styles = StyleSheet.create({
     fontSize: isWebPlatform ? 18 : 13,
     fontWeight: '700',
     color: '#1F2937',
-    marginBottom: isWebPlatform ? 12 : 3,
+    marginBottom: isWebPlatform ? 4 : 1,
     paddingHorizontal: isWebPlatform ? 16 : 8,
   },
   categoriesScroll: {
