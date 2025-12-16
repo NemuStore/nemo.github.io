@@ -5116,18 +5116,36 @@ export default function AdminScreen() {
       }
 
       // Create package
-      const { data: packageData, error: packageError } = await supabase
-        .from('packages')
-        .insert({
-          package_number: packageNumber,
-          shipment_id: shipmentId,
-          status: 'created',
-          created_by: user?.id || null,
-        })
-        .select()
-        .single();
+      const createResponse = await fetch(
+        `${supabaseUrl}/rest/v1/packages`,
+        {
+          method: 'POST',
+          headers: {
+            'apikey': supabaseKey || '',
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=representation',
+          },
+          body: JSON.stringify({
+            package_number: packageNumber,
+            shipment_id: shipmentId,
+            status: 'created',
+            created_by: user?.id || null,
+          }),
+        }
+      );
 
-      if (packageError) throw packageError;
+      if (!createResponse.ok) {
+        const errorText = await createResponse.text();
+        throw new Error(errorText || 'فشل إنشاء الطرد');
+      }
+
+      const packageDataArray = await createResponse.json();
+      const packageData = Array.isArray(packageDataArray) ? packageDataArray[0] : packageDataArray;
+
+      if (!packageData || !packageData.id) {
+        throw new Error('فشل إنشاء الطرد: لم يتم إرجاع معرف الطرد');
+      }
 
       // Link orders to package
       const packageOrders = newPackage.order_ids.map((order_id) => ({
@@ -5135,11 +5153,24 @@ export default function AdminScreen() {
         order_id,
       }));
 
-      const { error: linkError } = await supabase
-        .from('package_orders')
-        .insert(packageOrders);
+      const linkResponse = await fetch(
+        `${supabaseUrl}/rest/v1/package_orders`,
+        {
+          method: 'POST',
+          headers: {
+            'apikey': supabaseKey || '',
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=representation',
+          },
+          body: JSON.stringify(packageOrders),
+        }
+      );
 
-      if (linkError) throw linkError;
+      if (!linkResponse.ok) {
+        const errorText = await linkResponse.text();
+        throw new Error(errorText || 'فشل ربط الطلبات بالطرد');
+      }
 
       sweetAlert.showSuccess('نجح', 'تم إنشاء الطرد بنجاح', () => {
         setNewPackage({ package_number: '', order_ids: [] });
