@@ -86,53 +86,53 @@ export default function HomeScreen() {
     // Animate search bar and filters together as one unit
     if (!isAnimating.current) {
       if (shouldHide && currentOpacity > 0.1) {
-        isAnimating.current = true;
-        Animated.parallel([
+      isAnimating.current = true;
+      Animated.parallel([
           Animated.timing(headerOpacity, {
-            toValue: 0,
-            duration: 200,
-            useNativeDriver: true,
-            easing: Easing.out(Easing.ease),
-          }),
+          toValue: 0,
+          duration: 200,
+          useNativeDriver: true,
+          easing: Easing.out(Easing.ease),
+        }),
           Animated.timing(headerTranslateY, {
             toValue: -100,
-            duration: 200,
-            useNativeDriver: true,
-            easing: Easing.out(Easing.ease),
-          }),
+          duration: 200,
+          useNativeDriver: true,
+          easing: Easing.out(Easing.ease),
+        }),
           Animated.timing(headerHeight, {
-            toValue: 0,
-            duration: 200,
-            useNativeDriver: false,
-            easing: Easing.out(Easing.ease),
-          }),
-        ]).start(() => {
-          isAnimating.current = false;
-        });
+          toValue: 0,
+          duration: 200,
+          useNativeDriver: false,
+          easing: Easing.out(Easing.ease),
+        }),
+      ]).start(() => {
+        isAnimating.current = false;
+      });
       } else if (shouldShow && currentOpacity < 0.9) {
-        isAnimating.current = true;
-        Animated.parallel([
+      isAnimating.current = true;
+      Animated.parallel([
           Animated.timing(headerOpacity, {
-            toValue: 1,
-            duration: 200,
-            useNativeDriver: true,
-            easing: Easing.out(Easing.ease),
-          }),
+          toValue: 1,
+          duration: 200,
+          useNativeDriver: true,
+          easing: Easing.out(Easing.ease),
+        }),
           Animated.timing(headerTranslateY, {
-            toValue: 0,
-            duration: 200,
-            useNativeDriver: true,
-            easing: Easing.out(Easing.ease),
-          }),
+          toValue: 0,
+          duration: 200,
+          useNativeDriver: true,
+          easing: Easing.out(Easing.ease),
+        }),
           Animated.timing(headerHeight, {
-            toValue: 1,
-            duration: 200,
-            useNativeDriver: false,
-            easing: Easing.out(Easing.ease),
-          }),
-        ]).start(() => {
-          isAnimating.current = false;
-        });
+          toValue: 1,
+          duration: 200,
+          useNativeDriver: false,
+          easing: Easing.out(Easing.ease),
+        }),
+      ]).start(() => {
+        isAnimating.current = false;
+      });
       }
     }
   };

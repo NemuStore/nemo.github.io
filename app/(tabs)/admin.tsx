@@ -4475,14 +4475,15 @@ export default function AdminScreen() {
 
     setLoading(true);
     try {
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+      const accessToken = await getAccessToken();
+      
       // Generate or use manual shipment number
       let shipment_number: string;
       if (newShipment.use_manual_number && newShipment.shipment_number.trim()) {
         shipment_number = newShipment.shipment_number.trim();
         // Check if shipment number already exists
-        const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
-        const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-        const accessToken = await getAccessToken();
         
         const checkResponse = await fetch(
           `${supabaseUrl}/rest/v1/shipments?shipment_number=eq.${encodeURIComponent(shipment_number)}&select=id`,
@@ -4503,22 +4504,57 @@ export default function AdminScreen() {
           }
         }
       } else {
-        const { data: shipmentNumberData } = await supabase.rpc('generate_shipment_number');
-        shipment_number = shipmentNumberData || `SHIP-${Date.now()}`;
+        // Generate shipment number using RPC
+        const rpcResponse = await fetch(
+          `${supabaseUrl}/rest/v1/rpc/generate_shipment_number`,
+          {
+            method: 'POST',
+            headers: {
+              'apikey': supabaseKey || '',
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json',
+            },
+          }
+        );
+        
+        if (rpcResponse.ok) {
+          const shipmentNumberData = await rpcResponse.json();
+          shipment_number = shipmentNumberData || `SHIP-${Date.now()}`;
+        } else {
+          shipment_number = `SHIP-${Date.now()}`;
+        }
       }
 
       // Create shipment
-      const { data: shipment, error: shipmentError } = await supabase
-        .from('shipments')
-        .insert({
-          shipment_number,
-          cost: parseFloat(newShipment.cost),
-          status: 'pending',
-        })
-        .select()
-        .single();
+      const createResponse = await fetch(
+        `${supabaseUrl}/rest/v1/shipments`,
+        {
+          method: 'POST',
+          headers: {
+            'apikey': supabaseKey || '',
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=representation',
+          },
+          body: JSON.stringify({
+            shipment_number,
+            cost: parseFloat(newShipment.cost),
+            status: 'pending',
+          }),
+        }
+      );
 
-      if (shipmentError) throw shipmentError;
+      if (!createResponse.ok) {
+        const errorText = await createResponse.text();
+        throw new Error(errorText || 'فشل إنشاء الشحنة');
+      }
+
+      const shipmentData = await createResponse.json();
+      const shipment = Array.isArray(shipmentData) ? shipmentData[0] : shipmentData;
+
+      if (!shipment || !shipment.id) {
+        throw new Error('فشل إنشاء الشحنة: لم يتم إرجاع معرف الشحنة');
+      }
 
       // Link orders to shipment
       const shipmentOrders = newShipment.order_ids.map((order_id) => ({
@@ -4526,17 +4562,45 @@ export default function AdminScreen() {
         order_id,
       }));
 
-      const { error: linkError } = await supabase
-        .from('shipment_orders')
-        .insert(shipmentOrders);
+      const linkResponse = await fetch(
+        `${supabaseUrl}/rest/v1/shipment_orders`,
+        {
+          method: 'POST',
+          headers: {
+            'apikey': supabaseKey || '',
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=representation',
+          },
+          body: JSON.stringify(shipmentOrders),
+        }
+      );
 
-      if (linkError) throw linkError;
+      if (!linkResponse.ok) {
+        const errorText = await linkResponse.text();
+        throw new Error(errorText || 'فشل ربط الطلبات بالشحنة');
+      }
 
       // Update orders status
-      await supabase
-        .from('orders')
-        .update({ status: 'shipped_from_china' })
-        .in('id', newShipment.order_ids);
+      const updateResponse = await fetch(
+        `${supabaseUrl}/rest/v1/orders?id=in.(${newShipment.order_ids.join(',')})`,
+        {
+          method: 'PATCH',
+          headers: {
+            'apikey': supabaseKey || '',
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=representation',
+          },
+          body: JSON.stringify({ status: 'shipped_from_china' }),
+        }
+      );
+
+      if (!updateResponse.ok) {
+        const errorText = await updateResponse.text();
+        console.warn('⚠️ Failed to update orders status:', errorText);
+        // Don't throw here, shipment was created successfully
+      }
 
       // Update ordersInShipments set to reflect the new shipment
       setOrdersInShipments(prev => {
@@ -6418,20 +6482,20 @@ export default function AdminScreen() {
             {/* Search and Filter */}
             {!isPackageSelectionMode && (
               <View style={[styles.searchContainer, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-                <Ionicons name="search-outline" size={20} color={colors.text} style={styles.searchIcon} />
-                <TextInput
-                  style={[styles.searchInput, { color: colors.text }]}
-                  placeholder="ابحث عن طرد (رقم الطرد، رقم الشحنة)..."
-                  placeholderTextColor={colors.placeholder}
-                  value={packageSearchQuery}
-                  onChangeText={setPackageSearchQuery}
-                />
-                {packageSearchQuery.length > 0 && (
-                  <TouchableOpacity onPress={() => setPackageSearchQuery('')}>
-                    <Ionicons name="close-circle" size={20} color={colors.text} />
-                  </TouchableOpacity>
-                )}
-              </View>
+              <Ionicons name="search-outline" size={20} color={colors.text} style={styles.searchIcon} />
+              <TextInput
+                style={[styles.searchInput, { color: colors.text }]}
+                placeholder="ابحث عن طرد (رقم الطرد، رقم الشحنة)..."
+                placeholderTextColor={colors.placeholder}
+                value={packageSearchQuery}
+                onChangeText={setPackageSearchQuery}
+              />
+              {packageSearchQuery.length > 0 && (
+                <TouchableOpacity onPress={() => setPackageSearchQuery('')}>
+                  <Ionicons name="close-circle" size={20} color={colors.text} />
+                </TouchableOpacity>
+              )}
+            </View>
             )}
 
             {/* Status Filter */}
